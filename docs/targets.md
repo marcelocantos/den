@@ -112,41 +112,57 @@ Show disk usage, which envs reference a keg, all-Cellar listing.
 `den cleanup` (remove old kegs), `den doctor` (system health).
 **Status**: not started
 
-### 🎯T34 — Daemon infrastructure
+### 🎯T13 — Background maintenance daemon
 
-`den daemon` is a long-lived background process that provides:
+A long-lived `den daemon` process focused on keeping packages
+current. This is den's heartbeat — it runs at login and handles
+everything that should happen without user intervention.
 
-1. **Unix socket API** — the CLI talks to the daemon via a socket
-   at `~/.den/den.sock`. Commands like `den services start` send
-   requests to the daemon rather than managing processes directly.
-   If the daemon isn't running, the CLI auto-starts it.
+**What it does:**
+- Periodically refreshes the formula index (configurable interval,
+  default every 6 hours)
+- Downloads new bottles for outdated packages into the cache
+- With `auto-upgrade` enabled, pours new versions into the Cellar
+  and updates the manifest during the maintenance window
+  (`den set upgrade-window 3:00-5:00`) or when idle
+- Notifies the user of available upgrades (e.g. via
+  `den status` or shell prompt integration)
 
-2. **Process supervision** (T33) — the daemon owns all managed
-   service processes. Services survive the terminal that started
-   them. PID tracking, log capture, signal forwarding.
+**Infrastructure:**
+- Same `den` binary in daemon mode (`den daemon run`)
+- PID file at `~/.den/daemon.pid`
+- Log at `~/.den/daemon.log`
+- Bootstrap: a single launchd plist (`den.daemon.plist`) starts
+  it at login. `den daemon install` creates the plist,
+  `den daemon uninstall` removes it.
+- `den daemon start`, `den daemon stop`, `den daemon status`
 
-3. **Background upgrades** (T13) — the daemon periodically checks
-   the formula index for updates, downloads bottles, and optionally
-   applies upgrades during the maintenance window.
-
-4. **Bootstrap** — a single launchd plist (`den.daemon.plist`)
-   starts the daemon at login. This is the *only* launchd job den
-   creates. Everything else is supervised by den directly.
-
-5. **Lifecycle** — `den daemon start`, `den daemon stop`,
-   `den daemon status`. Graceful shutdown stops all managed
-   services first.
-
-The daemon is the same `den` binary running in daemon mode
-(`den daemon run`). No separate binary.
+**No socket API needed** — the daemon works independently. It
+writes state to the filesystem (index cache, pending upgrades
+list at `~/.den/pending.json`). The CLI reads that state. No
+IPC coordination required for this use case.
 
 **Status**: not started
 
-### 🎯T13 — Background upgrades
-The daemon (T34) periodically refreshes the formula index and
-downloads new bottles. With `auto-upgrade` enabled, applies
-upgrades during the configured maintenance window. Respects
-idle detection (screen locked / no terminals) as fallback.
+### 🎯T34 — Daemon socket API
+
+Extend the daemon (T13) with a Unix socket at `~/.den/den.sock`
+for real-time CLI↔daemon communication. Required for T33 (process
+supervision) where the CLI needs to send commands to a running
+supervisor. Not needed for background maintenance alone.
+
+**Status**: not started (blocked by T33 need)
+
+### 🎯T33 — Built-in process supervisor
+
+Extends the daemon (requires T34 socket API) to manage service
+processes. The CLI sends start/stop/restart commands over the
+socket; the daemon owns the child processes.
+
+Phase 1: fork/exec, PID tracking, log capture, signal management.
+Phase 2: restart policies, health checks, graceful shutdown ordering.
+Phase 3: per-environment services, service groups, resource monitoring.
+
 **Status**: not started (blocked by T34)
 
 ---
