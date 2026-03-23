@@ -162,10 +162,8 @@ enum ServiceCommand {
 
 #[derive(Subcommand)]
 enum DaemonCommand {
-    /// Run the daemon in the foreground (used by launchd)
+    /// Run the daemon in the foreground (use with launchd or nohup)
     Run,
-    /// Start the daemon in the background
-    Start,
     /// Stop the running daemon
     Stop,
     /// Show daemon status and pending upgrades
@@ -1168,22 +1166,6 @@ async fn run_daemon_command(config: &Config, command: DaemonCommand) -> anyhow::
     match command {
         DaemonCommand::Run => {
             daemon::run(config).await
-        }
-        DaemonCommand::Start => {
-            if daemon::is_running(&config.den_home) {
-                println!("Daemon is already running.");
-                return Ok(());
-            }
-            // Fork and exec ourselves in daemon mode.
-            let exe = std::env::current_exe()?;
-            let child = std::process::Command::new(exe)
-                .args(["daemon", "run"])
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()?;
-            println!("Daemon started (PID {}).", child.id());
-            Ok(())
         }
         DaemonCommand::Stop => {
             let pid_path = config.den_home.join("daemon.pid");
