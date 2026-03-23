@@ -238,7 +238,7 @@ async fn install_formula(
         // Still link if not linked.
         if link::linked_version(env_path, &info.name).is_none() {
             println!("==> Linking {} {}...", info.name, pkg_version);
-            let created = link::link_keg(&keg_path, env_path)?;
+            let created = link::link_keg(&keg_path, env_path, &info.name)?;
             link::record_linked_version(env_path, &info.name, &pkg_version)?;
             println!("  {} symlinks created", created.len());
         }
@@ -281,7 +281,7 @@ async fn install_formula(
 
     // Link into the default environment.
     println!("==> Linking {} {}...", info.name, pkg_version);
-    let created = link::link_keg(&poured_keg, env_path)?;
+    let created = link::link_keg(&poured_keg, env_path, &info.name)?;
     link::record_linked_version(env_path, &info.name, &pkg_version)?;
     println!("  {} symlinks created", created.len());
 
@@ -372,13 +372,13 @@ fn use_version(config: &Config, name: &str) -> anyhow::Result<()> {
         let old_keg = config.cellar.join(formula_name).join(cur_ver);
         if old_keg.is_dir() {
             println!("==> Unlinking {} {}...", formula_name, cur_ver);
-            link::unlink_keg(&old_keg, &env_path)?;
+            link::unlink_keg(&old_keg, &env_path, formula_name)?;
         }
     }
 
     // Link the requested version.
     println!("==> Linking {} {}...", formula_name, keg.version);
-    let created = link::link_keg(&keg.path, &env_path)?;
+    let created = link::link_keg(&keg.path, &env_path, formula_name)?;
     link::record_linked_version(&env_path, formula_name, &keg.version)?;
     println!("  {} symlinks created", created.len());
     println!("==> Now using {} {}.", formula_name, keg.version);

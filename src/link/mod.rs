@@ -8,8 +8,13 @@ const LINK_DIRS: &[&str] = &["bin", "sbin", "lib", "include", "share"];
 
 /// Link a keg's contents into an environment directory.
 /// Creates absolute symlinks from env_path/{bin,lib,...}/file -> keg_path/{bin,lib,...}/file.
+/// Also creates an opt/ symlink: env_path/opt/{formula_name} -> keg_path.
 /// Returns the list of symlinks created.
-pub fn link_keg(keg_path: &Path, env_path: &Path) -> anyhow::Result<Vec<PathBuf>> {
+pub fn link_keg(
+    keg_path: &Path,
+    env_path: &Path,
+    formula_name: &str,
+) -> anyhow::Result<Vec<PathBuf>> {
     let mut created = Vec::new();
 
     for dir in LINK_DIRS {
@@ -20,6 +25,16 @@ pub fn link_keg(keg_path: &Path, env_path: &Path) -> anyhow::Result<Vec<PathBuf>
 
         link_tree(&keg_dir, &env_path.join(dir), &mut created)?;
     }
+
+    // Create opt/ symlink: opt/{formula_name} -> keg_path
+    let opt_dir = env_path.join("opt");
+    std::fs::create_dir_all(&opt_dir)?;
+    let opt_link = opt_dir.join(formula_name);
+    if opt_link.symlink_metadata().is_ok() {
+        std::fs::remove_file(&opt_link)?;
+    }
+    std::os::unix::fs::symlink(keg_path, &opt_link)?;
+    created.push(opt_link);
 
     Ok(created)
 }
@@ -52,8 +67,8 @@ fn link_tree(src_dir: &Path, dst_dir: &Path, created: &mut Vec<PathBuf>) -> anyh
 
 /// Unlink a keg's contents from an environment directory.
 /// Only removes symlinks that point to the specified keg.
-/// Cleans up empty directories afterward.
-pub fn unlink_keg(keg_path: &Path, env_path: &Path) -> anyhow::Result<u32> {
+/// Also removes the opt/ symlink. Cleans up empty directories afterward.
+pub fn unlink_keg(keg_path: &Path, env_path: &Path, formula_name: &str) -> anyhow::Result<u32> {
     let mut removed = 0u32;
 
     for dir in LINK_DIRS {
@@ -63,6 +78,15 @@ pub fn unlink_keg(keg_path: &Path, env_path: &Path) -> anyhow::Result<u32> {
         }
 
         removed += unlink_tree(&keg_dir, &env_path.join(dir))?;
+    }
+
+    // Remove opt/ symlink if it points to this keg.
+    let opt_link = env_path.join("opt").join(formula_name);
+    if let Ok(target) = opt_link.read_link() {
+        if target == keg_path {
+            std::fs::remove_file(&opt_link)?;
+            removed += 1;
+        }
     }
 
     Ok(removed)
