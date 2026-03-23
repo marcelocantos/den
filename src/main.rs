@@ -16,6 +16,7 @@ mod link;
 mod manifest;
 mod platform;
 mod service;
+mod settings;
 mod tab;
 
 use clap::Parser;

@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 
 use crate::config::Config;
 use crate::api::FormulaIndex;
-use crate::{bottle, cask, daemon, deps, env, formula, keg, link, manifest, platform, service, tab};
+use crate::{bottle, cask, daemon, deps, env, formula, keg, link, manifest, platform, service, settings, tab};
 
 #[derive(Parser)]
 #[command(name = "den", version, about = "A universal development environment manager")]
@@ -213,8 +213,10 @@ impl Cli {
             None => {
                 // First run: if no root manifest exists and Homebrew is
                 // installed, offer to migrate.
+                let s = settings::read(&config.den_home);
                 if !manifest::manifest_exists(&config.den_home, "/")
                     && config.cellar.is_dir()
+                    && !s.migrate.declined
                 {
                     println!("den {}", env!("CARGO_PKG_VERSION"));
                     println!("A universal development environment manager");
@@ -223,9 +225,22 @@ impl Cli {
                         "Homebrew detected at {}.",
                         config.prefix.display()
                     );
-                    println!("Run `den migrate` to import your packages.");
-                    println!();
-                    println!("Or run `den --help` for usage.");
+                    print!("Would you like to import your Homebrew packages? [Y/n] ");
+                    use std::io::Write;
+                    std::io::stdout().flush()?;
+
+                    let mut input = String::new();
+                    std::io::stdin().read_line(&mut input)?;
+                    let answer = input.trim().to_lowercase();
+
+                    if answer.is_empty() || answer == "y" || answer == "yes" {
+                        migrate_cellar(&config)?;
+                    } else {
+                        let mut s = s;
+                        s.migrate.declined = true;
+                        settings::write(&config.den_home, &s)?;
+                        println!("OK. Run `den migrate` if you change your mind.");
+                    }
                 } else {
                     println!("den {}", env!("CARGO_PKG_VERSION"));
                     println!("A universal development environment manager");
@@ -342,6 +357,15 @@ impl Cli {
             }
             Some(Command::Services { command }) => {
                 run_services_command(&config, command)
+            }
+            Some(Command::Set { key, value }) => {
+                settings::set(&config.den_home, &key, &value)?;
+                println!("{key} = {value}");
+                Ok(())
+            }
+            Some(Command::Settings) => {
+                println!("{}", settings::display_all(&config.den_home));
+                Ok(())
             }
             Some(_) => {
                 anyhow::bail!("command not yet implemented")
@@ -1222,9 +1246,9 @@ async fn run_daemon_command(config: &Config, command: DaemonCommand) -> anyhow::
                 }
             }
 
-            let settings = daemon::read_settings(&config.den_home);
-            println!("Auto-upgrade: {}", if settings.auto_upgrade { "on" } else { "off" });
-            if let Some(ref window) = settings.upgrade_window {
+            let s = settings::read(&config.den_home);
+            println!("Auto-upgrade: {}", if s.daemon.auto_upgrade { "on" } else { "off" });
+            if let Some(ref window) = s.daemon.upgrade_window {
                 println!("Upgrade window: {window}");
             }
 

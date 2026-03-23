@@ -62,6 +62,7 @@ pub struct DaemonSettings {
     pub interval_secs: Option<u64>,
 }
 
+#[allow(dead_code)]
 pub fn read_settings(den_home: &Path) -> DaemonSettings {
     let path = den_home.join("daemon_settings.json");
     std::fs::read_to_string(&path)
@@ -197,9 +198,9 @@ pub async fn run(config: &Config) -> anyhow::Result<()> {
     write_pid(&config.den_home)?;
     log(&config.den_home, "daemon started");
 
-    let settings = read_settings(&config.den_home);
+    let settings = crate::settings::read(&config.den_home);
     let interval = Duration::from_secs(
-        settings.interval_secs.unwrap_or(DEFAULT_INTERVAL.as_secs()),
+        settings.daemon.interval_secs.unwrap_or(DEFAULT_INTERVAL.as_secs()),
     );
 
     let client = Client::new();
@@ -327,9 +328,9 @@ async fn tick(client: &Client, config: &Config) -> anyhow::Result<()> {
     }
 
     // Apply upgrades if auto-upgrade is enabled and we're in the window.
-    let settings = read_settings(&config.den_home);
-    if settings.auto_upgrade {
-        let can_upgrade = match &settings.upgrade_window {
+    let settings = crate::settings::read(&config.den_home);
+    if settings.daemon.auto_upgrade {
+        let can_upgrade = match &settings.daemon.upgrade_window {
             Some(window) => in_maintenance_window(window),
             None => true, // No window = always OK (TODO: idle detection)
         };
