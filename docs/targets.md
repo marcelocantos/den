@@ -509,6 +509,52 @@ how often users need this to inform whether it's worth maintaining.
 
 ---
 
+### 🎯T37 — Full brew-to-den migration
+
+`den migrate` becomes a complete, automated migration from Homebrew
+to den. The user runs one command and den takes over entirely.
+
+**What it imports:**
+
+1. **Formulae** (current T20) — scan Cellar, build root manifest,
+   materialise. Distinguish on-request vs dependency installs from
+   INSTALL_RECEIPT.json.
+
+2. **Casks** — scan Caskroom, record installed casks and versions
+   in the manifest's `casks` map. Verify the apps exist in
+   /Applications.
+
+3. **Taps** — read Homebrew's tap list from Library/Taps/, record
+   in den's config so den knows about third-party sources.
+
+4. **Services** — detect running `brew services`, migrate their
+   plists to den's service management (T33 when available, or
+   the current launchctl approach as fallback).
+
+5. **Shell integration** — detect the user's shell, add
+   `eval "$(den init)"` to the right profile file if not already
+   present. Offer to comment out `eval "$(brew shellenv)"`.
+
+6. **Verification** — after migration, run a health check:
+   - All manifest packages resolve to kegs in the Cellar
+   - All expected binaries are accessible via the den environment
+   - `pkg-config` resolves key libraries
+   - Running services are still running
+   - Print a summary: N formulae, N casks, N services migrated
+
+7. **Rollback instructions** — print how to undo if something
+   breaks (uncomment brew shellenv, `den daemon stop`).
+
+**Safety:**
+- Non-destructive — den reads Homebrew's state but never modifies
+  it. Both can coexist indefinitely.
+- Idempotent — safe to run multiple times (picks up new installs).
+- Dry-run mode — `den migrate --dry-run` shows what would happen.
+
+**Status**: not started (T20 covers step 1 only)
+
+---
+
 ### 🎯T5 — Tap management
 Third-party taps.
 
