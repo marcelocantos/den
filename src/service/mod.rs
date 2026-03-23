@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 /// A managed service with its plist path.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct Service {
     pub name: String,
     pub formula: String,
@@ -13,7 +14,7 @@ pub struct Service {
 }
 
 /// Find all services defined by installed formulae.
-pub fn list_services(cellar: &Path, opt_dir: &Path) -> anyhow::Result<Vec<Service>> {
+pub fn list_services(_cellar: &Path, opt_dir: &Path) -> anyhow::Result<Vec<Service>> {
     let mut services = Vec::new();
 
     if !opt_dir.is_dir() {

@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
+#[allow(dead_code)]
 pub enum Error {
     #[error("formula not found: {0}")]
     FormulaNotFound(String),
@@ -40,4 +41,5 @@ pub enum Error {
     Other(#[from] anyhow::Error),
 }
 
+#[allow(dead_code)]
 pub type Result<T> = std::result::Result<T, Error>;

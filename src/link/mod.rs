@@ -68,6 +68,7 @@ fn link_tree(src_dir: &Path, dst_dir: &Path, created: &mut Vec<PathBuf>) -> anyh
 /// Unlink a keg's contents from an environment directory.
 /// Only removes symlinks that point to the specified keg.
 /// Also removes the opt/ symlink. Cleans up empty directories afterward.
+#[allow(dead_code)]
 pub fn unlink_keg(keg_path: &Path, env_path: &Path, formula_name: &str) -> anyhow::Result<u32> {
     let mut removed = 0u32;
 
@@ -93,6 +94,7 @@ pub fn unlink_keg(keg_path: &Path, env_path: &Path, formula_name: &str) -> anyho
 }
 
 /// Recursively unlink files that point to src_dir.
+#[allow(dead_code)]
 fn unlink_tree(src_dir: &Path, dst_dir: &Path) -> anyhow::Result<u32> {
     let mut removed = 0u32;
 
@@ -140,6 +142,7 @@ pub fn linked_version(env_path: &Path, formula_name: &str) -> Option<String> {
 }
 
 /// Remove the linked version record for a formula.
+#[allow(dead_code)]
 pub fn remove_linked_record(env_path: &Path, formula_name: &str) -> anyhow::Result<()> {
     let path = env_path.join(".den").join("linked").join(formula_name);
     if path.exists() {

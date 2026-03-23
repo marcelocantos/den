@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 const CASK_API_BASE: &str = "https://formulae.brew.sh/api/cask";
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct CaskInfo {
     pub token: String,
     #[serde(default)]
@@ -49,6 +50,7 @@ impl CaskInfo {
     }
 
     /// Extract binary artifact specs from the artifacts list.
+    #[allow(dead_code)]
     pub fn binary_artifacts(&self) -> Vec<String> {
         let mut bins = Vec::new();
         for artifact in &self.artifacts {

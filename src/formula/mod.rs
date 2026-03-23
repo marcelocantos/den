@@ -7,6 +7,7 @@ use serde::Deserialize;
 
 /// Formula metadata from the Homebrew JSON API.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct FormulaInfo {
     pub name: String,
     pub full_name: String,
@@ -42,6 +43,7 @@ impl FormulaInfo {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct Versions {
     pub stable: String,
     #[serde(default)]
@@ -56,6 +58,7 @@ pub struct BottleSpec {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct BottleStable {
     #[serde(default)]
     pub rebuild: u32,
@@ -64,6 +67,7 @@ pub struct BottleStable {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct BottleFile {
     pub cellar: String,
     pub url: String,

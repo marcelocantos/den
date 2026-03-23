@@ -573,7 +573,7 @@ fn uninstall_package(
 }
 
 fn autoremove(config: &Config, active_env: &str) -> anyhow::Result<()> {
-    let mut m = manifest::read_manifest(&config.den_home, active_env)?;
+    let m = manifest::read_manifest(&config.den_home, active_env)?;
 
     // Find auto-installed packages that are no longer needed as deps
     // of any explicit package.
@@ -600,7 +600,7 @@ fn autoremove(config: &Config, active_env: &str) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let mut removed = 0;
+    let removed = 0;
     for name in &orphans {
         // Check if any explicit package depends on this.
         // For now, keep all auto packages (conservative).

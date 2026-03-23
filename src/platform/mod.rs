@@ -61,6 +61,7 @@ pub fn detect_macos_version() -> Option<MacOsVersion> {
 }
 
 /// Known macOS major version to codename mapping.
+#[allow(dead_code)]
 fn macos_codename(major: u32) -> Option<&'static str> {
     match major {
         26 => Some("tahoe"),
@@ -73,6 +74,7 @@ fn macos_codename(major: u32) -> Option<&'static str> {
 }
 
 /// Return the bottle tag for the current platform (e.g. "arm64_tahoe").
+#[allow(dead_code)]
 pub fn bottle_tag(arch: Arch, macos: &MacOsVersion) -> Option<String> {
     let codename = macos_codename(macos.major)?;
     Some(match arch {
