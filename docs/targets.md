@@ -112,9 +112,42 @@ Show disk usage, which envs reference a keg, all-Cellar listing.
 `den cleanup` (remove old kegs), `den doctor` (system health).
 **Status**: not started
 
-### 🎯T13 — Background daemon
-launchd service for auto-updates with maintenance window.
+### 🎯T34 — Daemon infrastructure
+
+`den daemon` is a long-lived background process that provides:
+
+1. **Unix socket API** — the CLI talks to the daemon via a socket
+   at `~/.den/den.sock`. Commands like `den services start` send
+   requests to the daemon rather than managing processes directly.
+   If the daemon isn't running, the CLI auto-starts it.
+
+2. **Process supervision** (T33) — the daemon owns all managed
+   service processes. Services survive the terminal that started
+   them. PID tracking, log capture, signal forwarding.
+
+3. **Background upgrades** (T13) — the daemon periodically checks
+   the formula index for updates, downloads bottles, and optionally
+   applies upgrades during the maintenance window.
+
+4. **Bootstrap** — a single launchd plist (`den.daemon.plist`)
+   starts the daemon at login. This is the *only* launchd job den
+   creates. Everything else is supervised by den directly.
+
+5. **Lifecycle** — `den daemon start`, `den daemon stop`,
+   `den daemon status`. Graceful shutdown stops all managed
+   services first.
+
+The daemon is the same `den` binary running in daemon mode
+(`den daemon run`). No separate binary.
+
 **Status**: not started
+
+### 🎯T13 — Background upgrades
+The daemon (T34) periodically refreshes the formula index and
+downloads new bottles. With `auto-upgrade` enabled, applies
+upgrades during the configured maintenance window. Respects
+idle detection (screen locked / no terminals) as fallback.
+**Status**: not started (blocked by T34)
 
 ---
 
