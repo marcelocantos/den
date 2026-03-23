@@ -46,13 +46,51 @@ in manifest. **Achieved.**
 `den outdated` compares manifest vs API. `den upgrade` pours new
 bottles and re-materialises. **Achieved.**
 
-### 🎯T16 — Services
+### 🎯T16 — Services (basic)
 `den services list/start/stop/restart` manages launchd plists.
-**Achieved.**
+**Achieved.** See T33 for the built-in supervisor that replaces this.
 
 ---
 
 ## Remaining for production quality
+
+### 🎯T33 — Built-in process supervisor
+
+Replace the launchctl-based service management (T16) with a
+built-in process supervisor in den itself. No external dependency —
+one binary does the lot.
+
+**Phase 1 (minimal viable supervisor):**
+- Fork/exec service binary as a child process
+- PID tracking in `~/.den/services/<name>/pid`
+- stdout/stderr capture to `~/.den/services/<name>/log`
+- `den services stop` sends SIGTERM, waits (configurable timeout),
+  then SIGKILL
+- `den services list` checks live PIDs, shows uptime
+- `den services logs <name> [-f]` tails/follows the log
+- Environment-aware: services inherit the active den environment
+
+**Phase 2 (robustness):**
+- Restart policies: `always`, `on-failure`, `never` (default: never)
+- Configurable restart backoff (exponential with jitter)
+- Health checks: TCP port open, HTTP endpoint, custom command
+- Graceful shutdown ordering (stop dependents before dependencies)
+- Log rotation (size-based, configurable retention)
+
+**Phase 3 (advanced):**
+- `den services status` with resource usage (RSS, CPU)
+- Per-environment services (`/ml` gets its own postgres instance)
+- Service groups (`den services start dev-stack`)
+- `den daemon` as a long-lived background process that manages both
+  services and background upgrades (T13), started on first use or
+  at login via a single launchd bootstrap job
+
+The den daemon is the only thing that touches launchd — everything
+else is supervised directly by den.
+
+**Status**: not started
+
+---
 
 ### 🎯T2 — Configuration and environment detection
 Xcode/CLT version detection, full Homebrew config parity.
