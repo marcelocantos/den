@@ -109,6 +109,25 @@ all ecosystems.
 
 ---
 
+### 🎯T24 — Semantic search
+
+`den search` uses vector similarity over formula metadata (name,
+description, README content) to find packages by intent rather than
+keyword. Trained on a technical corpus so domain-specific queries
+work well ("compress video without losing quality" → ffmpeg).
+
+Index is pre-built (~24MB for 8K formulae × 768d embeddings) and
+ships alongside API metadata. Search is local and instant — no
+network call. Updated when formula metadata refreshes.
+
+Embedding model: local via ollama (e.g. nomic-embed-text) for
+privacy and offline support. Falls back to keyword matching if
+ollama is unavailable.
+
+**Status**: not started
+
+---
+
 ### 🎯T5 — Tap management
 Third-party taps.
 
