@@ -4,7 +4,8 @@
 use clap::{Parser, Subcommand};
 
 use crate::config::Config;
-use crate::{api, bottle, cask, deps, env, formula, keg, link, manifest, platform, service, tab};
+use crate::api::FormulaIndex;
+use crate::{bottle, cask, deps, env, formula, keg, link, manifest, platform, service, tab};
 
 #[derive(Parser)]
 #[command(name = "den", version, about = "A universal development environment manager")]
@@ -216,11 +217,17 @@ impl Cli {
                 let client = reqwest::Client::new();
                 let active = env::active_env_path(&config.den_home);
 
-                for name in &names {
-                    if is_cask {
+                if is_cask {
+                    for name in &names {
                         install_cask_cmd(&client, &config, &active, name).await?;
-                    } else {
-                        install_formula(&client, &config, &active, name).await?;
+                    }
+                } else {
+                    let cache_dir = config.den_home.join("cache");
+                    println!("==> Loading formula index...");
+                    let index = FormulaIndex::load(&client, &cache_dir).await?;
+                    println!("  {} formulae", index.len());
+                    for name in &names {
+                        install_formula(&client, &config, &index, &active, name).await?;
                     }
                 }
                 Ok(())
@@ -238,17 +245,26 @@ impl Cli {
             Some(Command::Upgrade { names }) => {
                 let client = reqwest::Client::new();
                 let active = env::active_env_path(&config.den_home);
-                upgrade_packages(&client, &config, &active, &names).await
+                let cache_dir = config.den_home.join("cache");
+                println!("==> Loading formula index...");
+                let index = FormulaIndex::load(&client, &cache_dir).await?;
+                upgrade_packages(&client, &config, &index, &active, &names).await
             }
             Some(Command::Update) => {
-                println!("den uses the Homebrew API directly — no local state to update.");
-                println!("Packages are always fetched from the latest API data.");
+                let client = reqwest::Client::new();
+                let cache_dir = config.den_home.join("cache");
+                println!("==> Refreshing formula index...");
+                let index = FormulaIndex::refresh(&client, &cache_dir).await?;
+                println!("  {} formulae indexed.", index.len());
                 Ok(())
             }
             Some(Command::Outdated) => {
                 let client = reqwest::Client::new();
                 let active = env::active_env_path(&config.den_home);
-                show_outdated(&client, &config, &active).await
+                let cache_dir = config.den_home.join("cache");
+                println!("==> Loading formula index...");
+                let index = FormulaIndex::load(&client, &cache_dir).await?;
+                show_outdated(&config, &index, &active)
             }
             Some(Command::Migrate) => {
                 migrate_cellar(&config)
@@ -262,15 +278,21 @@ impl Cli {
             Some(Command::Env { command }) => run_env_command(&config, command),
             Some(Command::Info { name }) => {
                 let client = reqwest::Client::new();
-                show_info(&client, &config, &name).await
+                let cache_dir = config.den_home.join("cache");
+                let index = FormulaIndex::load(&client, &cache_dir).await?;
+                show_info(&config, &index, &name)
             }
             Some(Command::Search { text }) => {
                 let client = reqwest::Client::new();
-                search_packages(&client, &text).await
+                let cache_dir = config.den_home.join("cache");
+                let index = FormulaIndex::load(&client, &cache_dir).await?;
+                search_packages(&index, &text)
             }
             Some(Command::Deps { name, tree }) => {
                 let client = reqwest::Client::new();
-                show_deps(&client, &name, tree).await
+                let cache_dir = config.den_home.join("cache");
+                let index = FormulaIndex::load(&client, &cache_dir).await?;
+                show_deps(&index, &name, tree)
             }
             Some(Command::Cleanup { names }) => {
                 cleanup(&config, &names)
@@ -448,12 +470,13 @@ fn find_source_env(config: &Config, env_path: &str, package: &str) -> String {
 async fn install_formula(
     client: &reqwest::Client,
     config: &Config,
+    index: &FormulaIndex,
     active_env: &str,
     name: &str,
 ) -> anyhow::Result<()> {
-    // Resolve full dependency tree.
+    // Resolve full dependency tree from local index — no network calls.
     println!("==> Resolving dependencies for {name}...");
-    let all = deps::resolve_install_order(client, name, &config.cellar).await?;
+    let all = deps::resolve_install_order(index, name)?;
     let missing = deps::filter_missing(&all, &config.cellar);
 
     if missing.len() > 1 {
@@ -523,7 +546,13 @@ async fn pour_bottle(
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("cannot determine macOS version"))?;
 
-    let available_tags: Vec<String> = info.bottle.stable.files.keys().cloned().collect();
+    let bottle_spec = info
+        .bottle
+        .as_ref()
+        .and_then(|b| b.stable.as_ref())
+        .ok_or_else(|| anyhow::anyhow!("no bottle available for {}", info.name))?;
+
+    let available_tags: Vec<String> = bottle_spec.files.keys().cloned().collect();
     let tag = platform::best_bottle_tag(config.arch, macos, &available_tags)
         .ok_or_else(|| {
             anyhow::anyhow!(
@@ -534,7 +563,7 @@ async fn pour_bottle(
             )
         })?;
 
-    let bottle_file = &info.bottle.stable.files[&tag];
+    let bottle_file = &bottle_spec.files[&tag];
     let ghcr_path = formula::ghcr_path(&info.name);
 
     let cache_dir = config.den_home.join("cache").join("bottles");
@@ -671,9 +700,9 @@ fn migrate_cellar(config: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn show_outdated(
-    client: &reqwest::Client,
+fn show_outdated(
     config: &Config,
+    index: &FormulaIndex,
     active_env: &str,
 ) -> anyhow::Result<()> {
     let resolved = manifest::resolve(&config.den_home, active_env)?;
@@ -682,19 +711,13 @@ async fn show_outdated(
         return Ok(());
     }
 
-    println!("==> Checking for updates...");
     let mut outdated = Vec::new();
 
     for (name, installed_version) in &resolved {
-        match api::fetch_formula(client, name).await {
-            Ok(info) => {
-                let latest = info.pkg_version();
-                if latest != *installed_version {
-                    outdated.push((name.clone(), installed_version.clone(), latest));
-                }
-            }
-            Err(_) => {
-                // Formula might not exist in API (tap-only, etc.)
+        if let Some(info) = index.get(name) {
+            let latest = info.pkg_version();
+            if latest != *installed_version {
+                outdated.push((name.clone(), installed_version.clone(), latest));
             }
         }
     }
@@ -714,6 +737,7 @@ async fn show_outdated(
 async fn upgrade_packages(
     client: &reqwest::Client,
     config: &Config,
+    index: &FormulaIndex,
     active_env: &str,
     names: &[String],
 ) -> anyhow::Result<()> {
@@ -734,13 +758,12 @@ async fn upgrade_packages(
         return Ok(());
     }
 
-    println!("==> Checking for updates...");
     let mut upgraded = 0u32;
 
     for (name, installed_version) in &to_check {
-        let info = match api::fetch_formula(client, &name).await {
-            Ok(info) => info,
-            Err(_) => continue,
+        let info = match index.get(name) {
+            Some(info) => info,
+            None => continue,
         };
 
         let latest = info.pkg_version();
@@ -750,8 +773,7 @@ async fn upgrade_packages(
 
         println!("==> Upgrading {} {} -> {}...", name, installed_version, latest);
 
-        // Pour the new version (and any new deps).
-        let all = deps::resolve_install_order(client, &name, &config.cellar).await?;
+        let all = deps::resolve_install_order(index, &name)?;
         for dep_info in &all {
             let keg_path = config
                 .cellar
@@ -762,7 +784,6 @@ async fn upgrade_packages(
             }
         }
 
-        // Update manifest.
         let mut m = manifest::read_manifest(&config.den_home, active_env)?;
         m.packages.insert(name.clone(), latest.clone());
         for dep_info in &all {
@@ -779,7 +800,6 @@ async fn upgrade_packages(
     if upgraded == 0 {
         println!("All packages are up to date.");
     } else {
-        // Re-materialise.
         println!("==> Materialising environment '{active_env}'...");
         let links = env::materialise(&config.den_home, &config.cellar, active_env)?;
         println!("  {links} symlinks");
@@ -980,12 +1000,14 @@ fn use_version(config: &Config, name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn show_info(
-    client: &reqwest::Client,
+fn show_info(
     config: &Config,
+    index: &FormulaIndex,
     name: &str,
 ) -> anyhow::Result<()> {
-    let info = api::fetch_formula(client, name).await?;
+    let info = index
+        .get(name)
+        .ok_or_else(|| anyhow::anyhow!("formula '{}' not found", name))?;
     let pkg_version = info.pkg_version();
 
     println!("{}: stable {}", info.name, pkg_version);
@@ -1017,37 +1039,18 @@ async fn show_info(
     Ok(())
 }
 
-async fn search_packages(
-    client: &reqwest::Client,
+fn search_packages(
+    index: &FormulaIndex,
     text: &str,
 ) -> anyhow::Result<()> {
-    // Fetch the full formula index and search by name/description.
-    let url = "https://formulae.brew.sh/api/formula.json";
-    let response = client
-        .get(url)
-        .header("User-Agent", "den/0.1.0")
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        anyhow::bail!("failed to fetch formula index (HTTP {})", response.status());
-    }
-
-    #[derive(serde::Deserialize)]
-    struct SearchEntry {
-        name: String,
-        #[serde(default)]
-        desc: Option<String>,
-    }
-
-    let entries: Vec<SearchEntry> = response.json().await?;
     let query = text.to_lowercase();
 
-    let matches: Vec<_> = entries
+    let mut matches: Vec<_> = index
         .iter()
-        .filter(|e| {
-            e.name.to_lowercase().contains(&query)
-                || e.desc
+        .filter(|(_, info)| {
+            info.name.to_lowercase().contains(&query)
+                || info
+                    .desc
                     .as_deref()
                     .unwrap_or("")
                     .to_lowercase()
@@ -1055,28 +1058,42 @@ async fn search_packages(
         })
         .collect();
 
+    // Sort: exact name matches first, then name contains, then description.
+    matches.sort_by(|(_, a), (_, b)| {
+        let a_exact = a.name.to_lowercase() == query;
+        let b_exact = b.name.to_lowercase() == query;
+        let a_name = a.name.to_lowercase().contains(&query);
+        let b_name = b.name.to_lowercase().contains(&query);
+        b_exact.cmp(&a_exact)
+            .then(b_name.cmp(&a_name))
+            .then(a.name.cmp(&b.name))
+    });
+
     if matches.is_empty() {
         println!("No formulae found for '{text}'.");
     } else {
-        for entry in &matches {
-            let desc = entry.desc.as_deref().unwrap_or("");
-            println!("{}: {desc}", entry.name);
+        for (_, info) in &matches {
+            let desc = info.desc.as_deref().unwrap_or("");
+            println!("{}: {desc}", info.name);
         }
     }
 
     Ok(())
 }
 
-async fn show_deps(
-    client: &reqwest::Client,
+fn show_deps(
+    index: &FormulaIndex,
     name: &str,
     tree: bool,
 ) -> anyhow::Result<()> {
+    let info = index
+        .get(name)
+        .ok_or_else(|| anyhow::anyhow!("formula '{}' not found", name))?;
+
     if tree {
         let mut visited = std::collections::HashSet::new();
-        print_dep_tree(client, name, 0, &mut visited).await?;
+        print_dep_tree(index, name, 0, &mut visited);
     } else {
-        let info = api::fetch_formula(client, name).await?;
         if info.dependencies.is_empty() {
             println!("{name} has no dependencies.");
         } else {
@@ -1088,30 +1105,26 @@ async fn show_deps(
     Ok(())
 }
 
-fn print_dep_tree<'a>(
-    client: &'a reqwest::Client,
-    name: &'a str,
+fn print_dep_tree(
+    index: &FormulaIndex,
+    name: &str,
     depth: usize,
-    visited: &'a mut std::collections::HashSet<String>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + 'a>> {
-    Box::pin(async move {
-        let indent = "  ".repeat(depth);
-        let circular = visited.contains(name);
-        println!("{indent}{name}{}", if circular { " (circular)" } else { "" });
+    visited: &mut std::collections::HashSet<String>,
+) {
+    let indent = "  ".repeat(depth);
+    let circular = visited.contains(name);
+    println!("{indent}{name}{}", if circular { " (circular)" } else { "" });
 
-        if circular {
-            return Ok(());
+    if circular {
+        return;
+    }
+    visited.insert(name.to_string());
+
+    if let Some(info) = index.get(name) {
+        for dep in &info.dependencies {
+            print_dep_tree(index, dep, depth + 1, visited);
         }
-        visited.insert(name.to_string());
-
-        if let Ok(info) = api::fetch_formula(client, name).await {
-            for dep in &info.dependencies {
-                print_dep_tree(client, dep, depth + 1, visited).await?;
-            }
-        }
-
-        Ok(())
-    })
+    }
 }
 
 fn cleanup(config: &Config, _names: &[String]) -> anyhow::Result<()> {

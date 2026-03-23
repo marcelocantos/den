@@ -1,15 +1,126 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
 use reqwest::Client;
 
 use crate::formula::FormulaInfo;
 
-const API_BASE: &str = "https://formulae.brew.sh/api/formula";
+const FORMULA_INDEX_URL: &str = "https://formulae.brew.sh/api/formula.json";
+#[allow(dead_code)]
+const FORMULA_API_BASE: &str = "https://formulae.brew.sh/api/formula";
 
-/// Fetch formula metadata from the Homebrew JSON API.
+/// Maximum age of the cached index before auto-refresh (24 hours).
+const INDEX_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// Local formula index — loaded once, used for all lookups.
+pub struct FormulaIndex {
+    formulas: HashMap<String, FormulaInfo>,
+}
+
+impl FormulaIndex {
+    /// Load the formula index, using the local cache if fresh enough,
+    /// otherwise fetching from the API.
+    pub async fn load(client: &Client, cache_dir: &Path) -> anyhow::Result<Self> {
+        let cache_path = index_cache_path(cache_dir);
+
+        // Check if cached index is fresh enough.
+        if let Some(data) = read_cached_index(&cache_path) {
+            match parse_index(&data) {
+                Ok(index) => return Ok(index),
+                Err(e) => {
+                    eprintln!("warning: cached formula index is corrupt, re-fetching: {e}");
+                }
+            }
+        }
+
+        // Fetch from API.
+        let data = fetch_index(client).await?;
+
+        // Cache it.
+        std::fs::create_dir_all(cache_dir)?;
+        std::fs::write(&cache_path, &data)?;
+
+        parse_index(&data)
+    }
+
+    /// Force a refresh of the index from the API.
+    pub async fn refresh(client: &Client, cache_dir: &Path) -> anyhow::Result<Self> {
+        let cache_path = index_cache_path(cache_dir);
+        let data = fetch_index(client).await?;
+        std::fs::create_dir_all(cache_dir)?;
+        std::fs::write(&cache_path, &data)?;
+        parse_index(&data)
+    }
+
+    /// Look up a formula by name.
+    pub fn get(&self, name: &str) -> Option<&FormulaInfo> {
+        self.formulas.get(name)
+    }
+
+    /// Number of formulae in the index.
+    pub fn len(&self) -> usize {
+        self.formulas.len()
+    }
+
+    /// Iterate over all formulae.
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &FormulaInfo)> {
+        self.formulas.iter()
+    }
+}
+
+fn index_cache_path(cache_dir: &Path) -> PathBuf {
+    cache_dir.join("formula_index.json")
+}
+
+fn read_cached_index(path: &Path) -> Option<Vec<u8>> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let modified = metadata.modified().ok()?;
+    let age = std::time::SystemTime::now()
+        .duration_since(modified)
+        .ok()?;
+
+    if age > INDEX_MAX_AGE {
+        return None;
+    }
+
+    std::fs::read(path).ok()
+}
+
+async fn fetch_index(client: &Client) -> anyhow::Result<Vec<u8>> {
+    let response = client
+        .get(FORMULA_INDEX_URL)
+        .header("User-Agent", "den/0.1.0")
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        anyhow::bail!(
+            "failed to fetch formula index (HTTP {})",
+            response.status()
+        );
+    }
+
+    Ok(response.bytes().await?.to_vec())
+}
+
+fn parse_index(data: &[u8]) -> anyhow::Result<FormulaIndex> {
+    let formulas: Vec<FormulaInfo> = serde_json::from_slice(data)?;
+    let map: HashMap<String, FormulaInfo> = formulas
+        .into_iter()
+        .map(|f| (f.name.clone(), f))
+        .collect();
+
+    Ok(FormulaIndex { formulas: map })
+}
+
+/// Fetch a single formula from the API (fallback for tap formulae
+/// not in the bulk index).
+#[allow(dead_code)]
 pub async fn fetch_formula(client: &Client, name: &str) -> anyhow::Result<FormulaInfo> {
-    let url = format!("{API_BASE}/{name}.json");
+    let url = format!("{FORMULA_API_BASE}/{name}.json");
     let response = client
         .get(&url)
         .header("User-Agent", "den/0.1.0")

@@ -4,50 +4,45 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use reqwest::Client;
-
-use crate::api;
+use crate::api::FormulaIndex;
 use crate::formula::FormulaInfo;
 
 /// Resolve all transitive runtime dependencies for a formula.
 /// Returns formulae in install order (deps before dependents).
-pub async fn resolve_install_order(
-    client: &Client,
+/// Uses the local index — no network calls.
+pub fn resolve_install_order(
+    index: &FormulaIndex,
     name: &str,
-    cellar: &Path,
 ) -> anyhow::Result<Vec<FormulaInfo>> {
     let mut visited = HashSet::new();
     let mut order = Vec::new();
-    resolve_recursive(client, name, cellar, &mut visited, &mut order).await?;
+    resolve_recursive(index, name, &mut visited, &mut order)?;
     Ok(order)
 }
 
-/// Post-order DFS: visit deps first so they appear earlier in the output.
-/// Box the future to allow recursion in async.
-fn resolve_recursive<'a>(
-    client: &'a Client,
-    name: &'a str,
-    cellar: &'a Path,
-    visited: &'a mut HashSet<String>,
-    order: &'a mut Vec<FormulaInfo>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + 'a>> {
-    Box::pin(async move {
-        if visited.contains(name) {
-            return Ok(());
-        }
-        visited.insert(name.to_string());
+fn resolve_recursive(
+    index: &FormulaIndex,
+    name: &str,
+    visited: &mut HashSet<String>,
+    order: &mut Vec<FormulaInfo>,
+) -> anyhow::Result<()> {
+    if visited.contains(name) {
+        return Ok(());
+    }
+    visited.insert(name.to_string());
 
-        let info = api::fetch_formula(client, name).await?;
+    let info = index
+        .get(name)
+        .ok_or_else(|| anyhow::anyhow!("formula '{}' not found in index", name))?;
 
-        // Visit runtime deps first.
-        let deps = info.dependencies.clone();
-        for dep in &deps {
-            resolve_recursive(client, &dep, cellar, visited, order).await?;
-        }
+    // Visit runtime deps first (post-order = deps before dependents).
+    let deps = info.dependencies.clone();
+    for dep in &deps {
+        resolve_recursive(index, dep, visited, order)?;
+    }
 
-        order.push(info);
-        Ok(())
-    })
+    order.push(info.clone());
+    Ok(())
 }
 
 /// Check which packages from a resolved list still need to be installed.

@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use serde::Deserialize;
 
 /// Formula metadata from the Homebrew JSON API.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
 pub struct FormulaInfo {
     pub name: String,
@@ -16,7 +16,8 @@ pub struct FormulaInfo {
     pub versions: Versions,
     #[serde(default)]
     pub revision: u32,
-    pub bottle: BottleSpec,
+    #[serde(default)]
+    pub bottle: Option<BottleSpec>,
     #[serde(default)]
     pub dependencies: Vec<String>,
     #[serde(default)]
@@ -34,30 +35,37 @@ pub struct FormulaInfo {
 impl FormulaInfo {
     /// The package version string including revision suffix (e.g. "3.12.13_2").
     pub fn pkg_version(&self) -> String {
+        let stable = self
+            .versions
+            .stable
+            .as_deref()
+            .unwrap_or("0");
         if self.revision > 0 {
-            format!("{}_{}", self.versions.stable, self.revision)
+            format!("{stable}_{}", self.revision)
         } else {
-            self.versions.stable.clone()
+            stable.to_string()
         }
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
 pub struct Versions {
-    pub stable: String,
+    #[serde(default)]
+    pub stable: Option<String>,
     #[serde(default)]
     pub head: Option<String>,
     #[serde(default)]
     pub bottle: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct BottleSpec {
-    pub stable: BottleStable,
+    #[serde(default)]
+    pub stable: Option<BottleStable>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
 pub struct BottleStable {
     #[serde(default)]
@@ -66,7 +74,7 @@ pub struct BottleStable {
     pub files: HashMap<String, BottleFile>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
 pub struct BottleFile {
     pub cellar: String,
