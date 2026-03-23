@@ -6,6 +6,7 @@ mod bottle;
 mod cask;
 mod cli;
 mod config;
+mod daemon;
 mod deps;
 mod env;
 mod error;

@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 
 use crate::config::Config;
 use crate::api::FormulaIndex;
-use crate::{bottle, cask, deps, env, formula, keg, link, manifest, platform, service, tab};
+use crate::{bottle, cask, daemon, deps, env, formula, keg, link, manifest, platform, service, tab};
 
 #[derive(Parser)]
 #[command(name = "den", version, about = "A universal development environment manager")]
@@ -125,6 +125,11 @@ enum Command {
     Settings,
     /// Import existing Homebrew Cellar into den
     Migrate,
+    /// Manage the background daemon
+    Daemon {
+        #[command(subcommand)]
+        command: DaemonCommand,
+    },
     /// List packages with available upgrades
     Outdated,
     /// Manage background services
@@ -153,6 +158,22 @@ enum ServiceCommand {
         /// Service/formula name
         name: String,
     },
+}
+
+#[derive(Subcommand)]
+enum DaemonCommand {
+    /// Run the daemon in the foreground (used by launchd)
+    Run,
+    /// Start the daemon in the background
+    Start,
+    /// Stop the running daemon
+    Stop,
+    /// Show daemon status and pending upgrades
+    Status,
+    /// Install the launchd plist for auto-start at login
+    Install,
+    /// Remove the launchd plist
+    Uninstall,
 }
 
 #[derive(Subcommand)]
@@ -268,6 +289,9 @@ impl Cli {
             }
             Some(Command::Migrate) => {
                 migrate_cellar(&config)
+            }
+            Some(Command::Daemon { command }) => {
+                run_daemon_command(&config, command).await
             }
             Some(Command::List { names }) => list_packages(&config, &names),
             Some(Command::Use { name }) => use_version(&config, &name),
@@ -1138,6 +1162,116 @@ fn cleanup(config: &Config, _names: &[String]) -> anyhow::Result<()> {
         println!("No cached bottles to remove.");
     }
     Ok(())
+}
+
+async fn run_daemon_command(config: &Config, command: DaemonCommand) -> anyhow::Result<()> {
+    match command {
+        DaemonCommand::Run => {
+            daemon::run(config).await
+        }
+        DaemonCommand::Start => {
+            if daemon::is_running(&config.den_home) {
+                println!("Daemon is already running.");
+                return Ok(());
+            }
+            // Fork and exec ourselves in daemon mode.
+            let exe = std::env::current_exe()?;
+            let child = std::process::Command::new(exe)
+                .args(["daemon", "run"])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()?;
+            println!("Daemon started (PID {}).", child.id());
+            Ok(())
+        }
+        DaemonCommand::Stop => {
+            let pid_path = config.den_home.join("daemon.pid");
+            let pid_str = std::fs::read_to_string(&pid_path)
+                .map_err(|_| anyhow::anyhow!("daemon is not running"))?;
+            let pid: i32 = pid_str.trim().parse()?;
+
+            unsafe {
+                libc::kill(pid, libc::SIGTERM);
+            }
+            println!("Sent SIGTERM to daemon (PID {pid}).");
+            Ok(())
+        }
+        DaemonCommand::Status => {
+            if daemon::is_running(&config.den_home) {
+                let pid_str = std::fs::read_to_string(config.den_home.join("daemon.pid"))
+                    .unwrap_or_default();
+                println!("Daemon: running (PID {})", pid_str.trim());
+            } else {
+                println!("Daemon: not running");
+            }
+
+            let state = daemon::read_state(&config.den_home);
+            if let Some(last) = state.last_check {
+                let ago = daemon::now_secs().saturating_sub(last);
+                println!("Last check: {}s ago", ago);
+            } else {
+                println!("Last check: never");
+            }
+
+            if state.pending.is_empty() {
+                println!("Pending upgrades: none");
+            } else {
+                println!("Pending upgrades:");
+                for p in &state.pending {
+                    println!("  {} {} -> {}", p.name, p.installed, p.available);
+                }
+            }
+
+            let settings = daemon::read_settings(&config.den_home);
+            println!("Auto-upgrade: {}", if settings.auto_upgrade { "on" } else { "off" });
+            if let Some(ref window) = settings.upgrade_window {
+                println!("Upgrade window: {window}");
+            }
+
+            Ok(())
+        }
+        DaemonCommand::Install => {
+            let exe = std::env::current_exe()?;
+            let plist = daemon::launchd_plist(&exe);
+            let plist_path = dirs::home_dir()
+                .ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))?
+                .join("Library/LaunchAgents/dev.den.daemon.plist");
+
+            std::fs::create_dir_all(plist_path.parent().unwrap())?;
+            std::fs::write(&plist_path, &plist)?;
+
+            let status = std::process::Command::new("launchctl")
+                .args(["load", "-w"])
+                .arg(&plist_path)
+                .status()?;
+
+            if status.success() {
+                println!("Daemon installed and started.");
+                println!("  Plist: {}", plist_path.display());
+            } else {
+                anyhow::bail!("failed to load launchd plist");
+            }
+            Ok(())
+        }
+        DaemonCommand::Uninstall => {
+            let plist_path = dirs::home_dir()
+                .ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))?
+                .join("Library/LaunchAgents/dev.den.daemon.plist");
+
+            if plist_path.exists() {
+                let _ = std::process::Command::new("launchctl")
+                    .args(["unload", "-w"])
+                    .arg(&plist_path)
+                    .status();
+                std::fs::remove_file(&plist_path)?;
+                println!("Daemon uninstalled.");
+            } else {
+                println!("Daemon is not installed.");
+            }
+            Ok(())
+        }
+    }
 }
 
 fn normalise_env_path(path: &str) -> String {

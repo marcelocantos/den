@@ -21,6 +21,8 @@ dirs = "6"
 tracing = "0.1"
 thiserror = "2"
 tracing-subscriber = "0.3"
+libc = "0.2"
+ctrlc = "3"
 
 [dev-dependencies]
 assert_cmd = "2"
