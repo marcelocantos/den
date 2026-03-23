@@ -177,6 +177,138 @@ Artifacts: `embeddings.bin` (~24MB), `bm25.bin` (~5MB),
 
 ---
 
+### 🎯T26 — Content-addressed Cellar
+
+Replace the `Cellar/name/version/` directory convention with a
+content-addressed store keyed by the SHA256 of the keg's contents.
+Name and version become metadata pointing into the store.
+
+Benefits:
+- **Deduplication** — identical kegs (same formula rebuilt with same
+  inputs) occupy one slot regardless of how they got there.
+- **Integrity verification** — any keg can be verified at rest by
+  rehashing. Corruption is detectable without network access.
+- **Untrusted mirrors** — bottles can be served from arbitrary mirrors
+  since the content hash is the identity. A compromised mirror can
+  only serve correct data or be detected.
+- **Atomic installs** — pour into a temp name, verify hash, rename.
+  No partial installs.
+
+Inspired by 0install's output-hashed storage and Nix's /nix/store,
+but hashing outputs (actual files) rather than inputs (build
+instructions). This means we can verify a binary without trusting
+the build process.
+
+The store is explicitly non-precious — everything can be re-fetched
+from bottles. `den cleanup` can aggressively prune without worry.
+
+**Status**: not started
+
+---
+
+### 🎯T27 — No-code-at-install policy
+
+Bottle pours execute zero code — installation is purely unpack +
+verify digest. No post-install scripts, no hooks, no arbitrary
+execution. This is enforced as an invariant for den-managed
+installs.
+
+Source builds (T11) are the only exception and require explicit
+opt-in (`--build-from-source`). When source builds eventually
+land, they run in a sandboxed environment with declared
+capabilities.
+
+This inverts the Homebrew model where `def post_install` runs
+arbitrary Ruby as the installing user. In den, you can pour a
+bottle with zero trust in the build system — just verify the hash.
+
+**Status**: partially achieved (bottles already don't run code;
+needs enforcement and documentation as a guarantee)
+
+---
+
+### 🎯T28 — Explicit bindings
+
+Replace "link everything from the keg's bin/" with declared
+bindings that specify exactly how a package integrates into the
+environment. Each formula provides a binding spec:
+
+- `path: bin/ffmpeg` — put this on PATH
+- `env: OPENSSL_DIR=/path/to/keg` — set an environment variable
+- `env-append: PKG_CONFIG_PATH=/path/to/lib/pkgconfig` — append
+- `alias: python3 -> python3.12` — create a named alias
+
+Benefits:
+- **Fewer conflicts** — only declared binaries appear, not every
+  file in bin/ (many kegs have internal tools not meant for users)
+- **Environment variables** — keg_only packages like openssl can
+  expose themselves via env vars without symlinking into bin/
+- **Precision** — `den env show` can report exactly what each
+  package contributes to the environment
+
+Binding specs can be derived from Homebrew formula metadata
+(keg_only, link_overwrite) and refined over time. Falls back to
+current "link all of bin/" when no binding spec exists.
+
+Inspired by 0install's `<environment>` and `<executable-in-path>`
+binding elements.
+
+**Status**: not started
+
+---
+
+### 🎯T29 — SAT-based dependency solver
+
+Replace the current greedy DFS resolver with a SAT-based solver
+that handles version constraints, conflicts, and multi-version
+coinstallation correctly.
+
+Each candidate version becomes a boolean variable. Dependencies
+and conflicts become clauses. The solver finds a satisfying
+assignment that maximises a preference function (prefer stable,
+prefer newer, prefer already-installed).
+
+Conflict-driven clause learning (CDCL) prunes the search space
+when a combination fails, preventing re-exploration of dead ends.
+
+This matters when den manages multiple providers (T23) — a Go
+binary might need a specific minimum glibc, a Python package might
+conflict with another Python package, and the solver needs to
+reason about all of it simultaneously.
+
+Inspired by 0install's OPIUM-derived solver and the broader
+SAT-for-packages literature (Debian apt, Nix).
+
+**Status**: not started
+
+---
+
+### 🎯T30 — Stability ratings
+
+Each package version carries a stability level: stable, testing,
+developer, buggy, insecure. The solver respects these levels:
+
+- **stable** (default preference) — released and considered safe
+- **testing** — pre-release or recently released, not yet proven
+- **developer** — HEAD builds, nightly
+- **buggy** — known issues, demoted from stable
+- **insecure** — known vulnerabilities, never auto-selected
+
+`den set stability testing` opts into pre-release versions.
+Per-package overrides: `den set stability tree testing`.
+Insecure versions are never selected without explicit `=version`.
+
+The Homebrew API's `deprecated` and `disabled` fields map onto
+buggy and insecure. The background daemon (T13) can auto-demote
+versions when CVEs are published.
+
+Inspired by 0install's stability ratings as a first-class solver
+input.
+
+**Status**: not started
+
+---
+
 ### 🎯T5 — Tap management
 Third-party taps.
 
