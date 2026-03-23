@@ -309,14 +309,51 @@ input.
 
 ---
 
+### 🎯T31 — Lazy-vendored Ruby
+
+Ruby is not shipped with den and not required for bottle pours.
+On first use of a feature that needs it (source builds, third-party
+tap formula parsing), den downloads Homebrew's Portable Ruby
+bottle into `~/.den/vendor/ruby/<version>/` automatically.
+
+Content-addressed, non-precious (re-fetchable), version-pinned.
+Extends to other vendored tools if T23 providers need them.
+
+**Status**: not started
+
+---
+
+### 🎯T32 — Opt-in telemetry
+
+Anonymous, opt-in usage telemetry to answer questions like:
+
+- How often do users trigger Ruby (source builds, tap parsing)?
+- Which formulae/casks are most installed via den?
+- How many environments does a typical user have?
+- How often does the SAT solver hit conflicts?
+- Which search provider is most used?
+
+Data drives decisions: if Ruby is triggered <1% of the time,
+lazy-vendoring is sufficient. If 30% of installs need it, maybe
+we should pre-vendor or find ways to eliminate the dependency.
+
+Privacy-first: opt-in only (`den set telemetry on`), no PII, no
+package names (just category counts), aggregated before upload,
+local preview (`den telemetry show`). Consider differential
+privacy for small user populations.
+
+**Status**: not started
+
+---
+
 ### 🎯T5 — Tap management
 Third-party taps.
 
 ### 🎯T11 — Source builds
-Delegate to Ruby for `--build-from-source`.
+Delegate to Ruby via lazy-vendored Portable Ruby (T31).
 
 ### 🎯T17 — Formula metadata parsing (third-party taps)
-Ruby DSL parsing for non-API taps.
+Ruby DSL parsing for non-API taps. Uses lazy-vendored Ruby (T31).
 
 ### 🎯T18 — Testing oracle
 Automated Homebrew-equivalence testing.
