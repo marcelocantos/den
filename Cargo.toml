@@ -1,8 +1,8 @@
 [package]
-name = "rubrew"
+name = "den"
 version = "0.1.0"
 edition = "2024"
-description = "A Rust reimplementation of Homebrew, the macOS package manager"
+description = "A universal development environment manager"
 license = "Apache-2.0"
 
 [dependencies]

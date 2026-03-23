@@ -1,12 +1,22 @@
-# rubrew
+# den
 
-A Rust reimplementation of Homebrew, the macOS package manager.
+A universal development environment manager. Think virtualenv for
+everything — not just Python, but every package on your system.
 
 ## Overview
 
-rubrew aims to be a drop-in replacement for Homebrew with full
-compatibility with existing formulae, casks, taps, and bottles. Written
-in Rust for speed, correctness, and resource efficiency.
+den is a package and environment manager that:
+
+- **Consumes the Homebrew ecosystem** — compatible with existing
+  formulae, casks, taps, and bottles.
+- **Supports multi-version coinstallation** — install python@3.11 and
+  python@3.12 side by side without conflict. Switch with `den use`.
+- **Provides named environments** — like virtualenv but for all
+  packages. Create isolated, composable, reproducible environments
+  that layer via PATH.
+- **Upgrades in the background** — a daemon downloads and installs
+  new versions alongside existing ones. Nothing changes until you
+  switch. Rollback is instant.
 
 ## Delivery
 
@@ -22,16 +32,18 @@ See `docs/targets.md` for the convergence roadmap.
 
 ### Key Design Decisions
 
-- **Formula compatibility**: Must support existing Homebrew Ruby formula
-  DSL — parse `.rb` files to extract metadata, delegate `install` and
-  `test` blocks to a sandboxed Ruby evaluator (or transpile to a native
-  representation over time).
-- **Filesystem layout**: 100% compatible with Homebrew's Cellar/opt/tap
-  layout so users can migrate in place.
-- **Bottle compatibility**: Pour existing Homebrew bottles unchanged.
-- **API compatibility**: Consume `formulae.brew.sh` JSON API.
-- **CLI compatibility**: Same commands, same flags, same output format
-  where possible.
+- **Homebrew compatibility**: Consumes formulae.brew.sh JSON API for
+  metadata. Pours existing Homebrew bottles. Reads existing Cellar.
+  For source builds and third-party tap parsing, delegates to Ruby.
+- **Environments are symlink sets**: Each environment is a directory
+  of symlinks into the Cellar. Environments compose via PATH
+  precedence — a project env overrides the default env.
+- **Multi-version by default**: Installing a new version never removes
+  the old one. `den use` atomically switches which version is linked
+  in the active environment.
+- **Background daemon**: Downloads and stages upgrades without user
+  intervention. The user's active environment is never modified
+  without explicit action.
 
 ### Crate Structure
 
@@ -39,6 +51,7 @@ See `docs/targets.md` for the convergence roadmap.
 src/
 ├── main.rs           # CLI entry point
 ├── cli/              # Command definitions (clap)
+├── env/              # Environment management (create, switch, layer)
 ├── formula/          # Formula parsing, metadata, DSL
 ├── cask/             # Cask parsing, artifacts
 ├── keg/              # Keg/Cellar management
@@ -49,6 +62,7 @@ src/
 ├── download/         # Download strategies, caching
 ├── api/              # formulae.brew.sh API client
 ├── tab/              # INSTALL_RECEIPT.json handling
+├── daemon/           # Background upgrade service
 ├── config/           # Configuration, environment
 ├── platform/         # OS/arch detection, Mach-O/ELF tools
 └── error.rs          # Error types

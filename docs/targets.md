@@ -2,16 +2,16 @@
 
 ## 🎯T1 — Core infrastructure compiles and runs
 
-rubrew builds, runs `rubrew --version`, and has the module skeleton
+den builds, runs `den --version`, and has the module skeleton
 in place for all major subsystems.
 
-**Status**: in progress
+**Status**: achieved
 
 ---
 
 ## 🎯T2 — Configuration and environment detection
 
-rubrew detects HOMEBREW_PREFIX, HOMEBREW_CELLAR, HOMEBREW_CACHE,
+den detects HOMEBREW_PREFIX, HOMEBREW_CELLAR, HOMEBREW_CACHE,
 platform (macOS/Linux), architecture (arm64/x86_64), macOS version,
 and Xcode/CLT availability. Reads existing Homebrew configuration.
 
@@ -19,80 +19,81 @@ and Xcode/CLT availability. Reads existing Homebrew configuration.
 
 ---
 
-## 🎯T3 — Formula metadata parsing
+## 🎯T3 — API client
 
-rubrew can parse Homebrew Ruby formula files and extract all metadata
-(name, version, url, sha256, dependencies, bottle specs, etc.)
-without executing Ruby code. Falls back to a Ruby evaluator for
-formulae with dynamic metadata.
-
-**Status**: not started
-
----
-
-## 🎯T4 — API client
-
-rubrew can fetch and cache formula/cask metadata from
-formulae.brew.sh JSON API. Serves as the primary metadata source
-(matching Homebrew 4.0+ behavior).
+den can fetch and cache formula/cask metadata from
+formulae.brew.sh JSON API. This is the primary metadata source
+(no Ruby parsing needed for core formulae).
 
 **Status**: not started
 
 ---
 
-## 🎯T5 — Cellar and keg management
+## 🎯T4 — Cellar and keg management
 
-rubrew can inspect the Cellar, enumerate racks/kegs, read
+den can inspect the Cellar, enumerate racks/kegs, read
 INSTALL_RECEIPT.json tabs, and report installed packages with
-versions. `rubrew list` works.
+versions. `den list` works. Multiple versions per package coexist.
 
 **Status**: not started
 
 ---
 
-## 🎯T6 — Tap management
+## 🎯T5 — Tap management
 
-rubrew can list, add, remove, and update taps (git repos).
-`rubrew tap`, `rubrew untap`, `rubrew tap-info` work.
+den can list, add, remove, and update taps (git repos).
+`den tap`, `den untap` work.
 
 **Status**: not started
 
 ---
 
-## 🎯T7 — Dependency resolution
+## 🎯T6 — Dependency resolution
 
-rubrew resolves transitive dependencies, performs topological sort,
+den resolves transitive dependencies, performs topological sort,
 detects cycles, and filters by platform/build-type. Produces a
-correct install plan.
+correct install plan that respects multi-version coinstallation.
 
 **Status**: not started
 
 ---
 
-## 🎯T8 — Download and caching
+## 🎯T7 — Download and caching
 
-rubrew downloads source tarballs and bottles with SHA256 verification,
-resume support, and local caching in HOMEBREW_CACHE.
-
-**Status**: not started
-
----
-
-## 🎯T9 — Bottle pouring
-
-rubrew can pour (install from pre-built bottle) any Homebrew bottle,
-including Mach-O relocation via install_name_tool. `rubrew install
-<formula>` works for bottled formulae.
+den downloads source tarballs and bottles with SHA256 verification,
+resume support, and local caching.
 
 **Status**: not started
 
 ---
 
-## 🎯T10 — Symlink management
+## 🎯T8 — Bottle pouring
 
-rubrew can link/unlink kegs, manage /opt/homebrew/opt symlinks,
-detect conflicts, and handle keg-only formulae. `rubrew link`,
-`rubrew unlink` work.
+den can pour (install from pre-built bottle) any Homebrew bottle,
+including Mach-O relocation via install_name_tool. `den install
+<formula>` works for bottled formulae. Installing a new version
+preserves existing versions.
+
+**Status**: not started
+
+---
+
+## 🎯T9 — Environment management
+
+den supports named environments — directories of symlinks into the
+Cellar. `den env create`, `den env list`, `den env use`,
+`den env remove`, `den env freeze` all work. Environments compose
+via PATH precedence.
+
+**Status**: not started
+
+---
+
+## 🎯T10 — Version switching
+
+`den use <package>@<version>` atomically switches which version is
+linked in the active environment. No unlink-then-link dance — the
+swap is atomic. `den status` shows active versions.
 
 **Status**: not started
 
@@ -100,9 +101,9 @@ detect conflicts, and handle keg-only formulae. `rubrew link`,
 
 ## 🎯T11 — Source builds
 
-rubrew can build formulae from source by delegating to a sandboxed
-Ruby evaluator for the `install` block. Build environment (compiler
-flags, paths) is correctly configured.
+den can build formulae from source by delegating to Ruby for the
+`install` block. Build environment (compiler flags, paths) is
+correctly configured.
 
 **Status**: not started
 
@@ -110,18 +111,20 @@ flags, paths) is correctly configured.
 
 ## 🎯T12 — Cask support
 
-rubrew can install, uninstall, and manage casks (DMG/ZIP/PKG
-artifacts, app bundles, binaries, fonts). `rubrew install --cask`
+den can install, uninstall, and manage casks (DMG/ZIP/PKG
+artifacts, app bundles, binaries, fonts). `den install --cask`
 works.
 
 **Status**: not started
 
 ---
 
-## 🎯T13 — Upgrade and update
+## 🎯T13 — Background daemon
 
-`rubrew update` fetches latest tap/API data. `rubrew upgrade`
-detects outdated packages and upgrades them in dependency order.
+A background service (launchd on macOS) watches for available
+upgrades, downloads bottles, and stages new versions in the Cellar.
+The user's active environment is never modified without explicit
+action. `den status` shows what's available.
 
 **Status**: not started
 
@@ -129,8 +132,8 @@ detects outdated packages and upgrades them in dependency order.
 
 ## 🎯T14 — Info, search, and query commands
 
-`rubrew info`, `rubrew search`, `rubrew deps`, `rubrew uses`,
-`rubrew leaves`, `rubrew outdated` all work correctly.
+`den info`, `den search`, `den deps`, `den uses`,
+`den leaves`, `den outdated` all work correctly.
 
 **Status**: not started
 
@@ -138,8 +141,7 @@ detects outdated packages and upgrades them in dependency order.
 
 ## 🎯T15 — Cleanup and maintenance
 
-`rubrew cleanup`, `rubrew autoremove`, `rubrew doctor` work.
-Doctor performs the same diagnostic checks as Homebrew.
+`den cleanup`, `den autoremove`, `den doctor` work.
 
 **Status**: not started
 
@@ -147,25 +149,38 @@ Doctor performs the same diagnostic checks as Homebrew.
 
 ## 🎯T16 — Services
 
-`rubrew services` can list, start, stop, and restart launchd/systemd
+`den services` can list, start, stop, and restart launchd/systemd
 services defined by formulae.
 
 **Status**: not started
 
 ---
 
-## 🎯T17 — Full CLI parity
+## 🎯T17 — Formula metadata parsing (third-party taps)
 
-All Homebrew commands and flags are implemented. `rubrew` is a
-drop-in replacement for `brew`.
+den can parse Homebrew Ruby formula files to extract metadata for
+third-party taps not covered by the JSON API. Falls back to Ruby
+for the ~5% of formulae with dynamic metadata.
 
 **Status**: not started
 
 ---
 
-## 🎯T18 — Performance
+## 🎯T18 — Testing oracle
 
-rubrew is measurably faster than Homebrew for common operations
+A test harness that captures Homebrew's observable state for any
+operation (metadata, file tree, symlinks, receipts) and diffs
+against den's output. Runs across the full formula corpus for
+metadata equivalence, and against a curated set for installation
+equivalence.
+
+**Status**: not started
+
+---
+
+## 🎯T19 — Performance
+
+den is measurably faster than Homebrew for common operations
 (install, list, search, info, update, upgrade, cleanup).
 
 **Status**: not started

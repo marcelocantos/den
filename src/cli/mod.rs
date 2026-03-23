@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 use crate::config::Config;
 
 #[derive(Parser)]
-#[command(name = "rubrew", version, about = "A Rust reimplementation of Homebrew")]
+#[command(name = "den", version, about = "A universal development environment manager")]
 pub struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -92,8 +92,46 @@ enum Command {
     Autoremove,
     /// Check system for potential problems
     Doctor,
-    /// Show Homebrew configuration
+    /// Show den configuration
     Config,
+    /// Manage environments
+    Env {
+        #[command(subcommand)]
+        command: Option<EnvCommand>,
+    },
+    /// Switch active version of a package
+    Use {
+        /// Package name with version (e.g. python@3.11)
+        name: String,
+    },
+    /// Show pending upgrades and environment status
+    Status,
+}
+
+#[derive(Subcommand)]
+enum EnvCommand {
+    /// Create a new environment
+    Create {
+        /// Environment name
+        name: String,
+        /// Parent environment to inherit from
+        #[arg(long)]
+        from: Option<String>,
+    },
+    /// List all environments
+    List,
+    /// Remove an environment
+    Remove {
+        /// Environment name
+        name: String,
+    },
+    /// Activate an environment in the current shell
+    Use {
+        /// Environment name
+        name: String,
+    },
+    /// Export environment as a lockfile
+    Freeze,
 }
 
 impl Cli {
@@ -102,11 +140,10 @@ impl Cli {
 
         match self.command {
             None => {
-                // No subcommand — print help (clap handles this via `--help`)
-                println!("rubrew {}", env!("CARGO_PKG_VERSION"));
-                println!("A Rust reimplementation of Homebrew");
+                println!("den {}", env!("CARGO_PKG_VERSION"));
+                println!("A universal development environment manager");
                 println!();
-                println!("Run `rubrew --help` for usage.");
+                println!("Run `den --help` for usage.");
                 Ok(())
             }
             Some(Command::Config) => {
