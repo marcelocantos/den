@@ -196,6 +196,84 @@ all ecosystems.
 
 ---
 
+### 🎯T38 — Python provider (subsume virtualenv)
+
+Each den environment gets its own isolated Python with its own
+site-packages. No separate virtualenv needed.
+
+**How it works:**
+- Den creates a `pyvenv.cfg` in the environment directory, which
+  makes Python treat it as a virtual environment natively.
+- `den install numpy` (in `/ml`) runs `uv pip install` (preferred)
+  or `pip install --target` into the environment's
+  `lib/python3.X/site-packages/`.
+- Python packages are tracked in the manifest under a `pip` key:
+  ```json
+  { "pip": { "numpy": "2.2.1", "torch": "2.6.0" } }
+  ```
+- Environment inheritance works: `/ml/experiment` inherits `/ml`'s
+  Python packages and can add or override them.
+- `den use python@3.11` switches the Python version and
+  re-evaluates package compatibility.
+
+**Provider detection:** `den install numpy` auto-detects pip as the
+provider (numpy isn't a Homebrew formula). `den install --pip numpy`
+is explicit. Both work.
+
+**Replaces:** pyenv (version management) + virtualenv/venv (package
+isolation) + pipx (binary isolation). One tool.
+
+**Status**: not started
+
+---
+
+### 🎯T39 — Node.js/npm provider
+
+Each den environment gets its own isolated Node.js with its own
+global packages.
+
+- `den install prettier` (auto-detected as npm) installs to the
+  environment's `lib/node_modules/` and links binaries to `bin/`.
+- `den use node@20` switches Node version.
+- Manifest tracks under `npm` key.
+- `node_modules` is per-environment, not global. No `npm -g` chaos.
+
+**Replaces:** nvm/fnm (version management) + npm global installs.
+
+**Status**: not started
+
+---
+
+### 🎯T40 — Go provider
+
+- `den install gopls` runs `go install` into environment-local
+  GOBIN.
+- `den use go@1.22` switches Go toolchain version.
+- Manifest tracks under `go` key with full module paths.
+- Go binaries are statically linked so no site-packages equivalent
+  is needed — just the binary in `bin/`.
+
+**Replaces:** manual `go install` + PATH management.
+
+**Status**: not started
+
+---
+
+### 🎯T41 — Cargo provider
+
+- `den install bat` runs `cargo install` into environment-local
+  CARGO_INSTALL_ROOT.
+- `den use rust@1.84` switches Rust toolchain (delegates to
+  rustup if available, or manages versions directly).
+- Manifest tracks under `cargo` key with crate names.
+- Like Go, Rust binaries are typically self-contained.
+
+**Replaces:** manual `cargo install` + scattered `~/.cargo/bin`.
+
+**Status**: not started
+
+---
+
 ### 🎯T24 — Semantic search
 
 `den search` finds packages by intent, not keyword. Pluggable
