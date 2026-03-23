@@ -126,8 +126,13 @@ upgrades, downloads bottles, and stages new versions in the Cellar.
 By default, new versions are staged but the active environment is
 not modified until the user acts. With `auto-upgrade` enabled
 (`den set auto-upgrade true`), the daemon also switches the active
-environment to the new version automatically. `den status` shows
-what's installed, what's pending, and the auto-upgrade setting.
+environment to the new version automatically.
+
+Auto-upgrade respects a maintenance window (`den set upgrade-window
+3:00-5:00`) to avoid changing packages while the user is working.
+If no window is set, auto-upgrades apply when the system is idle
+(screen locked or no terminal sessions active). `den status` shows
+what's installed, what's pending, and the upgrade schedule.
 
 **Status**: not started
 
