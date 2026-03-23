@@ -32,3 +32,19 @@ pub fn list_envs(den_home: &Path) -> anyhow::Result<Vec<String>> {
 pub fn default_env(den_home: &Path) -> anyhow::Result<PathBuf> {
     ensure_env(den_home, "default")
 }
+
+/// Read the name of the currently active environment.
+pub fn active_env_name(den_home: &Path) -> Option<String> {
+    let path = den_home.join("active_env");
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Set the active environment.
+pub fn set_active_env(den_home: &Path, name: &str) -> anyhow::Result<()> {
+    std::fs::create_dir_all(den_home)?;
+    std::fs::write(den_home.join("active_env"), name)?;
+    Ok(())
+}

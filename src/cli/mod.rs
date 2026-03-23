@@ -105,6 +105,12 @@ enum Command {
         /// Package name with version (e.g. python@3.11)
         name: String,
     },
+    /// Print shell integration for eval (add `eval "$(den init)"` to .zshrc)
+    Init {
+        /// Shell type (default: auto-detect)
+        #[arg(long, default_value = "zsh")]
+        shell: String,
+    },
     /// Show pending upgrades and environment status
     Status,
     /// Configure den settings
@@ -189,6 +195,10 @@ impl Cli {
             Some(Command::Use { name }) => {
                 use_version(&config, &name)
             }
+            Some(Command::Init { shell }) => {
+                print_shell_init(&config, &shell);
+                Ok(())
+            }
             Some(Command::Env { command }) => {
                 match command {
                     Some(EnvCommand::List) | None => {
@@ -196,8 +206,14 @@ impl Cli {
                         if envs.is_empty() {
                             println!("No environments. Create one with `den env create <name>`.");
                         } else {
+                            let active = env::active_env_name(&config.den_home);
                             for name in &envs {
-                                println!("{name}");
+                                let marker = if Some(name.as_str()) == active.as_deref() {
+                                    " (active)"
+                                } else {
+                                    ""
+                                };
+                                println!("{name}{marker}");
                             }
                         }
                         Ok(())
@@ -207,9 +223,35 @@ impl Cli {
                         println!("Created environment '{}' at {}", name, path.display());
                         Ok(())
                     }
-                    Some(cmd) => {
-                        let _ = cmd;
-                        anyhow::bail!("env subcommand not yet implemented")
+                    Some(EnvCommand::Use { name }) => {
+                        // Verify the environment exists.
+                        let env_path = config.den_home.join("envs").join(&name);
+                        if !env_path.is_dir() {
+                            anyhow::bail!(
+                                "environment '{}' does not exist. Create it with `den env create {}`.",
+                                name, name
+                            );
+                        }
+                        // Write active env marker.
+                        env::set_active_env(&config.den_home, &name)?;
+                        // Output shell commands to switch PATH.
+                        print_env_switch_commands(&config, &name);
+                        Ok(())
+                    }
+                    Some(EnvCommand::Remove { name }) => {
+                        let env_path = config.den_home.join("envs").join(&name);
+                        if name == "default" {
+                            anyhow::bail!("cannot remove the default environment");
+                        }
+                        if !env_path.is_dir() {
+                            anyhow::bail!("environment '{}' does not exist", name);
+                        }
+                        std::fs::remove_dir_all(&env_path)?;
+                        println!("Removed environment '{name}'.");
+                        Ok(())
+                    }
+                    Some(EnvCommand::Freeze) => {
+                        anyhow::bail!("env freeze not yet implemented")
                     }
                 }
             }
@@ -383,4 +425,83 @@ fn use_version(config: &Config, name: &str) -> anyhow::Result<()> {
     println!("  {} symlinks created", created.len());
     println!("==> Now using {} {}.", formula_name, keg.version);
     Ok(())
+}
+
+fn print_shell_init(config: &Config, shell: &str) {
+    let den_home = config.den_home.display();
+    match shell {
+        "zsh" | "bash" => {
+            print!(
+                r#"# den shell integration
+export DEN_HOME="{den_home}"
+export DEN_ENV="default"
+
+# Add default environment to PATH (before Homebrew).
+export PATH="{den_home}/envs/default/bin:$PATH"
+
+# Shell function wrapping `den env use` so it can modify the current shell.
+den() {{
+    if [ "$1" = "env" ] && [ "$2" = "use" ] && [ -n "$3" ]; then
+        local _den_output
+        _den_output="$(command den env use "$3" 2>&1)"
+        local _den_rc=$?
+        if [ $_den_rc -eq 0 ]; then
+            eval "$_den_output"
+        else
+            echo "$_den_output" >&2
+            return $_den_rc
+        fi
+    else
+        command den "$@"
+    fi
+}}
+"#
+            );
+        }
+        "fish" => {
+            print!(
+                r#"# den shell integration
+set -gx DEN_HOME "{den_home}"
+set -gx DEN_ENV "default"
+
+# Add default environment to PATH.
+fish_add_path --prepend "{den_home}/envs/default/bin"
+
+# Wrapper function for `den env use`.
+function den
+    if test (count $argv) -ge 3; and test "$argv[1]" = "env"; and test "$argv[2]" = "use"
+        set -l output (command den env use $argv[3] 2>&1)
+        set -l rc $status
+        if test $rc -eq 0
+            eval $output
+        else
+            echo $output >&2
+            return $rc
+        end
+    else
+        command den $argv
+    end
+end
+"#
+            );
+        }
+        _ => {
+            eprintln!("unsupported shell: {shell}. Use zsh, bash, or fish.");
+        }
+    }
+}
+
+fn print_env_switch_commands(config: &Config, env_name: &str) {
+    let den_home = &config.den_home;
+    let new_env_bin = den_home.join("envs").join(env_name).join("bin");
+
+    // Output shell commands that the wrapper function will eval.
+    // Remove any existing den env bin from PATH, then prepend the new one.
+    println!(
+        r#"export PATH="$(echo "$PATH" | sed "s|{den_home}/envs/[^:]*bin:||g")"
+export PATH="{new_bin}:$PATH"
+export DEN_ENV="{env_name}""#,
+        den_home = den_home.display(),
+        new_bin = new_env_bin.display(),
+    );
 }
