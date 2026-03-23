@@ -1279,8 +1279,20 @@ fn print_shell_init(config: &Config, shell: &str) {
 export DEN_HOME="{den_home}"
 export DEN_ENV="/"
 
+_den_env="{den_home}/envs/{root_slug}"
+
 # Add den binary and root environment to PATH (before Homebrew).
-export PATH="{den_home}/bin:{den_home}/envs/{root_slug}/bin:$PATH"
+export PATH="{den_home}/bin:$_den_env/bin:$PATH"
+
+# Build environment — headers, libraries, pkg-config.
+export LIBRARY_PATH="$_den_env/lib${{LIBRARY_PATH:+:$LIBRARY_PATH}}"
+export CPATH="$_den_env/include${{CPATH:+:$CPATH}}"
+export PKG_CONFIG_PATH="$_den_env/lib/pkgconfig:$_den_env/share/pkgconfig${{PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}}"
+export CMAKE_PREFIX_PATH="$_den_env${{CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}}"
+export MANPATH="$_den_env/share/man${{MANPATH:+:$MANPATH}}:"
+export INFOPATH="$_den_env/share/info${{INFOPATH:+:$INFOPATH}}"
+
+unset _den_env
 
 # Shell function wrapping `den env use` so it can modify the current shell.
 den() {{
@@ -1306,9 +1318,18 @@ den() {{
                 r#"# den shell integration
 set -gx DEN_HOME "{den_home}"
 set -gx DEN_ENV "/"
+set -l _den_env "{den_home}/envs/{root_slug}"
 
 # Add den binary and root environment to PATH.
-fish_add_path --prepend "{den_home}/bin" "{den_home}/envs/{root_slug}/bin"
+fish_add_path --prepend "{den_home}/bin" "$_den_env/bin"
+
+# Build environment — headers, libraries, pkg-config.
+set -gx LIBRARY_PATH "$_den_env/lib" $LIBRARY_PATH
+set -gx CPATH "$_den_env/include" $CPATH
+set -gx PKG_CONFIG_PATH "$_den_env/lib/pkgconfig" "$_den_env/share/pkgconfig" $PKG_CONFIG_PATH
+set -gx CMAKE_PREFIX_PATH "$_den_env" $CMAKE_PREFIX_PATH
+set -gx MANPATH "$_den_env/share/man" $MANPATH
+set -gx INFOPATH "$_den_env/share/info" $INFOPATH
 
 # Wrapper function for `den env use`.
 function den
@@ -1336,14 +1357,27 @@ end
 
 fn print_env_switch_commands(config: &Config, env_slug: &str) {
     let den_home = &config.den_home;
-    let new_env_bin = den_home.join("envs").join(env_slug).join("bin");
+    let new_env = den_home.join("envs").join(env_slug);
     let env_path = manifest::slug_to_path(env_slug);
+    let dh = den_home.display();
+    let ne = new_env.display();
 
+    // Swap PATH, build env vars, and DEN_ENV in one eval.
     println!(
-        r#"export PATH="$(echo "$PATH" | sed "s|{den_home}/envs/[^:]*bin:||g")"
-export PATH="{new_bin}:$PATH"
+        r#"export PATH="$(echo "$PATH" | sed "s|{dh}/envs/[^:]*bin:||g")"
+export PATH="{ne}/bin:$PATH"
+export LIBRARY_PATH="$(echo "${{LIBRARY_PATH:-}}" | sed "s|{dh}/envs/[^:]*/lib:*||g")"
+export LIBRARY_PATH="{ne}/lib${{LIBRARY_PATH:+:$LIBRARY_PATH}}"
+export CPATH="$(echo "${{CPATH:-}}" | sed "s|{dh}/envs/[^:]*/include:*||g")"
+export CPATH="{ne}/include${{CPATH:+:$CPATH}}"
+export PKG_CONFIG_PATH="$(echo "${{PKG_CONFIG_PATH:-}}" | sed "s|{dh}/envs/[^:]*/lib/pkgconfig:*||g;s|{dh}/envs/[^:]*/share/pkgconfig:*||g")"
+export PKG_CONFIG_PATH="{ne}/lib/pkgconfig:{ne}/share/pkgconfig${{PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}}"
+export CMAKE_PREFIX_PATH="$(echo "${{CMAKE_PREFIX_PATH:-}}" | sed "s|{dh}/envs/[^:]*:*||g")"
+export CMAKE_PREFIX_PATH="{ne}${{CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}}"
+export MANPATH="$(echo "${{MANPATH:-}}" | sed "s|{dh}/envs/[^:]*/share/man:*||g")"
+export MANPATH="{ne}/share/man${{MANPATH:+:$MANPATH}}:"
+export INFOPATH="$(echo "${{INFOPATH:-}}" | sed "s|{dh}/envs/[^:]*/share/info:*||g")"
+export INFOPATH="{ne}/share/info${{INFOPATH:+:$INFOPATH}}"
 export DEN_ENV="{env_path}""#,
-        den_home = den_home.display(),
-        new_bin = new_env_bin.display(),
     );
 }
