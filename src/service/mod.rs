@@ -31,7 +31,7 @@ pub fn list_services(_cellar: &Path, opt_dir: &Path) -> anyhow::Result<Vec<Servi
                 if target.is_absolute() {
                     target
                 } else {
-                    entry.path().parent().unwrap().join(target)
+                    entry.path().parent().unwrap_or(Path::new(".")).join(target)
                 }
             }
             Err(_) => continue,
@@ -80,7 +80,9 @@ pub fn start_service(service: &Service) -> anyhow::Result<()> {
         .join("Library/LaunchAgents");
     std::fs::create_dir_all(&launch_agents)?;
 
-    let dest = launch_agents.join(service.plist_path.file_name().unwrap());
+    let file_name = service.plist_path.file_name()
+        .ok_or_else(|| anyhow::anyhow!("plist path has no filename"))?;
+    let dest = launch_agents.join(file_name);
     std::fs::copy(&service.plist_path, &dest)?;
 
     let status = std::process::Command::new("launchctl")
@@ -101,7 +103,9 @@ pub fn stop_service(service: &Service) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))?
         .join("Library/LaunchAgents");
 
-    let dest = launch_agents.join(service.plist_path.file_name().unwrap());
+    let file_name = service.plist_path.file_name()
+        .ok_or_else(|| anyhow::anyhow!("plist path has no filename"))?;
+    let dest = launch_agents.join(file_name);
 
     if dest.exists() {
         let status = std::process::Command::new("launchctl")

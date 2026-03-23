@@ -288,8 +288,8 @@ async fn tick(client: &Client, config: &Config) -> anyhow::Result<()> {
             }
 
             // Download bottle into cache (but don't pour yet).
-            if let Some(ref bottle_spec) = info.bottle {
-                if let Some(ref stable) = bottle_spec.stable {
+            if let Some(ref bottle_spec) = info.bottle
+                && let Some(ref stable) = bottle_spec.stable {
                     let macos = match config.macos_version.as_ref() {
                         Some(v) => v,
                         None => continue,
@@ -323,7 +323,6 @@ async fn tick(client: &Client, config: &Config) -> anyhow::Result<()> {
                         }
                     }
                 }
-            }
         }
     }
 

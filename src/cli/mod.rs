@@ -7,9 +7,15 @@ use crate::config::Config;
 use crate::api::FormulaIndex;
 use crate::{bottle, cask, daemon, deps, env, formula, keg, link, manifest, platform, service, settings, tab};
 
+const AGENT_GUIDE: &str = include_str!("../../agents-guide.md");
+
 #[derive(Parser)]
 #[command(name = "den", version, about = "A universal development environment manager")]
 pub struct Cli {
+    /// Print help text and agent guide
+    #[arg(long)]
+    help_agent: bool,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -207,6 +213,14 @@ enum EnvCommand {
 
 impl Cli {
     pub async fn run(self) -> anyhow::Result<()> {
+        if self.help_agent {
+            // Print clap help followed by the agent guide.
+            let mut cmd = <Self as clap::CommandFactory>::command();
+            cmd.print_help()?;
+            println!("\n\n{AGENT_GUIDE}");
+            return Ok(());
+        }
+
         let config = Config::detect()?;
 
         match self.command {
@@ -407,14 +421,13 @@ fn run_env_command(config: &Config, command: Option<EnvCommand>) -> anyhow::Resu
             let env_path = normalise_env_path(&path);
 
             // Ensure parent exists (except for root).
-            if let Some(parent) = manifest::parent_path(&env_path) {
-                if !manifest::manifest_exists(&config.den_home, &parent) {
+            if let Some(parent) = manifest::parent_path(&env_path)
+                && !manifest::manifest_exists(&config.den_home, &parent) {
                     anyhow::bail!(
                         "parent environment '{}' does not exist. Create it first.",
                         parent
                     );
                 }
-            }
 
             if manifest::manifest_exists(&config.den_home, &env_path) {
                 anyhow::bail!("environment '{}' already exists", env_path);
@@ -462,7 +475,7 @@ fn run_env_command(config: &Config, command: Option<EnvCommand>) -> anyhow::Resu
                 println!("Resolved packages for '{env_path}':");
                 for (name, version) in &resolved {
                     // Show which level contributed this package.
-                    let source = find_source_env(&config, &env_path, name);
+                    let source = find_source_env(config, &env_path, name);
                     let source_info = if source != env_path {
                         format!(" (from {source})")
                     } else {
@@ -521,11 +534,10 @@ fn find_source_env(config: &Config, env_path: &str, package: &str) -> String {
     let chain = manifest::ancestor_chain(env_path);
     // Walk from leaf to root to find the most specific provider.
     for ancestor in chain.iter().rev() {
-        if let Ok(m) = manifest::read_manifest(&config.den_home, ancestor) {
-            if m.packages.contains_key(package) {
+        if let Ok(m) = manifest::read_manifest(&config.den_home, ancestor)
+            && m.packages.contains_key(package) {
                 return ancestor.clone();
             }
-        }
     }
     env_path.to_string()
 }
@@ -587,12 +599,11 @@ async fn install_formula(
 
     // Show caveats for the main package.
     let main_info = all.iter().find(|f| f.name == name);
-    if let Some(info) = main_info {
-        if let Some(ref caveats) = info.caveats {
+    if let Some(info) = main_info
+        && let Some(ref caveats) = info.caveats {
             println!("==> Caveats");
             println!("{caveats}");
         }
-    }
 
     println!("==> {name} installed to '{active_env}'.");
     Ok(())
@@ -837,7 +848,7 @@ async fn upgrade_packages(
 
         println!("==> Upgrading {} {} -> {}...", name, installed_version, latest);
 
-        let all = deps::resolve_install_order(index, &name)?;
+        let all = deps::resolve_install_order(index, name)?;
         for dep_info in &all {
             let keg_path = config
                 .cellar
@@ -1044,7 +1055,8 @@ fn use_version(config: &Config, name: &str) -> anyhow::Result<()> {
                 )
             })?
     } else {
-        versions.last().unwrap()
+        // Safe: we checked versions.is_empty() above.
+        versions.last().expect("versions is non-empty")
     };
 
     // Update the manifest.
@@ -1157,13 +1169,11 @@ fn show_deps(
     if tree {
         let mut visited = std::collections::HashSet::new();
         print_dep_tree(index, name, 0, &mut visited);
+    } else if info.dependencies.is_empty() {
+        println!("{name} has no dependencies.");
     } else {
-        if info.dependencies.is_empty() {
-            println!("{name} has no dependencies.");
-        } else {
-            for dep in &info.dependencies {
-                println!("{dep}");
-            }
+        for dep in &info.dependencies {
+            println!("{dep}");
         }
     }
     Ok(())
@@ -1215,8 +1225,9 @@ async fn run_daemon_command(config: &Config, command: DaemonCommand) -> anyhow::
                 .map_err(|_| anyhow::anyhow!("daemon is not running"))?;
             let pid: i32 = pid_str.trim().parse()?;
 
-            unsafe {
-                libc::kill(pid, libc::SIGTERM);
+            let result = unsafe { libc::kill(pid, libc::SIGTERM) };
+            if result != 0 {
+                anyhow::bail!("failed to send SIGTERM to PID {pid}");
             }
             println!("Sent SIGTERM to daemon (PID {pid}).");
             Ok(())
@@ -1262,7 +1273,9 @@ async fn run_daemon_command(config: &Config, command: DaemonCommand) -> anyhow::
                 .ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))?
                 .join("Library/LaunchAgents/dev.den.daemon.plist");
 
-            std::fs::create_dir_all(plist_path.parent().unwrap())?;
+            if let Some(parent) = plist_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
             std::fs::write(&plist_path, &plist)?;
 
             let status = std::process::Command::new("launchctl")

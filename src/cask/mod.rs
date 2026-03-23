@@ -34,17 +34,15 @@ impl CaskInfo {
     pub fn app_artifacts(&self) -> Vec<String> {
         let mut apps = Vec::new();
         for artifact in &self.artifacts {
-            if let Some(obj) = artifact.as_object() {
-                if let Some(app_val) = obj.get("app") {
-                    if let Some(arr) = app_val.as_array() {
+            if let Some(obj) = artifact.as_object()
+                && let Some(app_val) = obj.get("app")
+                    && let Some(arr) = app_val.as_array() {
                         for item in arr {
                             if let Some(s) = item.as_str() {
                                 apps.push(s.to_string());
                             }
                         }
                     }
-                }
-            }
         }
         apps
     }
@@ -54,17 +52,15 @@ impl CaskInfo {
     pub fn binary_artifacts(&self) -> Vec<String> {
         let mut bins = Vec::new();
         for artifact in &self.artifacts {
-            if let Some(obj) = artifact.as_object() {
-                if let Some(bin_val) = obj.get("binary") {
-                    if let Some(arr) = bin_val.as_array() {
+            if let Some(obj) = artifact.as_object()
+                && let Some(bin_val) = obj.get("binary")
+                    && let Some(arr) = bin_val.as_array() {
                         for item in arr {
                             if let Some(s) = item.as_str() {
                                 bins.push(s.to_string());
                             }
                         }
                     }
-                }
-            }
         }
         bins
     }
@@ -125,8 +121,8 @@ pub async fn download_cask(
     let bytes = response.bytes().await?.to_vec();
 
     // Verify SHA256 if specified (some casks use "no_check").
-    if let Some(ref expected) = info.sha256 {
-        if expected != "no_check" {
+    if let Some(ref expected) = info.sha256
+        && expected != "no_check" {
             let mut hasher = Sha256::new();
             hasher.update(&bytes);
             let digest = format!("{:x}", hasher.finalize());
@@ -138,7 +134,6 @@ pub async fn download_cask(
                 );
             }
         }
-    }
 
     Ok((bytes, ext))
 }
@@ -248,11 +243,10 @@ pub fn install_from_zip(
 
 fn find_app_in_dir(dir: &Path, app_name: &str) -> Option<PathBuf> {
     for entry in walkdir::WalkDir::new(dir).max_depth(3) {
-        if let Ok(entry) = entry {
-            if entry.file_name().to_string_lossy() == app_name {
+        if let Ok(entry) = entry
+            && entry.file_name().to_string_lossy() == app_name {
                 return Some(entry.into_path());
             }
-        }
     }
     None
 }

@@ -105,7 +105,8 @@ fn set_key(json: &mut serde_json::Value, key: &str, value: &str) -> anyhow::Resu
             .ok_or_else(|| anyhow::anyhow!("unknown setting group: {part}"))?;
     }
 
-    let last = parts.last().unwrap();
+    let last = parts.last()
+        .ok_or_else(|| anyhow::anyhow!("empty setting key"))?;
     let obj = current
         .as_object_mut()
         .ok_or_else(|| anyhow::anyhow!("not an object at {key}"))?;

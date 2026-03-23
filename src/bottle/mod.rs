@@ -110,6 +110,14 @@ pub fn pour_bottle(bottle_data: &[u8], cellar: &Path) -> anyhow::Result<PathBuf>
         let mut entry = entry?;
         let path = entry.path()?.into_owned();
 
+        // Reject paths that could escape the target directory.
+        if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+            anyhow::bail!(
+                "bottle contains path traversal: {}",
+                path.display()
+            );
+        }
+
         // The bottle tarball contains paths like "tree/2.3.1/bin/tree".
         // Extract the first two components as the keg prefix.
         if keg_prefix.is_none() {
