@@ -10,6 +10,7 @@ mod error;
 mod formula;
 mod keg;
 mod link;
+mod manifest;
 mod platform;
 mod tab;
 
