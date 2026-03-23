@@ -327,11 +327,29 @@ Extends to other vendored tools if T23 providers need them.
 
 Anonymous, opt-in usage telemetry to answer questions like:
 
-- How often do users trigger Ruby (source builds, tap parsing)?
+- How often do users trigger Ruby, and *why*?
 - Which formulae/casks are most installed via den?
 - How many environments does a typical user have?
 - How often does the SAT solver hit conflicts?
 - Which search provider is most used?
+
+**Ruby trigger categories** — every Ruby invocation is tagged with
+a reason category (no formula names, no PII):
+
+| Category | Meaning |
+|---|---|
+| `source_build_no_bottle` | No bottle for this platform |
+| `source_build_user_requested` | User passed `--build-from-source` |
+| `source_build_bottle_failed` | Bottle pour failed, fell back |
+| `tap_formula_parse` | Third-party tap not on JSON API |
+| `tap_formula_dynamic` | Core formula with dynamic Ruby metadata |
+| `post_install_hook` | Formula defines `def post_install` |
+| `cask_preflight` | Cask with `preflight` block |
+
+Reported as `{category: count}` pairs — enough to know where to
+invest (e.g. "80% of Ruby triggers are tap parsing → build a
+better Rust parser" vs "80% are post_install → find a way to
+eliminate those hooks").
 
 Data drives decisions: if Ruby is triggered <1% of the time,
 lazy-vendoring is sufficient. If 30% of installs need it, maybe
