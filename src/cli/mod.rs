@@ -260,6 +260,21 @@ impl Cli {
                 Ok(())
             }
             Some(Command::Env { command }) => run_env_command(&config, command),
+            Some(Command::Info { name }) => {
+                let client = reqwest::Client::new();
+                show_info(&client, &config, &name).await
+            }
+            Some(Command::Search { text }) => {
+                let client = reqwest::Client::new();
+                search_packages(&client, &text).await
+            }
+            Some(Command::Deps { name, tree }) => {
+                let client = reqwest::Client::new();
+                show_deps(&client, &name, tree).await
+            }
+            Some(Command::Cleanup { names }) => {
+                cleanup(&config, &names)
+            }
             Some(Command::Autoremove) => {
                 let active = env::active_env_path(&config.den_home);
                 autoremove(&config, &active)
@@ -962,6 +977,153 @@ fn use_version(config: &Config, name: &str) -> anyhow::Result<()> {
     let links = env::materialise(&config.den_home, &config.cellar, &active)?;
     println!("  {links} symlinks");
     println!("==> Now using {} {}.", formula_name, keg.version);
+    Ok(())
+}
+
+async fn show_info(
+    client: &reqwest::Client,
+    config: &Config,
+    name: &str,
+) -> anyhow::Result<()> {
+    let info = api::fetch_formula(client, name).await?;
+    let pkg_version = info.pkg_version();
+
+    println!("{}: stable {}", info.name, pkg_version);
+    if let Some(ref desc) = info.desc {
+        println!("{desc}");
+    }
+
+    // Check if installed.
+    let versions = keg::find_versions(&config.cellar, &info.name)?;
+    if versions.is_empty() {
+        println!("Not installed");
+    } else {
+        let ver_list: Vec<_> = versions.iter().map(|k| k.version.as_str()).collect();
+        println!("Installed: {}", ver_list.join(", "));
+    }
+
+    if !info.dependencies.is_empty() {
+        println!("Dependencies: {}", info.dependencies.join(", "));
+    }
+
+    if info.keg_only {
+        println!("Keg-only");
+    }
+
+    if let Some(ref caveats) = info.caveats {
+        println!("Caveats: {caveats}");
+    }
+
+    Ok(())
+}
+
+async fn search_packages(
+    client: &reqwest::Client,
+    text: &str,
+) -> anyhow::Result<()> {
+    // Fetch the full formula index and search by name/description.
+    let url = "https://formulae.brew.sh/api/formula.json";
+    let response = client
+        .get(url)
+        .header("User-Agent", "den/0.1.0")
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        anyhow::bail!("failed to fetch formula index (HTTP {})", response.status());
+    }
+
+    #[derive(serde::Deserialize)]
+    struct SearchEntry {
+        name: String,
+        #[serde(default)]
+        desc: Option<String>,
+    }
+
+    let entries: Vec<SearchEntry> = response.json().await?;
+    let query = text.to_lowercase();
+
+    let matches: Vec<_> = entries
+        .iter()
+        .filter(|e| {
+            e.name.to_lowercase().contains(&query)
+                || e.desc
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_lowercase()
+                    .contains(&query)
+        })
+        .collect();
+
+    if matches.is_empty() {
+        println!("No formulae found for '{text}'.");
+    } else {
+        for entry in &matches {
+            let desc = entry.desc.as_deref().unwrap_or("");
+            println!("{}: {desc}", entry.name);
+        }
+    }
+
+    Ok(())
+}
+
+async fn show_deps(
+    client: &reqwest::Client,
+    name: &str,
+    tree: bool,
+) -> anyhow::Result<()> {
+    if tree {
+        let mut visited = std::collections::HashSet::new();
+        print_dep_tree(client, name, 0, &mut visited).await?;
+    } else {
+        let info = api::fetch_formula(client, name).await?;
+        if info.dependencies.is_empty() {
+            println!("{name} has no dependencies.");
+        } else {
+            for dep in &info.dependencies {
+                println!("{dep}");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn print_dep_tree<'a>(
+    client: &'a reqwest::Client,
+    name: &'a str,
+    depth: usize,
+    visited: &'a mut std::collections::HashSet<String>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + 'a>> {
+    Box::pin(async move {
+        let indent = "  ".repeat(depth);
+        let circular = visited.contains(name);
+        println!("{indent}{name}{}", if circular { " (circular)" } else { "" });
+
+        if circular {
+            return Ok(());
+        }
+        visited.insert(name.to_string());
+
+        if let Ok(info) = api::fetch_formula(client, name).await {
+            for dep in &info.dependencies {
+                print_dep_tree(client, dep, depth + 1, visited).await?;
+            }
+        }
+
+        Ok(())
+    })
+}
+
+fn cleanup(config: &Config, _names: &[String]) -> anyhow::Result<()> {
+    // Remove cached bottles.
+    let cache_dir = config.den_home.join("cache").join("bottles");
+    if cache_dir.is_dir() {
+        let count = std::fs::read_dir(&cache_dir)?.count();
+        std::fs::remove_dir_all(&cache_dir)?;
+        println!("Removed {count} cached bottles.");
+    } else {
+        println!("No cached bottles to remove.");
+    }
     Ok(())
 }
 
