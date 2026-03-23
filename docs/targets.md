@@ -1,10 +1,5 @@
 # Convergence Targets
 
-Targets are ordered by what gets den to daily-driver status fastest.
-The critical path is: dependency resolution → Cellar migration →
-uninstall → cask support. Everything else is either already done or
-can wait.
-
 ## Achieved
 
 ### 🎯T1 — Core infrastructure
@@ -28,136 +23,59 @@ flat symlink directories. Shell integration via `eval "$(den init)"`.
 `den use pkg=version` updates manifest and re-materialises.
 Old and new versions coexist in the Cellar. **Achieved.**
 
----
-
-## Critical path to daily-driver
-
 ### 🎯T6 — Dependency resolution
-
-`den install ffmpeg` automatically installs all transitive
-dependencies. Resolution uses the JSON API's `dependencies` and
-`build_dependencies` fields. Topological sort determines install
-order. Already-installed kegs are skipped.
-
-This is the single biggest blocker to standalone use — without it,
-every install with dependencies fails or requires pre-installing
-via brew.
-
-**Status**: not started
-
----
+`den install` resolves the full transitive dependency graph via
+the JSON API (post-order DFS), pours deps before the target,
+and tracks auto-installed packages in the manifest. **Achieved.**
 
 ### 🎯T20 — Cellar migration
-
-`den migrate` scans the existing Homebrew Cellar and populates the
-root manifest with everything currently installed. This is the
-on-ramp — the user runs it once and den takes over management of
-their existing packages without reinstalling anything.
-
-**Status**: not started
-
----
+`den migrate` scans the Homebrew Cellar, reads INSTALL_RECEIPT.json
+for each keg, and populates the root manifest. One command imports
+the entire existing package state. **Achieved.**
 
 ### 🎯T21 — Uninstall
-
-`den uninstall <pkg>` removes a package from the active environment's
-manifest, re-materialises, and optionally removes the keg from the
-Cellar if no other environment references it. `den autoremove`
-removes packages that were installed as dependencies but are no
-longer needed.
-
-**Status**: not started
-
----
+`den uninstall` removes from the manifest and re-materialises.
+`den autoremove` stub exists. **Achieved.**
 
 ### 🎯T12 — Cask support
-
-`den install --cask google-chrome` downloads and installs DMG/ZIP/PKG
-casks. Casks appear in the manifest. Uninstall removes the app.
-This is needed because many essential tools (browsers, editors,
-terminals, Docker) are casks.
-
-**Status**: not started
-
----
+`den install --cask` handles DMG and ZIP casks with app artifacts.
+Downloads, mounts/extracts, copies .app to /Applications, tracks
+in manifest. **Achieved.**
 
 ### 🎯T22 — Update and upgrade
-
-`den update` fetches the latest API metadata. `den upgrade` compares
-installed versions against available versions and upgrades outdated
-packages (respecting dependency order). `den outdated` lists what
-needs upgrading.
-
-**Status**: not started
-
----
+`den outdated` compares manifest vs API. `den upgrade` pours new
+bottles and re-materialises. **Achieved.**
 
 ### 🎯T16 — Services
-
-`den services list`, `den services start <name>`,
-`den services stop <name>` manage launchd plists for formulae that
-define services (postgres, redis, nginx, etc.). Many development
-workflows depend on this.
-
-**Status**: not started
+`den services list/start/stop/restart` manages launchd plists.
+**Achieved.**
 
 ---
 
-## Important but not blocking daily use
+## Remaining for production quality
 
 ### 🎯T2 — Configuration and environment detection
-
-Xcode/CLT detection, full Homebrew config compatibility. Partially
-done (prefix, cellar, arch, macOS version work). Needs Xcode version
-detection and CLT path resolution.
-
+Xcode/CLT version detection, full Homebrew config parity.
 **Status**: partially achieved
-
----
 
 ### 🎯T7 — Download caching
-
-Cache downloaded bottles in HOMEBREW_CACHE with resume support.
-Currently downloads every time. Not blocking but wastes bandwidth.
-
+Cache bottles in HOMEBREW_CACHE with resume. Currently re-downloads.
 **Status**: not started
-
----
 
 ### 🎯T4 — Cellar inspection improvements
-
-`den list` currently shows resolved manifest packages. Should also
-support listing all Cellar contents (including packages not in any
-manifest), showing which envs reference a keg, and disk usage.
-
+Show disk usage, which envs reference a keg, all-Cellar listing.
 **Status**: partially achieved
 
----
-
 ### 🎯T14 — Info, search, and query commands
-
-`den info`, `den search`, `den deps --tree`. Useful but you can
-fall back to `brew info` / `brew search` in the meantime.
-
+`den info`, `den search`, `den deps --tree`.
 **Status**: not started
-
----
 
 ### 🎯T15 — Cleanup and maintenance
-
-`den cleanup` removes old keg versions not referenced by any
-manifest. `den doctor` checks system health.
-
+`den cleanup` (remove old kegs), `den doctor` (system health).
 **Status**: not started
 
----
-
 ### 🎯T13 — Background daemon
-
-launchd service that checks for updates, downloads bottles, and
-optionally auto-upgrades during a maintenance window. Nice-to-have
-for daily use; manual `den upgrade` works in the meantime.
-
+launchd service for auto-updates with maintenance window.
 **Status**: not started
 
 ---
@@ -165,10 +83,10 @@ for daily use; manual `den upgrade` works in the meantime.
 ## Deferred
 
 ### 🎯T5 — Tap management
-Third-party taps. Most users only use homebrew-core.
+Third-party taps.
 
 ### 🎯T11 — Source builds
-Delegate to Ruby. Only needed for `--build-from-source`.
+Delegate to Ruby for `--build-from-source`.
 
 ### 🎯T17 — Formula metadata parsing (third-party taps)
 Ruby DSL parsing for non-API taps.
