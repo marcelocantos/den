@@ -211,10 +211,27 @@ impl Cli {
 
         match self.command {
             None => {
-                println!("den {}", env!("CARGO_PKG_VERSION"));
-                println!("A universal development environment manager");
-                println!();
-                println!("Run `den --help` for usage.");
+                // First run: if no root manifest exists and Homebrew is
+                // installed, offer to migrate.
+                if !manifest::manifest_exists(&config.den_home, "/")
+                    && config.cellar.is_dir()
+                {
+                    println!("den {}", env!("CARGO_PKG_VERSION"));
+                    println!("A universal development environment manager");
+                    println!();
+                    println!(
+                        "Homebrew detected at {}.",
+                        config.prefix.display()
+                    );
+                    println!("Run `den migrate` to import your packages.");
+                    println!();
+                    println!("Or run `den --help` for usage.");
+                } else {
+                    println!("den {}", env!("CARGO_PKG_VERSION"));
+                    println!("A universal development environment manager");
+                    println!();
+                    println!("Run `den --help` for usage.");
+                }
                 Ok(())
             }
             Some(Command::Config) => {
