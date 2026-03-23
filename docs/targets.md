@@ -1,194 +1,180 @@
 # Convergence Targets
 
-## 🎯T1 — Core infrastructure compiles and runs
+Targets are ordered by what gets den to daily-driver status fastest.
+The critical path is: dependency resolution → Cellar migration →
+uninstall → cask support. Everything else is either already done or
+can wait.
 
-den builds, runs `den --version`, and has the module skeleton
-in place for all major subsystems.
+## Achieved
 
-**Status**: achieved
+### 🎯T1 — Core infrastructure
+den builds, runs, has module skeleton. **Achieved.**
+
+### 🎯T3 — API client
+Fetches formula metadata from formulae.brew.sh JSON API. **Achieved.**
+
+### 🎯T8 — Bottle pouring
+Downloads and pours Homebrew bottles with SHA256 verification.
+Multi-version coinstallation works. **Achieved.**
+
+### 🎯T9 — Environment management
+Manifest-based environment hierarchy with path naming (/ is root,
+/ml, /work/legacy). Inheritance at the manifest level — child envs
+inherit packages and can override versions. Materialisation produces
+flat symlink directories. Shell integration via `eval "$(den init)"`.
+**Achieved.**
+
+### 🎯T10 — Version switching
+`den use pkg=version` updates manifest and re-materialises.
+Old and new versions coexist in the Cellar. **Achieved.**
 
 ---
 
-## 🎯T2 — Configuration and environment detection
+## Critical path to daily-driver
 
-den detects HOMEBREW_PREFIX, HOMEBREW_CELLAR, HOMEBREW_CACHE,
-platform (macOS/Linux), architecture (arm64/x86_64), macOS version,
-and Xcode/CLT availability. Reads existing Homebrew configuration.
+### 🎯T6 — Dependency resolution
+
+`den install ffmpeg` automatically installs all transitive
+dependencies. Resolution uses the JSON API's `dependencies` and
+`build_dependencies` fields. Topological sort determines install
+order. Already-installed kegs are skipped.
+
+This is the single biggest blocker to standalone use — without it,
+every install with dependencies fails or requires pre-installing
+via brew.
 
 **Status**: not started
 
 ---
 
-## 🎯T3 — API client
+### 🎯T20 — Cellar migration
 
-den can fetch and cache formula/cask metadata from
-formulae.brew.sh JSON API. This is the primary metadata source
-(no Ruby parsing needed for core formulae).
-
-**Status**: not started
-
----
-
-## 🎯T4 — Cellar and keg management
-
-den can inspect the Cellar, enumerate racks/kegs, read
-INSTALL_RECEIPT.json tabs, and report installed packages with
-versions. `den list` works. Multiple versions per package coexist.
+`den migrate` scans the existing Homebrew Cellar and populates the
+root manifest with everything currently installed. This is the
+on-ramp — the user runs it once and den takes over management of
+their existing packages without reinstalling anything.
 
 **Status**: not started
 
 ---
 
-## 🎯T5 — Tap management
+### 🎯T21 — Uninstall
 
-den can list, add, remove, and update taps (git repos).
-`den tap`, `den untap` work.
-
-**Status**: not started
-
----
-
-## 🎯T6 — Dependency resolution
-
-den resolves transitive dependencies, performs topological sort,
-detects cycles, and filters by platform/build-type. Produces a
-correct install plan that respects multi-version coinstallation.
+`den uninstall <pkg>` removes a package from the active environment's
+manifest, re-materialises, and optionally removes the keg from the
+Cellar if no other environment references it. `den autoremove`
+removes packages that were installed as dependencies but are no
+longer needed.
 
 **Status**: not started
 
 ---
 
-## 🎯T7 — Download and caching
+### 🎯T12 — Cask support
 
-den downloads source tarballs and bottles with SHA256 verification,
-resume support, and local caching.
-
-**Status**: not started
-
----
-
-## 🎯T8 — Bottle pouring
-
-den can pour (install from pre-built bottle) any Homebrew bottle,
-including Mach-O relocation via install_name_tool. `den install
-<formula>` works for bottled formulae. Installing a new version
-preserves existing versions.
+`den install --cask google-chrome` downloads and installs DMG/ZIP/PKG
+casks. Casks appear in the manifest. Uninstall removes the app.
+This is needed because many essential tools (browsers, editors,
+terminals, Docker) are casks.
 
 **Status**: not started
 
 ---
 
-## 🎯T9 — Environment management
+### 🎯T22 — Update and upgrade
 
-den supports named environments — directories of symlinks into the
-Cellar. `den env create`, `den env list`, `den env use`,
-`den env remove`, `den env freeze` all work. Environments compose
-via PATH precedence.
-
-**Status**: not started
-
----
-
-## 🎯T10 — Version switching
-
-`den use <package>@<version>` atomically switches which version is
-linked in the active environment. No unlink-then-link dance — the
-swap is atomic. `den status` shows active versions.
+`den update` fetches the latest API metadata. `den upgrade` compares
+installed versions against available versions and upgrades outdated
+packages (respecting dependency order). `den outdated` lists what
+needs upgrading.
 
 **Status**: not started
 
 ---
 
-## 🎯T11 — Source builds
+### 🎯T16 — Services
 
-den can build formulae from source by delegating to Ruby for the
-`install` block. Build environment (compiler flags, paths) is
-correctly configured.
-
-**Status**: not started
-
----
-
-## 🎯T12 — Cask support
-
-den can install, uninstall, and manage casks (DMG/ZIP/PKG
-artifacts, app bundles, binaries, fonts). `den install --cask`
-works.
+`den services list`, `den services start <name>`,
+`den services stop <name>` manage launchd plists for formulae that
+define services (postgres, redis, nginx, etc.). Many development
+workflows depend on this.
 
 **Status**: not started
 
 ---
 
-## 🎯T13 — Background daemon
+## Important but not blocking daily use
 
-A background service (launchd on macOS) watches for available
-upgrades, downloads bottles, and stages new versions in the Cellar.
-By default, new versions are staged but the active environment is
-not modified until the user acts. With `auto-upgrade` enabled
-(`den set auto-upgrade true`), the daemon also switches the active
-environment to the new version automatically.
+### 🎯T2 — Configuration and environment detection
 
-Auto-upgrade respects a maintenance window (`den set upgrade-window
-3:00-5:00`) to avoid changing packages while the user is working.
-If no window is set, auto-upgrades apply when the system is idle
-(screen locked or no terminal sessions active). `den status` shows
-what's installed, what's pending, and the upgrade schedule.
+Xcode/CLT detection, full Homebrew config compatibility. Partially
+done (prefix, cellar, arch, macOS version work). Needs Xcode version
+detection and CLT path resolution.
+
+**Status**: partially achieved
+
+---
+
+### 🎯T7 — Download caching
+
+Cache downloaded bottles in HOMEBREW_CACHE with resume support.
+Currently downloads every time. Not blocking but wastes bandwidth.
 
 **Status**: not started
 
 ---
 
-## 🎯T14 — Info, search, and query commands
+### 🎯T4 — Cellar inspection improvements
 
-`den info`, `den search`, `den deps`, `den uses`,
-`den leaves`, `den outdated` all work correctly.
+`den list` currently shows resolved manifest packages. Should also
+support listing all Cellar contents (including packages not in any
+manifest), showing which envs reference a keg, and disk usage.
+
+**Status**: partially achieved
+
+---
+
+### 🎯T14 — Info, search, and query commands
+
+`den info`, `den search`, `den deps --tree`. Useful but you can
+fall back to `brew info` / `brew search` in the meantime.
 
 **Status**: not started
 
 ---
 
-## 🎯T15 — Cleanup and maintenance
+### 🎯T15 — Cleanup and maintenance
 
-`den cleanup`, `den autoremove`, `den doctor` work.
-
-**Status**: not started
-
----
-
-## 🎯T16 — Services
-
-`den services` can list, start, stop, and restart launchd/systemd
-services defined by formulae.
+`den cleanup` removes old keg versions not referenced by any
+manifest. `den doctor` checks system health.
 
 **Status**: not started
 
 ---
 
-## 🎯T17 — Formula metadata parsing (third-party taps)
+### 🎯T13 — Background daemon
 
-den can parse Homebrew Ruby formula files to extract metadata for
-third-party taps not covered by the JSON API. Falls back to Ruby
-for the ~5% of formulae with dynamic metadata.
-
-**Status**: not started
-
----
-
-## 🎯T18 — Testing oracle
-
-A test harness that captures Homebrew's observable state for any
-operation (metadata, file tree, symlinks, receipts) and diffs
-against den's output. Runs across the full formula corpus for
-metadata equivalence, and against a curated set for installation
-equivalence.
+launchd service that checks for updates, downloads bottles, and
+optionally auto-upgrades during a maintenance window. Nice-to-have
+for daily use; manual `den upgrade` works in the meantime.
 
 **Status**: not started
 
 ---
 
-## 🎯T19 — Performance
+## Deferred
 
-den is measurably faster than Homebrew for common operations
-(install, list, search, info, update, upgrade, cleanup).
+### 🎯T5 — Tap management
+Third-party taps. Most users only use homebrew-core.
 
-**Status**: not started
+### 🎯T11 — Source builds
+Delegate to Ruby. Only needed for `--build-from-source`.
+
+### 🎯T17 — Formula metadata parsing (third-party taps)
+Ruby DSL parsing for non-API taps.
+
+### 🎯T18 — Testing oracle
+Automated Homebrew-equivalence testing.
+
+### 🎯T19 — Performance
+Benchmarking against Homebrew.
