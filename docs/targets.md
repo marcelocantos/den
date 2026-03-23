@@ -80,7 +80,34 @@ launchd service for auto-updates with maintenance window.
 
 ---
 
-## Deferred
+## Future
+
+### 🎯T23 — Multi-provider package management
+
+den becomes a universal frontend for multiple package managers.
+A `PackageProvider` trait abstracts install/resolve/bin-dir per
+ecosystem. Providers:
+
+- **brew** (current) — Homebrew bottles and casks
+- **go** — `go install` binaries (GOBIN → den env)
+- **cargo** — `cargo install` binaries
+- **pip/uv** — Python packages installed into isolated virtualenvs,
+  binaries linked into the den environment
+- **npm** — global npm packages with binaries linked in
+
+Each provider manages its own storage (GOPATH, cargo target, venvs)
+but binaries converge into the active den environment. The manifest
+declares provider per-package. Auto-detection chooses the right
+provider when the package name is unambiguous (e.g. `den install
+ripgrep` → cargo, `den install httpie` → pip).
+
+`den list` shows everything regardless of provider. `den use`
+switches versions regardless of source. One tool, one environment,
+all ecosystems.
+
+**Status**: not started
+
+---
 
 ### 🎯T5 — Tap management
 Third-party taps.
