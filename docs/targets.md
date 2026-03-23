@@ -356,9 +356,23 @@ lazy-vendoring is sufficient. If 30% of installs need it, maybe
 we should pre-vendor or find ways to eliminate the dependency.
 
 Privacy-first: opt-in only (`den set telemetry on`), no PII, no
-package names (just category counts), aggregated before upload,
-local preview (`den telemetry show`). Consider differential
-privacy for small user populations.
+package names (just category counts), aggregated before upload.
+Consider differential privacy for small user populations.
+
+**Extreme transparency:** Every telemetry upload prints the exact
+JSONL payload to stdout before sending. No hidden fields, no
+post-processing, no trust required. What you see is what gets sent.
+
+```
+$ den telemetry send
+Sending telemetry to https://telemetry.den.dev/v1/report:
+{"v":1,"ts":"2026-03-23T12:00:00Z","period":"7d","ruby_triggers":{"tap_formula_parse":4,"post_install_hook":1},"installs":{"bottle":12,"cask":2},"envs":3,"search":{"keyword":8,"embedding":3},"solver_conflicts":0}
+Sent. (204 No Content)
+```
+
+`den telemetry show` displays the pending payload without sending.
+`den telemetry history` shows what was previously sent (kept in
+`~/.den/telemetry/sent/` as timestamped JSONL).
 
 **Status**: not started
 
