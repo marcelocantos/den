@@ -4,7 +4,7 @@
 use clap::{Parser, Subcommand};
 
 use crate::config::Config;
-use crate::{api, bottle, env, formula, keg, link, manifest, platform, tab};
+use crate::{api, bottle, cask, deps, env, formula, keg, link, manifest, platform, service, tab};
 
 #[derive(Parser)]
 #[command(name = "den", version, about = "A universal development environment manager")]
@@ -122,6 +122,36 @@ enum Command {
     },
     /// Show current settings
     Settings,
+    /// Import existing Homebrew Cellar into den
+    Migrate,
+    /// List packages with available upgrades
+    Outdated,
+    /// Manage background services
+    Services {
+        #[command(subcommand)]
+        command: Option<ServiceCommand>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ServiceCommand {
+    /// List all services
+    List,
+    /// Start a service
+    Start {
+        /// Service/formula name
+        name: String,
+    },
+    /// Stop a service
+    Stop {
+        /// Service/formula name
+        name: String,
+    },
+    /// Restart a service
+    Restart {
+        /// Service/formula name
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -174,13 +204,10 @@ impl Cli {
             Some(Command::Install {
                 names,
                 build_from_source,
-                cask,
+                cask: is_cask,
             }) => {
                 if build_from_source {
                     anyhow::bail!("source builds not yet supported");
-                }
-                if cask {
-                    anyhow::bail!("cask installs not yet supported");
                 }
                 if names.is_empty() {
                     anyhow::bail!("no formula specified");
@@ -190,9 +217,41 @@ impl Cli {
                 let active = env::active_env_path(&config.den_home);
 
                 for name in &names {
-                    install_formula(&client, &config, &active, name).await?;
+                    if is_cask {
+                        install_cask_cmd(&client, &config, &active, name).await?;
+                    } else {
+                        install_formula(&client, &config, &active, name).await?;
+                    }
                 }
                 Ok(())
+            }
+            Some(Command::Uninstall { names }) => {
+                if names.is_empty() {
+                    anyhow::bail!("no formula specified");
+                }
+                let active = env::active_env_path(&config.den_home);
+                for name in &names {
+                    uninstall_package(&config, &active, name)?;
+                }
+                Ok(())
+            }
+            Some(Command::Upgrade { names }) => {
+                let client = reqwest::Client::new();
+                let active = env::active_env_path(&config.den_home);
+                upgrade_packages(&client, &config, &active, &names).await
+            }
+            Some(Command::Update) => {
+                println!("den uses the Homebrew API directly — no local state to update.");
+                println!("Packages are always fetched from the latest API data.");
+                Ok(())
+            }
+            Some(Command::Outdated) => {
+                let client = reqwest::Client::new();
+                let active = env::active_env_path(&config.den_home);
+                show_outdated(&client, &config, &active).await
+            }
+            Some(Command::Migrate) => {
+                migrate_cellar(&config)
             }
             Some(Command::List { names }) => list_packages(&config, &names),
             Some(Command::Use { name }) => use_version(&config, &name),
@@ -201,6 +260,13 @@ impl Cli {
                 Ok(())
             }
             Some(Command::Env { command }) => run_env_command(&config, command),
+            Some(Command::Autoremove) => {
+                let active = env::active_env_path(&config.den_home);
+                autoremove(&config, &active)
+            }
+            Some(Command::Services { command }) => {
+                run_services_command(&config, command)
+            }
             Some(_) => {
                 anyhow::bail!("command not yet implemented")
             }
@@ -370,71 +436,451 @@ async fn install_formula(
     active_env: &str,
     name: &str,
 ) -> anyhow::Result<()> {
-    println!("==> Fetching {name}...");
-    let info = api::fetch_formula(client, name).await?;
+    // Resolve full dependency tree.
+    println!("==> Resolving dependencies for {name}...");
+    let all = deps::resolve_install_order(client, name, &config.cellar).await?;
+    let missing = deps::filter_missing(&all, &config.cellar);
 
-    let pkg_version = info.pkg_version();
-    let keg_path = config.cellar.join(&info.name).join(&pkg_version);
-
-    // Download and pour if not in Cellar.
-    if !keg_path.is_dir() {
-        let macos = config
-            .macos_version
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("cannot determine macOS version"))?;
-
-        let available_tags: Vec<String> = info.bottle.stable.files.keys().cloned().collect();
-        let tag = platform::best_bottle_tag(config.arch, macos, &available_tags)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "no bottle available for {} on {} {}",
-                    info.name,
-                    config.arch,
-                    macos
-                )
-            })?;
-
-        let bottle_file = &info.bottle.stable.files[&tag];
-        let ghcr_path = formula::ghcr_path(&info.name);
-
-        println!(
-            "==> Downloading {} {} ({})...",
-            info.name, pkg_version, tag
-        );
-        let bottle_data =
-            bottle::download_bottle(client, bottle_file, &ghcr_path).await?;
-        println!("  {} bytes, SHA256 verified", bottle_data.len());
-
-        println!("==> Pouring {} {}...", info.name, pkg_version);
-        let poured_keg = bottle::pour_bottle(&bottle_data, &config.cellar)?;
-        println!("  Poured to {}", poured_keg.display());
-
-        tab::write_tab(&poured_keg, &config.arch.to_string())?;
-    } else {
-        println!("{} {} already in Cellar.", info.name, pkg_version);
+    if missing.len() > 1 {
+        let dep_names: Vec<_> = missing
+            .iter()
+            .filter(|f| f.name != name)
+            .map(|f| f.name.as_str())
+            .collect();
+        if !dep_names.is_empty() {
+            println!(
+                "  {} dependencies to install: {}",
+                dep_names.len(),
+                dep_names.join(", ")
+            );
+        }
     }
 
-    // Add to the active environment's manifest.
+    // Pour all missing packages (deps first, then the requested one).
+    for info in &all {
+        let pkg_version = info.pkg_version();
+        let keg_path = config.cellar.join(&info.name).join(&pkg_version);
+
+        if keg_path.is_dir() {
+            continue;
+        }
+
+        pour_bottle(client, config, info).await?;
+    }
+
+    // Update manifest: requested package is explicit, deps are auto.
     let mut m = manifest::read_manifest(&config.den_home, active_env)?;
-    m.packages
-        .insert(info.name.clone(), pkg_version.clone());
+    for info in &all {
+        let pkg_version = info.pkg_version();
+        m.packages.insert(info.name.clone(), pkg_version);
+        if info.name != name {
+            m.auto.insert(info.name.clone());
+        }
+    }
     manifest::write_manifest(&config.den_home, active_env, &m)?;
 
-    // Re-materialise the environment.
+    // Re-materialise.
     println!("==> Materialising environment '{active_env}'...");
     let links = env::materialise(&config.den_home, &config.cellar, active_env)?;
     println!("  {links} symlinks");
+
+    // Show caveats for the main package.
+    let main_info = all.iter().find(|f| f.name == name);
+    if let Some(info) = main_info {
+        if let Some(ref caveats) = info.caveats {
+            println!("==> Caveats");
+            println!("{caveats}");
+        }
+    }
+
+    println!("==> {name} installed to '{active_env}'.");
+    Ok(())
+}
+
+async fn pour_bottle(
+    client: &reqwest::Client,
+    config: &Config,
+    info: &formula::FormulaInfo,
+) -> anyhow::Result<()> {
+    let pkg_version = info.pkg_version();
+    let macos = config
+        .macos_version
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("cannot determine macOS version"))?;
+
+    let available_tags: Vec<String> = info.bottle.stable.files.keys().cloned().collect();
+    let tag = platform::best_bottle_tag(config.arch, macos, &available_tags)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no bottle available for {} on {} {}",
+                info.name,
+                config.arch,
+                macos
+            )
+        })?;
+
+    let bottle_file = &info.bottle.stable.files[&tag];
+    let ghcr_path = formula::ghcr_path(&info.name);
+
+    println!("==> Downloading {} {} ({})...", info.name, pkg_version, tag);
+    let bottle_data = bottle::download_bottle(client, bottle_file, &ghcr_path).await?;
+    println!("  {} bytes, SHA256 verified", bottle_data.len());
+
+    println!("==> Pouring {} {}...", info.name, pkg_version);
+    let poured_keg = bottle::pour_bottle(&bottle_data, &config.cellar)?;
+    tab::write_tab(&poured_keg, &config.arch.to_string())?;
+    Ok(())
+}
+
+fn uninstall_package(
+    config: &Config,
+    active_env: &str,
+    name: &str,
+) -> anyhow::Result<()> {
+    let mut m = manifest::read_manifest(&config.den_home, active_env)?;
+
+    if !m.packages.contains_key(name) {
+        anyhow::bail!("{name} is not in environment '{active_env}'");
+    }
+
+    m.packages.remove(name);
+    m.auto.remove(name);
+    manifest::write_manifest(&config.den_home, active_env, &m)?;
+
+    // Re-materialise.
+    println!("==> Removing {name} from '{active_env}'...");
+    let links = env::materialise(&config.den_home, &config.cellar, active_env)?;
+    println!("  {links} symlinks remain");
+    println!("==> {name} removed from '{active_env}'.");
+    println!("  Keg still in Cellar. Run `den autoremove` to clean up orphaned deps.");
+    Ok(())
+}
+
+fn autoremove(config: &Config, active_env: &str) -> anyhow::Result<()> {
+    let mut m = manifest::read_manifest(&config.den_home, active_env)?;
+
+    // Find auto-installed packages that are no longer needed as deps
+    // of any explicit package.
+    let explicit: Vec<String> = m
+        .packages
+        .keys()
+        .filter(|k| !m.auto.contains(k.as_str()))
+        .cloned()
+        .collect();
+
+    // For now, simple approach: auto packages not in explicit stay.
+    // A proper implementation would check the dep graph.
+    // TODO: traverse dep graph to find truly orphaned auto packages.
+
+    let orphans: Vec<String> = m
+        .auto
+        .iter()
+        .filter(|name| !explicit.contains(name))
+        .cloned()
+        .collect();
+
+    if orphans.is_empty() {
+        println!("No orphaned dependencies to remove.");
+        return Ok(());
+    }
+
+    let mut removed = 0;
+    for name in &orphans {
+        // Check if any explicit package depends on this.
+        // For now, keep all auto packages (conservative).
+        // Full dep-graph check is a future improvement.
+        let _ = name;
+    }
+
+    if removed == 0 {
+        println!("No orphaned dependencies to remove (dep-graph check pending).");
+    }
+
+    Ok(())
+}
+
+fn migrate_cellar(config: &Config) -> anyhow::Result<()> {
+    println!("==> Scanning Cellar at {}...", config.cellar.display());
+
+    let kegs = keg::list_installed(&config.cellar)?;
+    if kegs.is_empty() {
+        println!("No packages found in Cellar.");
+        return Ok(());
+    }
+
+    // Ensure root manifest exists.
+    let mut m = manifest::read_manifest(&config.den_home, "/")?;
+
+    let mut added = 0u32;
+    let mut skipped = 0u32;
+
+    // For each formula, pick the latest version and check the tab.
+    let mut seen = std::collections::HashSet::new();
+    for k in kegs.iter().rev() {
+        if seen.contains(&k.name) {
+            continue;
+        }
+        seen.insert(k.name.clone());
+
+        // Check if installed on request (from tab).
+        let on_request = tab::read_tab(&k.path)
+            .map(|t| t.installed_on_request)
+            .unwrap_or(true); // Default to explicit if no tab.
+
+        if m.packages.contains_key(&k.name) {
+            skipped += 1;
+            continue;
+        }
+
+        m.packages.insert(k.name.clone(), k.version.clone());
+        if !on_request {
+            m.auto.insert(k.name.clone());
+        }
+        added += 1;
+    }
+
+    manifest::write_manifest(&config.den_home, "/", &m)?;
+
+    println!(
+        "  {} packages added, {} already tracked",
+        added, skipped
+    );
+
+    // Materialise.
+    println!("==> Materialising root environment...");
+    let links = env::materialise(&config.den_home, &config.cellar, "/")?;
+    println!("  {links} symlinks");
+    println!("==> Migration complete. Run `eval \"$(den init)\"` to activate.");
+
+    Ok(())
+}
+
+async fn show_outdated(
+    client: &reqwest::Client,
+    config: &Config,
+    active_env: &str,
+) -> anyhow::Result<()> {
+    let resolved = manifest::resolve(&config.den_home, active_env)?;
+    if resolved.is_empty() {
+        println!("No packages to check.");
+        return Ok(());
+    }
+
+    println!("==> Checking for updates...");
+    let mut outdated = Vec::new();
+
+    for (name, installed_version) in &resolved {
+        match api::fetch_formula(client, name).await {
+            Ok(info) => {
+                let latest = info.pkg_version();
+                if latest != *installed_version {
+                    outdated.push((name.clone(), installed_version.clone(), latest));
+                }
+            }
+            Err(_) => {
+                // Formula might not exist in API (tap-only, etc.)
+            }
+        }
+    }
+
+    if outdated.is_empty() {
+        println!("All packages are up to date.");
+    } else {
+        println!("{} packages outdated:", outdated.len());
+        for (name, installed, latest) in &outdated {
+            println!("  {name} {installed} -> {latest}");
+        }
+    }
+
+    Ok(())
+}
+
+async fn upgrade_packages(
+    client: &reqwest::Client,
+    config: &Config,
+    active_env: &str,
+    names: &[String],
+) -> anyhow::Result<()> {
+    let resolved = manifest::resolve(&config.den_home, active_env)?;
+
+    let to_check: Vec<_> = if names.is_empty() {
+        resolved.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+    } else {
+        resolved
+            .iter()
+            .filter(|(k, _)| names.iter().any(|n| n == k.as_str()))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    };
+
+    if to_check.is_empty() {
+        println!("No packages to upgrade.");
+        return Ok(());
+    }
+
+    println!("==> Checking for updates...");
+    let mut upgraded = 0u32;
+
+    for (name, installed_version) in &to_check {
+        let info = match api::fetch_formula(client, &name).await {
+            Ok(info) => info,
+            Err(_) => continue,
+        };
+
+        let latest = info.pkg_version();
+        if latest == *installed_version {
+            continue;
+        }
+
+        println!("==> Upgrading {} {} -> {}...", name, installed_version, latest);
+
+        // Pour the new version (and any new deps).
+        let all = deps::resolve_install_order(client, &name, &config.cellar).await?;
+        for dep_info in &all {
+            let keg_path = config
+                .cellar
+                .join(&dep_info.name)
+                .join(dep_info.pkg_version());
+            if !keg_path.is_dir() {
+                pour_bottle(client, config, dep_info).await?;
+            }
+        }
+
+        // Update manifest.
+        let mut m = manifest::read_manifest(&config.den_home, active_env)?;
+        m.packages.insert(name.clone(), latest.clone());
+        for dep_info in &all {
+            let dep_ver = dep_info.pkg_version();
+            m.packages.insert(dep_info.name.clone(), dep_ver);
+            if dep_info.name != *name {
+                m.auto.insert(dep_info.name.clone());
+            }
+        }
+        manifest::write_manifest(&config.den_home, active_env, &m)?;
+        upgraded += 1;
+    }
+
+    if upgraded == 0 {
+        println!("All packages are up to date.");
+    } else {
+        // Re-materialise.
+        println!("==> Materialising environment '{active_env}'...");
+        let links = env::materialise(&config.den_home, &config.cellar, active_env)?;
+        println!("  {links} symlinks");
+        println!("==> {upgraded} package(s) upgraded.");
+    }
+
+    Ok(())
+}
+
+async fn install_cask_cmd(
+    client: &reqwest::Client,
+    config: &Config,
+    active_env: &str,
+    token: &str,
+) -> anyhow::Result<()> {
+    println!("==> Fetching cask {token}...");
+    let info = cask::fetch_cask(client, token).await?;
+
+    let apps = info.app_artifacts();
+    if apps.is_empty() {
+        anyhow::bail!(
+            "cask '{}' has no app artifacts (pkg/binary casks not yet supported)",
+            token
+        );
+    }
+
+    println!(
+        "==> Downloading {} {}...",
+        info.token, info.version
+    );
+    let (data, ext) = cask::download_cask(client, &info).await?;
+    println!("  {} bytes downloaded", data.len());
+
+    let appdir = std::path::PathBuf::from("/Applications");
+
+    println!("==> Installing {}...", apps.join(", "));
+    let installed = match ext.as_str() {
+        "dmg" => cask::install_from_dmg(&data, &apps, &appdir)?,
+        "zip" => cask::install_from_zip(&data, &apps, &appdir)?,
+        _ => anyhow::bail!("unsupported cask format: {ext}"),
+    };
+
+    // Track in manifest.
+    let mut m = manifest::read_manifest(&config.den_home, active_env)?;
+    m.casks.insert(info.token.clone(), info.version.clone());
+    manifest::write_manifest(&config.den_home, active_env, &m)?;
+
+    for path in &installed {
+        println!("  Installed {}", path.display());
+    }
 
     if let Some(ref caveats) = info.caveats {
         println!("==> Caveats");
         println!("{caveats}");
     }
 
-    println!(
-        "==> {} {} installed to '{active_env}'.",
-        info.name, pkg_version
-    );
+    println!("==> {} {} installed.", info.token, info.version);
     Ok(())
+}
+
+fn run_services_command(config: &Config, command: Option<ServiceCommand>) -> anyhow::Result<()> {
+    let env_path = env::active_env_path(&config.den_home);
+    let env_dir = env::env_dir(&config.den_home, &env_path);
+    let opt_dir = env_dir.join("opt");
+
+    match command {
+        Some(ServiceCommand::List) | None => {
+            let services = service::list_services(&config.cellar, &opt_dir)?;
+            if services.is_empty() {
+                println!("No services found.");
+            } else {
+                for svc in &services {
+                    let status = if svc.running { "running" } else { "stopped" };
+                    println!("{} ({})", svc.name, status);
+                }
+            }
+            Ok(())
+        }
+        Some(ServiceCommand::Start { name }) => {
+            let services = service::list_services(&config.cellar, &opt_dir)?;
+            let svc = services
+                .iter()
+                .find(|s| s.name == name)
+                .ok_or_else(|| anyhow::anyhow!("no service found for '{name}'"))?;
+            if svc.running {
+                println!("{name} is already running.");
+                return Ok(());
+            }
+            service::start_service(svc)?;
+            println!("==> Started {name}.");
+            Ok(())
+        }
+        Some(ServiceCommand::Stop { name }) => {
+            let services = service::list_services(&config.cellar, &opt_dir)?;
+            let svc = services
+                .iter()
+                .find(|s| s.name == name)
+                .ok_or_else(|| anyhow::anyhow!("no service found for '{name}'"))?;
+            if !svc.running {
+                println!("{name} is not running.");
+                return Ok(());
+            }
+            service::stop_service(svc)?;
+            println!("==> Stopped {name}.");
+            Ok(())
+        }
+        Some(ServiceCommand::Restart { name }) => {
+            let services = service::list_services(&config.cellar, &opt_dir)?;
+            let svc = services
+                .iter()
+                .find(|s| s.name == name)
+                .ok_or_else(|| anyhow::anyhow!("no service found for '{name}'"))?;
+            service::restart_service(svc)?;
+            println!("==> Restarted {name}.");
+            Ok(())
+        }
+    }
 }
 
 fn list_packages(config: &Config, names: &[String]) -> anyhow::Result<()> {

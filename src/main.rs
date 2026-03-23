@@ -3,8 +3,10 @@
 
 mod api;
 mod bottle;
+mod cask;
 mod cli;
 mod config;
+mod deps;
 mod env;
 mod error;
 mod formula;
@@ -12,6 +14,7 @@ mod keg;
 mod link;
 mod manifest;
 mod platform;
+mod service;
 mod tab;
 
 use clap::Parser;

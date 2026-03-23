@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -14,6 +14,13 @@ pub struct Manifest {
     /// Packages at this level: formula_name -> keg version.
     #[serde(default)]
     pub packages: BTreeMap<String, String>,
+    /// Names of packages that were auto-installed as dependencies.
+    /// These are eligible for autoremove when no longer needed.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub auto: BTreeSet<String>,
+    /// Cask tokens installed at this level: token -> version.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub casks: BTreeMap<String, String>,
 }
 
 /// Convert an environment path (e.g. "/work/ml") to a filesystem slug
