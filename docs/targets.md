@@ -154,6 +154,29 @@ for a single query without changing the default.
 
 ---
 
+### 🎯T25 — Search corpus CI pipeline
+
+A separate repo (`den-corpus`) with a CI pipeline that:
+
+1. Runs daily (or on Homebrew API change detection)
+2. Fetches the full formula.json + cask.json from formulae.brew.sh
+3. Diffs against the previous snapshot, re-embeds changed/new entries
+4. Builds the ANN embedding index, BM25 keyword index, and packages
+   the cross-encoder reranker model
+5. Publishes versioned release artifacts to GitHub Releases with
+   a manifest (checksums, model version, build timestamp)
+
+`den update` checks for a new corpus version and downloads it.
+The index updates independently of den binary releases. Model
+version is pinned in the manifest to prevent query/index mismatch.
+
+Artifacts: `embeddings.bin` (~24MB), `bm25.bin` (~5MB),
+`reranker.onnx` (~25MB), `metadata.json`, `manifest.json`.
+
+**Status**: not started
+
+---
+
 ### 🎯T5 — Tap management
 Third-party taps.
 
