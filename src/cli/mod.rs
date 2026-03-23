@@ -1279,8 +1279,8 @@ fn print_shell_init(config: &Config, shell: &str) {
 export DEN_HOME="{den_home}"
 export DEN_ENV="/"
 
-# Add root environment to PATH (before Homebrew).
-export PATH="{den_home}/envs/{root_slug}/bin:$PATH"
+# Add den binary and root environment to PATH (before Homebrew).
+export PATH="{den_home}/bin:{den_home}/envs/{root_slug}/bin:$PATH"
 
 # Shell function wrapping `den env use` so it can modify the current shell.
 den() {{
@@ -1307,8 +1307,8 @@ den() {{
 set -gx DEN_HOME "{den_home}"
 set -gx DEN_ENV "/"
 
-# Add root environment to PATH.
-fish_add_path --prepend "{den_home}/envs/{root_slug}/bin"
+# Add den binary and root environment to PATH.
+fish_add_path --prepend "{den_home}/bin" "{den_home}/envs/{root_slug}/bin"
 
 # Wrapper function for `den env use`.
 function den
