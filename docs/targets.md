@@ -123,8 +123,11 @@ works.
 
 A background service (launchd on macOS) watches for available
 upgrades, downloads bottles, and stages new versions in the Cellar.
-The user's active environment is never modified without explicit
-action. `den status` shows what's available.
+By default, new versions are staged but the active environment is
+not modified until the user acts. With `auto-upgrade` enabled
+(`den set auto-upgrade true`), the daemon also switches the active
+environment to the new version automatically. `den status` shows
+what's installed, what's pending, and the auto-upgrade setting.
 
 **Status**: not started
 

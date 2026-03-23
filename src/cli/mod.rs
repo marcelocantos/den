@@ -106,6 +106,15 @@ enum Command {
     },
     /// Show pending upgrades and environment status
     Status,
+    /// Configure den settings
+    Set {
+        /// Setting name (e.g. auto-upgrade)
+        key: String,
+        /// Setting value
+        value: String,
+    },
+    /// Show current settings
+    Settings,
 }
 
 #[derive(Subcommand)]
