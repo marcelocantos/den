@@ -111,18 +111,44 @@ all ecosystems.
 
 ### 🎯T24 — Semantic search
 
-`den search` uses vector similarity over formula metadata (name,
-description, README content) to find packages by intent rather than
-keyword. Trained on a technical corpus so domain-specific queries
-work well ("compress video without losing quality" → ffmpeg).
+`den search` finds packages by intent, not keyword. Pluggable
+search providers with increasing capability:
 
-Index is pre-built (~24MB for 8K formulae × 768d embeddings) and
-ships alongside API metadata. Search is local and instant — no
-network call. Updated when formula metadata refreshes.
+**Provider hierarchy:**
 
-Embedding model: local via ollama (e.g. nomic-embed-text) for
-privacy and offline support. Falls back to keyword matching if
-ollama is unavailable.
+1. **keyword** (default) — substring match on name + description.
+   Instant, offline, zero cost. Fallback when nothing else is
+   available.
+
+2. **embedding** — vector similarity search over a pre-baked
+   embedding index. The entire Homebrew corpus (~8K formulae + ~7.5K
+   casks) is embedded at build/release time and shipped as a
+   ~24MB index file alongside den. At query time, the query is
+   embedded locally (via ollama) and matched against the index.
+   Instant, offline after first model pull, no per-query cost.
+   Updated with each den release or `den update`.
+
+3. **llm** — a reasoning model (Claude Sonnet/Opus) interprets the
+   query, searches the corpus, and returns curated results with
+   explanations and workflow suggestions. Not just search —
+   consultation. Costs tokens, requires network and an API key.
+
+**Pre-baked corpus index:** The embedding index is built in CI from
+the full formulae.brew.sh API dump. Each formula's name, description,
+dependencies, and caveats are concatenated and embedded. The index
+ships as a binary artifact (e.g. `den-corpus-v1.bin`) and is
+version-pinned to avoid query/index model mismatch.
+
+**Configuration:**
+```
+den set search-provider keyword     # fast, offline
+den set search-provider embedding   # semantic, offline
+den set search-provider claude-sonnet-4-6  # reasoning
+den set search-provider claude-opus-4-6    # best quality
+```
+
+`den search --smart` overrides to the highest-configured provider
+for a single query without changing the default.
 
 **Status**: not started
 
