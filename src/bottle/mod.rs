@@ -15,6 +15,39 @@ struct GhcrToken {
     token: String,
 }
 
+/// Fetch a bottle, using the content-addressed cache if available.
+/// Cache key is the SHA256 digest — the same hash we verify against.
+pub async fn fetch_bottle(
+    client: &Client,
+    bottle: &BottleFile,
+    ghcr_repo_path: &str,
+    cache_dir: &Path,
+) -> anyhow::Result<Vec<u8>> {
+    let cache_path = cache_dir.join(&bottle.sha256);
+
+    // Check cache first.
+    if cache_path.is_file() {
+        let data = std::fs::read(&cache_path)?;
+        // Verify integrity (cache could be corrupted/truncated).
+        let mut hasher = Sha256::new();
+        hasher.update(&data);
+        let digest = format!("{:x}", hasher.finalize());
+        if digest == bottle.sha256 {
+            return Ok(data);
+        }
+        // Corrupted — re-download.
+        let _ = std::fs::remove_file(&cache_path);
+    }
+
+    let data = download_bottle(client, bottle, ghcr_repo_path).await?;
+
+    // Write to cache.
+    std::fs::create_dir_all(cache_dir)?;
+    std::fs::write(&cache_path, &data)?;
+
+    Ok(data)
+}
+
 /// Download a bottle from GHCR, verify its SHA256, and return the raw bytes.
 pub async fn download_bottle(
     client: &Client,

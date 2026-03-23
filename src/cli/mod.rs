@@ -522,8 +522,9 @@ async fn pour_bottle(
     let bottle_file = &info.bottle.stable.files[&tag];
     let ghcr_path = formula::ghcr_path(&info.name);
 
-    println!("==> Downloading {} {} ({})...", info.name, pkg_version, tag);
-    let bottle_data = bottle::download_bottle(client, bottle_file, &ghcr_path).await?;
+    let cache_dir = config.den_home.join("cache").join("bottles");
+    println!("==> Fetching {} {} ({})...", info.name, pkg_version, tag);
+    let bottle_data = bottle::fetch_bottle(client, bottle_file, &ghcr_path, &cache_dir).await?;
     println!("  {} bytes, SHA256 verified", bottle_data.len());
 
     println!("==> Pouring {} {}...", info.name, pkg_version);
