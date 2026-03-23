@@ -12,9 +12,9 @@ pub struct Settings {
     #[serde(default)]
     pub daemon: DaemonSettings,
 
-    /// Migration.
-    #[serde(default)]
-    pub migrate: MigrateSettings,
+    /// User declined the first-run migration prompt.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub migration_declined: bool,
 
     /// Search.
     #[serde(default)]
@@ -32,13 +32,6 @@ pub struct DaemonSettings {
     /// Check interval in seconds (default: 21600 = 6 hours).
     #[serde(default)]
     pub interval_secs: Option<u64>,
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub struct MigrateSettings {
-    /// User declined the first-run migration prompt.
-    #[serde(default)]
-    pub declined: bool,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

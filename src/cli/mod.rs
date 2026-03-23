@@ -216,7 +216,7 @@ impl Cli {
                 let s = settings::read(&config.den_home);
                 if !manifest::manifest_exists(&config.den_home, "/")
                     && config.cellar.is_dir()
-                    && !s.migrate.declined
+                    && !s.migration_declined
                 {
                     println!("den {}", env!("CARGO_PKG_VERSION"));
                     println!("A universal development environment manager");
@@ -237,7 +237,7 @@ impl Cli {
                         migrate_cellar(&config)?;
                     } else {
                         let mut s = s;
-                        s.migrate.declined = true;
+                        s.migration_declined = true;
                         settings::write(&config.den_home, &s)?;
                         println!("OK. Run `den migrate` if you change your mind.");
                     }
@@ -718,6 +718,7 @@ fn migrate_cellar(config: &Config) -> anyhow::Result<()> {
 
     // Ensure root manifest exists.
     let mut m = manifest::read_manifest(&config.den_home, "/")?;
+    m.origin = Some("homebrew-migration".to_string());
 
     let mut added = 0u32;
     let mut skipped = 0u32;

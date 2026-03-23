@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 /// merging from root (/) down to the leaf.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Manifest {
+    /// How this manifest was created (e.g. "homebrew-migration").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
     /// Packages at this level: formula_name -> keg version.
     #[serde(default)]
     pub packages: BTreeMap<String, String>,
