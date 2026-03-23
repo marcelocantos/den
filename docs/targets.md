@@ -465,6 +465,50 @@ Sent. (204 No Content)
 
 ---
 
+### 🎯T35 — Build environment integration
+
+`den init` exports the env vars that build systems need to find
+libraries, headers, and pkg-config files in the active environment:
+
+```sh
+LIBRARY_PATH="$DEN_HOME/envs/ROOT/lib:$LIBRARY_PATH"
+CPATH="$DEN_HOME/envs/ROOT/include:$CPATH"
+PKG_CONFIG_PATH="$DEN_HOME/envs/ROOT/lib/pkgconfig:$PKG_CONFIG_PATH"
+CMAKE_PREFIX_PATH="$DEN_HOME/envs/ROOT:$CMAKE_PREFIX_PATH"
+MANPATH="$DEN_HOME/envs/ROOT/share/man:$MANPATH"
+```
+
+These swap when `den env use` switches environments, same as PATH.
+`den --prefix <pkg>` returns the `opt/` path for a package
+(equivalent to `brew --prefix`).
+
+**Status**: not started
+
+---
+
+### 🎯T36 — Homebrew prefix compatibility layer
+
+For tools that hardcode `/opt/homebrew` paths, den can optionally
+replicate its active environment's symlinks into `/opt/homebrew/`
+(or a configurable prefix). This is a one-way sync — den owns the
+state, the prefix is a mirror.
+
+Modes:
+- **off** (default) — den environments are self-contained, Homebrew
+  prefix is untouched
+- **mirror** — den materialises into the Homebrew prefix alongside
+  its own environment, keeping both in sync
+- **takeover** — den replaces Homebrew's symlinks entirely, managing
+  the prefix as if it were a den environment
+
+This is the escape hatch for the small number of tools that ignore
+env vars and hardcode `/opt/homebrew`. Telemetry (T32) can track
+how often users need this to inform whether it's worth maintaining.
+
+**Status**: not started
+
+---
+
 ### 🎯T5 — Tap management
 Third-party taps.
 
