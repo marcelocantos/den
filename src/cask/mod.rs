@@ -68,6 +68,10 @@ impl CaskInfo {
 
 /// Fetch cask metadata from the Homebrew JSON API.
 pub async fn fetch_cask(client: &Client, token: &str) -> anyhow::Result<CaskInfo> {
+    // Validate token to prevent URL path traversal.
+    if token.contains('/') || token.contains("..") || token.is_empty() {
+        anyhow::bail!("invalid cask token: {token}");
+    }
     let url = format!("{CASK_API_BASE}/{token}.json");
     let response = client
         .get(&url)

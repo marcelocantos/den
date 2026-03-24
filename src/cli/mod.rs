@@ -1268,7 +1268,7 @@ async fn run_daemon_command(config: &Config, command: DaemonCommand) -> anyhow::
         }
         DaemonCommand::Install => {
             let exe = std::env::current_exe()?;
-            let plist = daemon::launchd_plist(&exe);
+            let plist = daemon::launchd_plist(&exe, &config.den_home);
             let plist_path = dirs::home_dir()
                 .ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))?
                 .join("Library/LaunchAgents/dev.den.daemon.plist");

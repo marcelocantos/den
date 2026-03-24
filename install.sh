@@ -191,8 +191,12 @@ add_shell_integration() {
         return
     fi
 
-    # Append.
-    printf '\n# den — universal development environment manager\neval "$("%s/den" init)"\n' "$_bin_dir" >> "$_profile"
+    # Append shell-appropriate init line.
+    if [ "$_shell" = "fish" ]; then
+        printf '\n# den — universal development environment manager\n%s/den init --shell fish | source\n' "$_bin_dir" >> "$_profile"
+    else
+        printf '\n# den — universal development environment manager\neval "$("%s/den" init)"\n' "$_bin_dir" >> "$_profile"
+    fi
     say "added shell integration to $_profile"
 }
 

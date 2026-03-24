@@ -433,7 +433,7 @@ async fn pour_bottle_quiet(
 }
 
 /// Generate launchd plist content.
-pub fn launchd_plist(den_binary: &Path) -> String {
+pub fn launchd_plist(den_binary: &Path, den_home: &Path) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -458,13 +458,7 @@ pub fn launchd_plist(den_binary: &Path) -> String {
 </dict>
 </plist>"#,
         den_binary.display(),
-        dirs::home_dir()
-            .unwrap_or_default()
-            .join(".den")
-            .display(),
-        dirs::home_dir()
-            .unwrap_or_default()
-            .join(".den")
-            .display(),
+        den_home.display(),
+        den_home.display(),
     )
 }
