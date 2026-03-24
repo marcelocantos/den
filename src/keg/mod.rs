@@ -34,7 +34,7 @@ impl PartialOrd for VersionComponent {
 /// Splits on `.` and `_`, then parses each component as a number if possible.
 fn version_components(version: &str) -> Vec<VersionComponent> {
     version
-        .split(|c| c == '.' || c == '_')
+        .split(['.', '_'])
         .map(|part| {
             part.parse::<u64>()
                 .map(VersionComponent::Num)
