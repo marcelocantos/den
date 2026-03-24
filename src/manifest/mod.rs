@@ -26,6 +26,17 @@ pub struct Manifest {
     pub casks: BTreeMap<String, String>,
 }
 
+/// Encode a single path component for use in a slug.
+/// Dashes are encoded as `%2D` so that `--` is unambiguous as the separator.
+fn encode_component(component: &str) -> String {
+    component.replace('%', "%25").replace('-', "%2D")
+}
+
+/// Decode a single slug component back to the original path component.
+fn decode_component(component: &str) -> String {
+    component.replace("%2D", "-").replace("%25", "%")
+}
+
 /// Convert an environment path (e.g. "/work/ml") to a filesystem slug
 /// for the materialised environment directory.
 pub fn env_slug(env_path: &str) -> String {
@@ -33,7 +44,11 @@ pub fn env_slug(env_path: &str) -> String {
     if trimmed.is_empty() {
         "ROOT".to_string()
     } else {
-        trimmed.replace('/', "--")
+        trimmed
+            .split('/')
+            .map(encode_component)
+            .collect::<Vec<_>>()
+            .join("--")
     }
 }
 
@@ -42,7 +57,8 @@ pub fn slug_to_path(slug: &str) -> String {
     if slug == "ROOT" {
         "/".to_string()
     } else {
-        format!("/{}", slug.replace("--", "/"))
+        let components: Vec<String> = slug.split("--").map(decode_component).collect();
+        format!("/{}", components.join("/"))
     }
 }
 
@@ -170,10 +186,11 @@ fn collect_manifests(
         paths.push(env_path);
     }
 
-    // Recurse into subdirectories.
+    // Recurse into subdirectories (without following symlinks).
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
-        if entry.path().is_dir() {
+        let meta = std::fs::symlink_metadata(entry.path())?;
+        if meta.file_type().is_dir() {
             collect_manifests(base, &entry.path(), paths)?;
         }
     }

@@ -46,12 +46,29 @@ fn config_path(den_home: &Path) -> std::path::PathBuf {
 }
 
 /// Read settings, returning defaults if the file doesn't exist.
+/// Prints a warning to stderr if the file exists but cannot be parsed.
 pub fn read(den_home: &Path) -> Settings {
     let path = config_path(den_home);
-    std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    match std::fs::read_to_string(&path) {
+        Ok(s) => match serde_json::from_str(&s) {
+            Ok(settings) => settings,
+            Err(e) => {
+                eprintln!(
+                    "warning: failed to parse {}: {e}; using defaults",
+                    path.display()
+                );
+                Settings::default()
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Settings::default(),
+        Err(e) => {
+            eprintln!(
+                "warning: failed to read {}: {e}; using defaults",
+                path.display()
+            );
+            Settings::default()
+        }
+    }
 }
 
 /// Write settings.

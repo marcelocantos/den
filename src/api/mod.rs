@@ -107,11 +107,25 @@ async fn fetch_index(client: &Client) -> anyhow::Result<Vec<u8>> {
 }
 
 fn parse_index(data: &[u8]) -> anyhow::Result<FormulaIndex> {
-    let formulas: Vec<FormulaInfo> = serde_json::from_slice(data)?;
-    let map: HashMap<String, FormulaInfo> = formulas
-        .into_iter()
-        .map(|f| (f.name.clone(), f))
-        .collect();
+    let entries: Vec<serde_json::Value> = serde_json::from_slice(data)?;
+    let mut map = HashMap::new();
+    let mut skipped = 0u32;
+
+    for entry in entries {
+        match serde_json::from_value::<FormulaInfo>(entry) {
+            Ok(info) => {
+                map.insert(info.name.clone(), info);
+            }
+            Err(e) => {
+                skipped += 1;
+                eprintln!("warning: skipping formula entry: {e}");
+            }
+        }
+    }
+
+    if skipped > 0 {
+        eprintln!("warning: skipped {skipped} formula entries due to parse errors");
+    }
 
     Ok(FormulaIndex { formulas: map })
 }

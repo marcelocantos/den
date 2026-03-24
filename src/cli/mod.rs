@@ -92,10 +92,7 @@ enum Command {
         name: String,
     },
     /// Remove old versions and cache files
-    Cleanup {
-        /// Formula or cask name(s) (default: all)
-        names: Vec<String>,
-    },
+    Cleanup,
     /// Remove unneeded dependencies
     Autoremove,
     /// Check system for potential problems
@@ -362,8 +359,8 @@ impl Cli {
                 let index = FormulaIndex::load(&client, &cache_dir).await?;
                 show_deps(&index, &name, tree)
             }
-            Some(Command::Cleanup { names }) => {
-                cleanup(&config, &names)
+            Some(Command::Cleanup) => {
+                cleanup(&config)
             }
             Some(Command::Autoremove) => {
                 let active = env::active_env_path(&config.den_home);
@@ -690,47 +687,8 @@ fn uninstall_package(
     Ok(())
 }
 
-fn autoremove(config: &Config, active_env: &str) -> anyhow::Result<()> {
-    let m = manifest::read_manifest(&config.den_home, active_env)?;
-
-    // Find auto-installed packages that are no longer needed as deps
-    // of any explicit package.
-    let explicit: Vec<String> = m
-        .packages
-        .keys()
-        .filter(|k| !m.auto.contains(k.as_str()))
-        .cloned()
-        .collect();
-
-    // For now, simple approach: auto packages not in explicit stay.
-    // A proper implementation would check the dep graph.
-    // TODO: traverse dep graph to find truly orphaned auto packages.
-
-    let orphans: Vec<String> = m
-        .auto
-        .iter()
-        .filter(|name| !explicit.contains(name))
-        .cloned()
-        .collect();
-
-    if orphans.is_empty() {
-        println!("No orphaned dependencies to remove.");
-        return Ok(());
-    }
-
-    let removed = 0;
-    for name in &orphans {
-        // Check if any explicit package depends on this.
-        // For now, keep all auto packages (conservative).
-        // Full dep-graph check is a future improvement.
-        let _ = name;
-    }
-
-    if removed == 0 {
-        println!("No orphaned dependencies to remove (dep-graph check pending).");
-    }
-
-    Ok(())
+fn autoremove(_config: &Config, _active_env: &str) -> anyhow::Result<()> {
+    anyhow::bail!("autoremove is not yet implemented")
 }
 
 fn migrate_cellar(config: &Config) -> anyhow::Result<()> {
@@ -1216,7 +1174,7 @@ fn print_dep_tree(
     }
 }
 
-fn cleanup(config: &Config, _names: &[String]) -> anyhow::Result<()> {
+fn cleanup(config: &Config) -> anyhow::Result<()> {
     // Remove cached bottles.
     let cache_dir = config.den_home.join("cache").join("bottles");
     if cache_dir.is_dir() {

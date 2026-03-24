@@ -13,6 +13,7 @@ pub struct FormulaInfo {
     pub full_name: String,
     #[serde(default)]
     pub desc: Option<String>,
+    #[serde(default)]
     pub versions: Versions,
     #[serde(default)]
     pub revision: u32,
@@ -48,7 +49,7 @@ impl FormulaInfo {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[allow(dead_code)]
 pub struct Versions {
     #[serde(default)]
@@ -70,6 +71,7 @@ pub struct BottleSpec {
 pub struct BottleStable {
     #[serde(default)]
     pub rebuild: u32,
+    #[serde(default)]
     pub root_url: String,
     pub files: HashMap<String, BottleFile>,
 }
