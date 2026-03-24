@@ -116,10 +116,25 @@ fn parse_index(data: &[u8]) -> anyhow::Result<FormulaIndex> {
     Ok(FormulaIndex { formulas: map })
 }
 
+/// Validate a formula name contains only safe characters.
+fn validate_formula_name(name: &str) -> anyhow::Result<()> {
+    if name.is_empty() {
+        anyhow::bail!("formula name is empty");
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '@' || c == '+')
+    {
+        anyhow::bail!("invalid formula name: {name}");
+    }
+    Ok(())
+}
+
 /// Fetch a single formula from the API (fallback for tap formulae
 /// not in the bulk index).
 #[allow(dead_code)]
 pub async fn fetch_formula(client: &Client, name: &str) -> anyhow::Result<FormulaInfo> {
+    validate_formula_name(name)?;
     let url = format!("{FORMULA_API_BASE}/{name}.json");
     let response = client
         .get(&url)

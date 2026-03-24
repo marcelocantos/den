@@ -92,6 +92,19 @@ pub async fn download_cask(
     client: &Client,
     info: &CaskInfo,
 ) -> anyhow::Result<(Vec<u8>, String)> {
+    // Enforce HTTPS.
+    if !info.url.starts_with("https://") {
+        anyhow::bail!("refusing non-HTTPS cask URL: {}", info.url);
+    }
+
+    // Require SHA256 verification.
+    if info.sha256.as_deref() == Some("no_check") || info.sha256.is_none() {
+        anyhow::bail!(
+            "cask '{}' has no SHA256 checksum — refusing to install unverified artifact",
+            info.token
+        );
+    }
+
     let response = client
         .get(&info.url)
         .header("User-Agent", "den/0.1.0")

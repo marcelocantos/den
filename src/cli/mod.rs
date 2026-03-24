@@ -418,7 +418,7 @@ fn run_env_command(config: &Config, command: Option<EnvCommand>) -> anyhow::Resu
             Ok(())
         }
         Some(EnvCommand::Create { path }) => {
-            let env_path = normalise_env_path(&path);
+            let env_path = normalise_env_path(&path)?;
 
             // Ensure parent exists (except for root).
             if let Some(parent) = manifest::parent_path(&env_path)
@@ -448,7 +448,7 @@ fn run_env_command(config: &Config, command: Option<EnvCommand>) -> anyhow::Resu
             Ok(())
         }
         Some(EnvCommand::Use { path }) => {
-            let env_path = normalise_env_path(&path);
+            let env_path = normalise_env_path(&path)?;
 
             if !manifest::manifest_exists(&config.den_home, &env_path) {
                 anyhow::bail!(
@@ -465,7 +465,7 @@ fn run_env_command(config: &Config, command: Option<EnvCommand>) -> anyhow::Resu
         }
         Some(EnvCommand::Show { path }) => {
             let env_path = path
-                .map(|p| normalise_env_path(&p))
+                .map(|p| normalise_env_path(&p)).transpose()?
                 .unwrap_or_else(|| env::active_env_path(&config.den_home));
 
             let resolved = manifest::resolve(&config.den_home, &env_path)?;
@@ -487,7 +487,7 @@ fn run_env_command(config: &Config, command: Option<EnvCommand>) -> anyhow::Resu
             Ok(())
         }
         Some(EnvCommand::Remove { path }) => {
-            let env_path = normalise_env_path(&path);
+            let env_path = normalise_env_path(&path)?;
             if env_path == "/" {
                 anyhow::bail!("cannot remove the root environment");
             }
@@ -518,7 +518,7 @@ fn run_env_command(config: &Config, command: Option<EnvCommand>) -> anyhow::Resu
         }
         Some(EnvCommand::Freeze { path }) => {
             let env_path = path
-                .map(|p| normalise_env_path(&p))
+                .map(|p| normalise_env_path(&p)).transpose()?
                 .unwrap_or_else(|| env::active_env_path(&config.den_home));
 
             let resolved = manifest::resolve(&config.den_home, &env_path)?;
@@ -1311,9 +1311,13 @@ async fn run_daemon_command(config: &Config, command: DaemonCommand) -> anyhow::
     }
 }
 
-fn normalise_env_path(path: &str) -> String {
+fn normalise_env_path(path: &str) -> anyhow::Result<String> {
     if path.is_empty() || path == "/" {
-        return "/".to_string();
+        return Ok("/".to_string());
+    }
+    // Reject path traversal.
+    if path.contains("..") {
+        anyhow::bail!("environment path must not contain '..'");
     }
     let p = if path.starts_with('/') {
         path.to_string()
@@ -1321,7 +1325,7 @@ fn normalise_env_path(path: &str) -> String {
         format!("/{path}")
     };
     // Remove trailing slash.
-    p.trim_end_matches('/').to_string()
+    Ok(p.trim_end_matches('/').to_string())
 }
 
 fn print_shell_init(config: &Config, shell: &str) {

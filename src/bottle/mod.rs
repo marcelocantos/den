@@ -54,6 +54,11 @@ pub async fn download_bottle(
     bottle: &BottleFile,
     ghcr_repo_path: &str,
 ) -> anyhow::Result<Vec<u8>> {
+    // Enforce HTTPS to prevent token leakage.
+    if !bottle.url.starts_with("https://") {
+        anyhow::bail!("refusing non-HTTPS bottle URL: {}", bottle.url);
+    }
+
     // Fetch anonymous GHCR token.
     let token_url = format!(
         "https://ghcr.io/token?service=ghcr.io&scope=repository:homebrew/core/{}:pull",
@@ -67,8 +72,12 @@ pub async fn download_bottle(
         .json()
         .await?;
 
-    // Download the bottle blob.
-    let response = client
+    // Download the bottle blob. Disable redirects to prevent
+    // token leakage via HTTPS→HTTP downgrade.
+    let no_redirect_client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
+    let response = no_redirect_client
         .get(&bottle.url)
         .header("User-Agent", "den/0.1.0")
         .header("Authorization", format!("Bearer {}", token.token))
@@ -165,8 +174,8 @@ pub fn pour_bottle(bottle_data: &[u8], cellar: &Path) -> anyhow::Result<PathBuf>
             entry.read_to_end(&mut data)?;
             std::fs::write(&dest, &data)?;
 
-            // Preserve executable permission.
-            let mode = entry.header().mode()?;
+            // Preserve executable permission but strip setuid/setgid/sticky bits.
+            let mode = entry.header().mode()? & 0o0777;
             set_permissions(&dest, mode)?;
         }
     }
