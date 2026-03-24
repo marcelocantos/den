@@ -10,6 +10,9 @@ use sha2::{Digest, Sha256};
 
 use crate::formula::BottleFile;
 
+/// Maximum allowed download size (2 GB).
+const MAX_DOWNLOAD_SIZE: u64 = 2 * 1024 * 1024 * 1024;
+
 #[derive(Deserialize)]
 struct GhcrToken {
     token: String,
@@ -88,6 +91,17 @@ pub async fn download_bottle(
         anyhow::bail!("bottle download failed (HTTP {})", response.status());
     }
 
+    // Reject excessively large downloads before buffering.
+    if let Some(len) = response.content_length() {
+        if len > MAX_DOWNLOAD_SIZE {
+            anyhow::bail!(
+                "bottle download too large ({} bytes, max {} bytes)",
+                len,
+                MAX_DOWNLOAD_SIZE
+            );
+        }
+    }
+
     let bytes = response.bytes().await?.to_vec();
 
     // Verify SHA256.
@@ -157,6 +171,21 @@ pub fn pour_bottle(bottle_data: &[u8], cellar: &Path) -> anyhow::Result<PathBuf>
         // Create parent directories.
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)?;
+
+            // After creating parent dirs, canonicalize the parent and
+            // verify it is still within the cellar. This defeats
+            // symlink-directory redirect attacks where a prior entry
+            // created a symlink directory that redirects writes outside
+            // the cellar.
+            let canonical_parent = std::fs::canonicalize(parent)?;
+            let canonical_cellar = std::fs::canonicalize(cellar)?;
+            if !canonical_parent.starts_with(&canonical_cellar) {
+                anyhow::bail!(
+                    "bottle entry resolves outside cellar via symlink: {} -> {}",
+                    path.display(),
+                    canonical_parent.display()
+                );
+            }
         }
 
         // Extract the entry.

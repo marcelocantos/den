@@ -9,6 +9,42 @@ use sha2::{Digest, Sha256};
 
 const CASK_API_BASE: &str = "https://formulae.brew.sh/api/cask";
 
+/// Maximum allowed download size (2 GB).
+const MAX_DOWNLOAD_SIZE: u64 = 2 * 1024 * 1024 * 1024;
+
+/// RAII guard that detaches a mounted DMG when dropped, preventing mount leaks
+/// if an error occurs mid-function.
+struct DmgMount<'a> {
+    mount_path: &'a Path,
+    detached: bool,
+}
+
+impl<'a> DmgMount<'a> {
+    fn new(mount_path: &'a Path) -> Self {
+        Self {
+            mount_path,
+            detached: false,
+        }
+    }
+
+    /// Explicitly detach (for normal flow). Prevents double-detach in Drop.
+    fn detach(&mut self) {
+        if !self.detached {
+            let _ = std::process::Command::new("hdiutil")
+                .args(["detach", "-quiet"])
+                .arg(self.mount_path)
+                .status();
+            self.detached = true;
+        }
+    }
+}
+
+impl Drop for DmgMount<'_> {
+    fn drop(&mut self) {
+        self.detach();
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct CaskInfo {
@@ -115,6 +151,17 @@ pub async fn download_cask(
         anyhow::bail!("cask download failed (HTTP {})", response.status());
     }
 
+    // Reject excessively large downloads before buffering.
+    if let Some(len) = response.content_length() {
+        if len > MAX_DOWNLOAD_SIZE {
+            anyhow::bail!(
+                "cask download too large ({} bytes, max {} bytes)",
+                len,
+                MAX_DOWNLOAD_SIZE
+            );
+        }
+    }
+
     // Determine file extension from URL.
     let ext = info
         .url
@@ -185,6 +232,9 @@ pub fn install_from_dmg(
         anyhow::bail!("failed to mount DMG");
     }
 
+    // RAII guard ensures the DMG is detached even if we return early on error.
+    let mut dmg_guard = DmgMount::new(mount_path);
+
     let mut installed = Vec::new();
 
     // Copy app bundles.
@@ -207,11 +257,8 @@ pub fn install_from_dmg(
         }
     }
 
-    // Unmount.
-    let _ = std::process::Command::new("hdiutil")
-        .args(["detach", "-quiet"])
-        .arg(mount_path)
-        .status();
+    // Explicitly detach (also happens in Drop, but be intentional).
+    dmg_guard.detach();
 
     Ok(installed)
 }

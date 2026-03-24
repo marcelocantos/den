@@ -1,6 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -79,33 +80,78 @@ pub fn write_settings(den_home: &Path, settings: &DaemonSettings) -> anyhow::Res
     Ok(())
 }
 
-/// PID file management.
+/// PID file management using file locking to prevent races.
 fn pid_path(den_home: &Path) -> PathBuf {
     den_home.join("daemon.pid")
 }
 
-pub fn is_running(den_home: &Path) -> bool {
-    let path = pid_path(den_home);
-    if let Ok(pid_str) = std::fs::read_to_string(&path) {
-        if let Ok(pid) = pid_str.trim().parse::<i32>() {
-            // Check if process is alive.
-            unsafe { libc::kill(pid, 0) == 0 }
-        } else {
-            false
+/// Guard that holds an exclusive lock on the PID file.
+/// The lock is released and the file removed when the guard is dropped.
+/// The OS releases the lock even on SIGKILL, preventing stale PID issues.
+struct PidGuard {
+    file: std::fs::File,
+    path: PathBuf,
+}
+
+impl PidGuard {
+    /// Try to acquire an exclusive lock on the PID file.
+    /// Returns `Ok(guard)` if the lock was acquired, or an error if
+    /// another daemon is already running.
+    fn acquire(den_home: &Path) -> anyhow::Result<Self> {
+        let path = pid_path(den_home);
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&path)?;
+
+        // Try non-blocking exclusive lock.
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if rc != 0 {
+            anyhow::bail!("daemon is already running (could not acquire PID file lock)");
         }
-    } else {
-        false
+
+        // Write our PID to the locked file.
+        use std::io::Write;
+        let mut f = &file;
+        write!(f, "{}", std::process::id())?;
+        f.flush()?;
+
+        Ok(Self { file, path })
     }
 }
 
-fn write_pid(den_home: &Path) -> anyhow::Result<()> {
-    let pid = std::process::id();
-    std::fs::write(pid_path(den_home), pid.to_string())?;
-    Ok(())
+impl Drop for PidGuard {
+    fn drop(&mut self) {
+        // Remove the PID file and release the lock.
+        let _ = std::fs::remove_file(&self.path);
+        // Unlock (also happens implicitly when file is closed, but be explicit).
+        unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
+    }
 }
 
-fn remove_pid(den_home: &Path) {
-    let _ = std::fs::remove_file(pid_path(den_home));
+pub fn is_running(den_home: &Path) -> bool {
+    let path = pid_path(den_home);
+    // Try to acquire the lock non-blockingly. If we can't, another daemon holds it.
+    let file = match std::fs::OpenOptions::new()
+        .create(false)
+        .read(true)
+        .write(true)
+        .open(&path)
+    {
+        Ok(f) => f,
+        Err(_) => return false, // No PID file means not running.
+    };
+
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if rc != 0 {
+        // Could not acquire lock — another daemon holds it.
+        true
+    } else {
+        // We got the lock — no daemon is running. Release immediately.
+        unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
+        false
+    }
 }
 
 /// Log a message to the daemon log.
@@ -191,11 +237,9 @@ fn in_maintenance_window(window: &str) -> bool {
 
 /// Run the daemon main loop.
 pub async fn run(config: &Config) -> anyhow::Result<()> {
-    if is_running(&config.den_home) {
-        anyhow::bail!("daemon is already running");
-    }
-
-    write_pid(&config.den_home)?;
+    // Acquire exclusive PID file lock. This atomically prevents races
+    // and is auto-released if the process dies (even via SIGKILL).
+    let _pid_guard = PidGuard::acquire(&config.den_home)?;
     log(&config.den_home, "daemon started");
 
     let settings = crate::settings::read(&config.den_home);
@@ -227,7 +271,7 @@ pub async fn run(config: &Config) -> anyhow::Result<()> {
     }
 
     log(&config.den_home, "daemon stopped");
-    remove_pid(&config.den_home);
+    // PID file is removed and lock released by _pid_guard's Drop impl.
     Ok(())
 }
 
