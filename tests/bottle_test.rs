@@ -1,9 +1,6 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-use std::io::Write;
-use std::path::Path;
-
 /// Test that bottle extraction rejects path traversal attempts.
 #[test]
 fn pour_rejects_path_traversal() {
@@ -26,6 +23,17 @@ fn pour_rejects_path_traversal() {
 }
 
 #[test]
+fn pour_rejects_symlink_path_traversal() {
+    let tar_data = create_malicious_symlink_tarball();
+    let result = validate_tar_paths(&tar_data);
+    assert!(result.is_err(), "should reject symlink path traversal");
+    assert!(
+        result.unwrap_err().contains("path traversal"),
+        "error should mention path traversal"
+    );
+}
+
+#[test]
 fn pour_accepts_normal_paths() {
     let tar_data = create_normal_tarball();
     let result = validate_tar_paths(&tar_data);
@@ -41,6 +49,7 @@ fn validate_tar_paths(data: &[u8]) -> Result<(), String> {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path().map_err(|e| e.to_string())?.into_owned();
 
+        // Check entry path.
         if path
             .components()
             .any(|c| matches!(c, std::path::Component::ParentDir))
@@ -48,6 +57,20 @@ fn validate_tar_paths(data: &[u8]) -> Result<(), String> {
             return Err(format!(
                 "bottle contains path traversal: {}",
                 path.display()
+            ));
+        }
+
+        // Check symlink target.
+        if entry.header().entry_type().is_symlink()
+            && let Some(link_target) = entry.link_name().map_err(|e| e.to_string())?
+            && link_target
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(format!(
+                "bottle contains symlink with path traversal: {} -> {}",
+                path.display(),
+                link_target.display()
             ));
         }
     }
@@ -72,6 +95,33 @@ fn create_malicious_tarball() -> Vec<u8> {
             .copy_from_slice(path_bytes);
         header.set_cksum();
         tar.append(&header, &data[..]).unwrap();
+
+        tar.into_inner().unwrap().finish().unwrap();
+    }
+    buf
+}
+
+fn create_malicious_symlink_tarball() -> Vec<u8> {
+    let mut buf = Vec::new();
+    {
+        let encoder = flate2::write::GzEncoder::new(&mut buf, flate2::Compression::fast());
+        let mut tar = tar::Builder::new(encoder);
+
+        // Create a symlink entry with a traversal target.
+        let mut header = tar::Header::new_gnu();
+        header.set_size(0);
+        header.set_mode(0o777);
+        header.set_entry_type(tar::EntryType::Symlink);
+        // Set a normal entry path.
+        let path_bytes = b"tree/2.3.1/lib/evil";
+        header.as_gnu_mut().unwrap().name[..path_bytes.len()]
+            .copy_from_slice(path_bytes);
+        // Set a traversal symlink target.
+        let target_bytes = b"../../../../etc/passwd";
+        header.as_gnu_mut().unwrap().linkname[..target_bytes.len()]
+            .copy_from_slice(target_bytes);
+        header.set_cksum();
+        tar.append(&header, &[][..]).unwrap();
 
         tar.into_inner().unwrap().finish().unwrap();
     }

@@ -1,11 +1,8 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::BTreeMap;
-
-// Test the manifest module's public functions by using the library
-// through the binary's module structure. Since den doesn't expose a
-// lib crate, we test via CLI integration and inline unit tests.
+// Test manifest slug/path conversion logic. Since den is a binary
+// crate, we replicate the logic here for testing.
 
 #[test]
 fn env_slug_root() {

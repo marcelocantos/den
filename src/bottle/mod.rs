@@ -140,6 +140,17 @@ pub fn pour_bottle(bottle_data: &[u8], cellar: &Path) -> anyhow::Result<PathBuf>
             std::fs::create_dir_all(&dest)?;
         } else if entry.header().entry_type().is_symlink() {
             if let Some(link_target) = entry.link_name()? {
+                // Reject symlink targets that escape the Cellar.
+                if link_target
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+                {
+                    anyhow::bail!(
+                        "bottle contains symlink with path traversal: {} -> {}",
+                        path.display(),
+                        link_target.display()
+                    );
+                }
                 // Remove existing symlink if present.
                 let _ = std::fs::remove_file(&dest);
                 std::os::unix::fs::symlink(link_target.as_ref(), &dest)?;
