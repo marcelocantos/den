@@ -110,10 +110,15 @@ pub fn pour_bottle(bottle_data: &[u8], cellar: &Path) -> anyhow::Result<PathBuf>
         let mut entry = entry?;
         let path = entry.path()?.into_owned();
 
-        // Reject paths that could escape the target directory.
-        if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        // Reject paths that could escape the target directory:
+        // absolute paths, parent directory traversal, and hardlinks.
+        reject_unsafe_path(&path, "entry")?;
+
+        // Reject hardlink entries — they can reference files outside
+        // the Cellar and bypass normal path checks.
+        if entry.header().entry_type().is_hard_link() {
             anyhow::bail!(
-                "bottle contains path traversal: {}",
+                "bottle contains hardlink (rejected): {}",
                 path.display()
             );
         }
@@ -130,6 +135,16 @@ pub fn pour_bottle(bottle_data: &[u8], cellar: &Path) -> anyhow::Result<PathBuf>
 
         let dest = cellar.join(&path);
 
+        // Verify the resolved destination is within the Cellar.
+        // This catches absolute paths (Path::join discards the base
+        // when the second path is absolute).
+        if !dest.starts_with(cellar) {
+            anyhow::bail!(
+                "bottle entry escapes cellar: {}",
+                path.display()
+            );
+        }
+
         // Create parent directories.
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)?;
@@ -140,17 +155,7 @@ pub fn pour_bottle(bottle_data: &[u8], cellar: &Path) -> anyhow::Result<PathBuf>
             std::fs::create_dir_all(&dest)?;
         } else if entry.header().entry_type().is_symlink() {
             if let Some(link_target) = entry.link_name()? {
-                // Reject symlink targets that escape the Cellar.
-                if link_target
-                    .components()
-                    .any(|c| matches!(c, std::path::Component::ParentDir))
-                {
-                    anyhow::bail!(
-                        "bottle contains symlink with path traversal: {} -> {}",
-                        path.display(),
-                        link_target.display()
-                    );
-                }
+                reject_unsafe_path(&link_target, "symlink target")?;
                 // Remove existing symlink if present.
                 let _ = std::fs::remove_file(&dest);
                 std::os::unix::fs::symlink(link_target.as_ref(), &dest)?;
@@ -170,6 +175,26 @@ pub fn pour_bottle(bottle_data: &[u8], cellar: &Path) -> anyhow::Result<PathBuf>
         keg_prefix.ok_or_else(|| anyhow::anyhow!("empty or malformed bottle tarball"))?;
 
     Ok(cellar.join(keg_prefix))
+}
+
+/// Reject paths that are absolute or contain parent directory traversal.
+fn reject_unsafe_path(path: &Path, kind: &str) -> anyhow::Result<()> {
+    if path.is_absolute() {
+        anyhow::bail!(
+            "bottle contains absolute {kind} path: {}",
+            path.display()
+        );
+    }
+    if path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        anyhow::bail!(
+            "bottle contains {kind} with path traversal: {}",
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 #[cfg(unix)]

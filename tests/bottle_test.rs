@@ -34,6 +34,39 @@ fn pour_rejects_symlink_path_traversal() {
 }
 
 #[test]
+fn pour_rejects_absolute_entry_path() {
+    let tar_data = create_absolute_path_tarball();
+    let result = validate_tar_paths(&tar_data);
+    assert!(result.is_err(), "should reject absolute paths");
+    assert!(
+        result.unwrap_err().contains("absolute"),
+        "error should mention absolute"
+    );
+}
+
+#[test]
+fn pour_rejects_absolute_symlink_target() {
+    let tar_data = create_absolute_symlink_tarball();
+    let result = validate_tar_paths(&tar_data);
+    assert!(result.is_err(), "should reject absolute symlink targets");
+    assert!(
+        result.unwrap_err().contains("absolute"),
+        "error should mention absolute"
+    );
+}
+
+#[test]
+fn pour_rejects_hardlinks() {
+    let tar_data = create_hardlink_tarball();
+    let result = validate_tar_paths(&tar_data);
+    assert!(result.is_err(), "should reject hardlinks");
+    assert!(
+        result.unwrap_err().contains("hardlink"),
+        "error should mention hardlink"
+    );
+}
+
+#[test]
 fn pour_accepts_normal_paths() {
     let tar_data = create_normal_tarball();
     let result = validate_tar_paths(&tar_data);
@@ -49,29 +82,54 @@ fn validate_tar_paths(data: &[u8]) -> Result<(), String> {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path().map_err(|e| e.to_string())?.into_owned();
 
-        // Check entry path.
+        // Reject absolute paths.
+        if path.is_absolute() {
+            return Err(format!(
+                "bottle contains absolute entry path: {}",
+                path.display()
+            ));
+        }
+
+        // Reject parent directory traversal.
         if path
             .components()
             .any(|c| matches!(c, std::path::Component::ParentDir))
         {
             return Err(format!(
-                "bottle contains path traversal: {}",
+                "bottle contains entry with path traversal: {}",
                 path.display()
             ));
         }
 
-        // Check symlink target.
+        // Reject hardlinks.
+        if entry.header().entry_type().is_hard_link() {
+            return Err(format!(
+                "bottle contains hardlink (rejected): {}",
+                path.display()
+            ));
+        }
+
+        // Check symlink targets.
         if entry.header().entry_type().is_symlink()
             && let Some(link_target) = entry.link_name().map_err(|e| e.to_string())?
-            && link_target
-                .components()
-                .any(|c| matches!(c, std::path::Component::ParentDir))
         {
-            return Err(format!(
-                "bottle contains symlink with path traversal: {} -> {}",
-                path.display(),
-                link_target.display()
-            ));
+                if link_target.as_ref().is_absolute() {
+                    return Err(format!(
+                        "bottle contains absolute symlink target: {} -> {}",
+                        path.display(),
+                        link_target.display()
+                    ));
+                }
+                if link_target
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+                {
+                    return Err(format!(
+                        "bottle contains symlink with path traversal: {} -> {}",
+                        path.display(),
+                        link_target.display()
+                    ));
+                }
         }
     }
     Ok(())
@@ -118,6 +176,76 @@ fn create_malicious_symlink_tarball() -> Vec<u8> {
             .copy_from_slice(path_bytes);
         // Set a traversal symlink target.
         let target_bytes = b"../../../../etc/passwd";
+        header.as_gnu_mut().unwrap().linkname[..target_bytes.len()]
+            .copy_from_slice(target_bytes);
+        header.set_cksum();
+        tar.append(&header, &[][..]).unwrap();
+
+        tar.into_inner().unwrap().finish().unwrap();
+    }
+    buf
+}
+
+fn create_absolute_path_tarball() -> Vec<u8> {
+    let mut buf = Vec::new();
+    {
+        let encoder = flate2::write::GzEncoder::new(&mut buf, flate2::Compression::fast());
+        let mut tar = tar::Builder::new(encoder);
+
+        let data = b"absolute path content";
+        let mut header = tar::Header::new_gnu();
+        header.set_size(data.len() as u64);
+        header.set_mode(0o644);
+        header.set_entry_type(tar::EntryType::Regular);
+        let path_bytes = b"/etc/cron.d/evil";
+        header.as_gnu_mut().unwrap().name[..path_bytes.len()]
+            .copy_from_slice(path_bytes);
+        header.set_cksum();
+        tar.append(&header, &data[..]).unwrap();
+
+        tar.into_inner().unwrap().finish().unwrap();
+    }
+    buf
+}
+
+fn create_absolute_symlink_tarball() -> Vec<u8> {
+    let mut buf = Vec::new();
+    {
+        let encoder = flate2::write::GzEncoder::new(&mut buf, flate2::Compression::fast());
+        let mut tar = tar::Builder::new(encoder);
+
+        let mut header = tar::Header::new_gnu();
+        header.set_size(0);
+        header.set_mode(0o777);
+        header.set_entry_type(tar::EntryType::Symlink);
+        let path_bytes = b"tree/2.3.1/lib/evil";
+        header.as_gnu_mut().unwrap().name[..path_bytes.len()]
+            .copy_from_slice(path_bytes);
+        let target_bytes = b"/etc/passwd";
+        header.as_gnu_mut().unwrap().linkname[..target_bytes.len()]
+            .copy_from_slice(target_bytes);
+        header.set_cksum();
+        tar.append(&header, &[][..]).unwrap();
+
+        tar.into_inner().unwrap().finish().unwrap();
+    }
+    buf
+}
+
+fn create_hardlink_tarball() -> Vec<u8> {
+    let mut buf = Vec::new();
+    {
+        let encoder = flate2::write::GzEncoder::new(&mut buf, flate2::Compression::fast());
+        let mut tar = tar::Builder::new(encoder);
+
+        let mut header = tar::Header::new_gnu();
+        header.set_size(0);
+        header.set_mode(0o644);
+        header.set_entry_type(tar::EntryType::Link);
+        let path_bytes = b"tree/2.3.1/bin/evil";
+        header.as_gnu_mut().unwrap().name[..path_bytes.len()]
+            .copy_from_slice(path_bytes);
+        let target_bytes = b"/etc/shadow";
         header.as_gnu_mut().unwrap().linkname[..target_bytes.len()]
             .copy_from_slice(target_bytes);
         header.set_cksum();
