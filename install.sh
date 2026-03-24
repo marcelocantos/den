@@ -15,7 +15,7 @@
 set -eu
 
 main() {
-    need_cmd curl || need_cmd wget
+    check_cmd curl || check_cmd wget || err "need curl or wget"
     need_cmd tar
     need_cmd uname
 
