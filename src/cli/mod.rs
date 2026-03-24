@@ -109,12 +109,12 @@ enum Command {
     },
     /// Switch active version of a package in the active environment
     Use {
-        /// Package name with optional version (e.g. python@3.11 or tree=2.3.1)
+        /// Package name with optional version (e.g. tree=2.3.1)
         name: String,
     },
     /// Print shell integration for eval (add `eval "$(den init)"` to .zshrc)
     Init {
-        /// Shell type (default: auto-detect)
+        /// Shell type (default: zsh)
         #[arg(long, default_value = "zsh")]
         shell: String,
     },
@@ -122,7 +122,7 @@ enum Command {
     Status,
     /// Configure den settings
     Set {
-        /// Setting name (e.g. auto-upgrade)
+        /// Setting name (e.g. daemon.auto_upgrade)
         key: String,
         /// Setting value
         value: String,
@@ -381,8 +381,23 @@ impl Cli {
                 println!("{}", settings::display_all(&config.den_home));
                 Ok(())
             }
-            Some(_) => {
-                anyhow::bail!("command not yet implemented")
+            Some(Command::Tap { .. }) => {
+                anyhow::bail!("'tap' is not yet implemented")
+            }
+            Some(Command::Untap { .. }) => {
+                anyhow::bail!("'untap' is not yet implemented")
+            }
+            Some(Command::Link { .. }) => {
+                anyhow::bail!("'link' is not yet implemented")
+            }
+            Some(Command::Unlink { .. }) => {
+                anyhow::bail!("'unlink' is not yet implemented")
+            }
+            Some(Command::Doctor) => {
+                anyhow::bail!("'doctor' is not yet implemented")
+            }
+            Some(Command::Status) => {
+                anyhow::bail!("'status' is not yet implemented")
             }
         }
     }

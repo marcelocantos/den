@@ -48,7 +48,7 @@ den install --cask firefox  # GUI apps too
 
 # Manage versions:
 den install python@3.11     # installs alongside existing python@3.12
-den use python@3.11         # switch the active version
+den use tree=2.3.1          # switch to a specific version
 
 # Environments:
 den env create /ml          # child of root, inherits all packages

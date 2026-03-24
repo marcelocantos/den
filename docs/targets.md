@@ -50,6 +50,27 @@ bottles and re-materialises. **Achieved.**
 `den services list/start/stop/restart` manages launchd plists.
 **Achieved.** See T33 for the built-in supervisor that replaces this.
 
+### 🎯T7 — Download caching
+Content-addressed bottle cache in `~/.den/cache/bottles/` with
+SHA256-keyed storage. Bottles are fetched once and reused across
+installs. **Achieved.**
+
+### 🎯T14 — Info, search, and query commands
+`den info`, `den search`, `den deps --tree` all implemented.
+**Achieved.**
+
+### 🎯T13 — Background maintenance daemon
+`den daemon run/stop/status/install/uninstall` implemented. Daemon
+runs as a long-lived process, refreshes the formula index, downloads
+bottles for outdated packages, and supports auto-upgrade with
+configurable maintenance windows. State stored in
+`~/.den/daemon_state.json`. **Achieved.**
+
+### 🎯T35 — Build environment integration
+`den init` exports LIBRARY_PATH, CPATH, PKG_CONFIG_PATH,
+CMAKE_PREFIX_PATH, and MANPATH pointing at the active environment.
+These swap when `den env use` switches environments. **Achieved.**
+
 ---
 
 ## Remaining for production quality
@@ -96,53 +117,13 @@ else is supervised directly by den.
 Xcode/CLT version detection, full Homebrew config parity.
 **Status**: partially achieved
 
-### 🎯T7 — Download caching
-Cache bottles in HOMEBREW_CACHE with resume. Currently re-downloads.
-**Status**: not started
-
 ### 🎯T4 — Cellar inspection improvements
 Show disk usage, which envs reference a keg, all-Cellar listing.
 **Status**: partially achieved
 
-### 🎯T14 — Info, search, and query commands
-`den info`, `den search`, `den deps --tree`.
-**Status**: not started
-
 ### 🎯T15 — Cleanup and maintenance
 `den cleanup` (remove old kegs), `den doctor` (system health).
-**Status**: not started
-
-### 🎯T13 — Background maintenance daemon
-
-A long-lived `den daemon` process focused on keeping packages
-current. This is den's heartbeat — it runs at login and handles
-everything that should happen without user intervention.
-
-**What it does:**
-- Periodically refreshes the formula index (configurable interval,
-  default every 6 hours)
-- Downloads new bottles for outdated packages into the cache
-- With `auto-upgrade` enabled, pours new versions into the Cellar
-  and updates the manifest during the maintenance window
-  (`den set upgrade-window 3:00-5:00`) or when idle
-- Notifies the user of available upgrades (e.g. via
-  `den status` or shell prompt integration)
-
-**Infrastructure:**
-- Same `den` binary in daemon mode (`den daemon run`)
-- PID file at `~/.den/daemon.pid`
-- Log at `~/.den/daemon.log`
-- Bootstrap: a single launchd plist (`den.daemon.plist`) starts
-  it at login. `den daemon install` creates the plist,
-  `den daemon uninstall` removes it.
-- `den daemon start`, `den daemon stop`, `den daemon status`
-
-**No socket API needed** — the daemon works independently. It
-writes state to the filesystem (index cache, pending upgrades
-list at `~/.den/pending.json`). The CLI reads that state. No
-IPC coordination required for this use case.
-
-**Status**: not started
+**Status**: partially achieved (cleanup works, doctor is stub)
 
 ### 🎯T34 — Daemon socket API
 
@@ -152,18 +133,6 @@ supervision) where the CLI needs to send commands to a running
 supervisor. Not needed for background maintenance alone.
 
 **Status**: not started (blocked by T33 need)
-
-### 🎯T33 — Built-in process supervisor
-
-Extends the daemon (requires T34 socket API) to manage service
-processes. The CLI sends start/stop/restart commands over the
-socket; the daemon owns the child processes.
-
-Phase 1: fork/exec, PID tracking, log capture, signal management.
-Phase 2: restart policies, health checks, graceful shutdown ordering.
-Phase 3: per-environment services, service groups, resource monitoring.
-
-**Status**: not started (blocked by T34)
 
 ---
 
@@ -543,27 +512,6 @@ Sent. (204 No Content)
 
 ---
 
-### 🎯T35 — Build environment integration
-
-`den init` exports the env vars that build systems need to find
-libraries, headers, and pkg-config files in the active environment:
-
-```sh
-LIBRARY_PATH="$DEN_HOME/envs/ROOT/lib:$LIBRARY_PATH"
-CPATH="$DEN_HOME/envs/ROOT/include:$CPATH"
-PKG_CONFIG_PATH="$DEN_HOME/envs/ROOT/lib/pkgconfig:$PKG_CONFIG_PATH"
-CMAKE_PREFIX_PATH="$DEN_HOME/envs/ROOT:$CMAKE_PREFIX_PATH"
-MANPATH="$DEN_HOME/envs/ROOT/share/man:$MANPATH"
-```
-
-These swap when `den env use` switches environments, same as PATH.
-`den --prefix <pkg>` returns the `opt/` path for a package
-(equivalent to `brew --prefix`).
-
-**Status**: not started
-
----
-
 ### 🎯T36 — Homebrew prefix compatibility layer
 
 For tools that hardcode `/opt/homebrew` paths, den can optionally
@@ -635,15 +583,20 @@ to den. The user runs one command and den takes over entirely.
 
 ### 🎯T5 — Tap management
 Third-party taps.
+**Status**: not started
 
 ### 🎯T11 — Source builds
 Delegate to Ruby via lazy-vendored Portable Ruby (T31).
+**Status**: not started
 
 ### 🎯T17 — Formula metadata parsing (third-party taps)
 Ruby DSL parsing for non-API taps. Uses lazy-vendored Ruby (T31).
+**Status**: not started
 
 ### 🎯T18 — Testing oracle
 Automated Homebrew-equivalence testing.
+**Status**: not started
 
 ### 🎯T19 — Performance
 Benchmarking against Homebrew.
+**Status**: not started

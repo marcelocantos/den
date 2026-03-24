@@ -31,9 +31,16 @@ den env show [path]          # show resolved packages
 den search <text>            # search 8000+ formulae
 den info <formula>           # package details
 den deps <formula> --tree    # dependency tree
+den list                     # list installed packages
+den outdated                 # list packages with available upgrades
+den update                   # fetch latest formula index
+den cleanup [formula...]     # remove old versions and cache files
+den autoremove               # remove unneeded dependencies
 den migrate                  # import from Homebrew
 den daemon status            # background maintenance status
+den config                   # show den configuration
 den set <key> <value>        # configure settings
+den settings                 # show all settings
 ```
 
 ## Environment variables

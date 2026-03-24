@@ -64,6 +64,9 @@ src/
 ├── tab/              # INSTALL_RECEIPT.json handling
 ├── daemon/           # Background upgrade service
 ├── config/           # Configuration, environment
+├── manifest/         # Manifest read/write, environment hierarchy resolution
+├── service/          # Service management (launchd plists)
+├── settings/         # Unified settings (config.json)
 ├── platform/         # OS/arch detection, Mach-O/ELF tools
 └── error.rs          # Error types
 ```
