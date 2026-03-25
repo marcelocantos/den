@@ -260,7 +260,7 @@ pub fn install_from_dmg(
                 copy_app(&found_path, &dest)?;
                 installed.push(dest);
             } else {
-                eprintln!("warning: app '{}' not found in DMG", app_name);
+                tracing::warn!("app '{}' not found in DMG", app_name);
             }
         } else {
             let dest = appdir.join(app_name);
@@ -321,7 +321,7 @@ pub fn install_from_zip(
             copy_app(&found, &dest)?;
             installed.push(dest);
         } else {
-            eprintln!("warning: app '{}' not found in ZIP", app_name);
+            tracing::warn!("app '{}' not found in ZIP", app_name);
         }
     }
 

@@ -15,6 +15,7 @@ pub mod keg;
 pub mod link;
 pub mod manifest;
 pub mod platform;
+#[cfg(target_os = "macos")]
 pub mod service;
 pub mod settings;
 pub mod tab;

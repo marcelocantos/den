@@ -31,7 +31,7 @@ pub fn materialise(den_home: &Path, cellar: &Path, env_path: &str) -> anyhow::Re
     for (name, version) in &resolved {
         let keg_path = cellar.join(name).join(version);
         if !keg_path.is_dir() {
-            eprintln!("warning: {name} {version} not in Cellar, skipping",);
+            tracing::warn!("{name} {version} not in Cellar, skipping");
             continue;
         }
         let created = link::link_keg(&keg_path, &env_dir, name)?;

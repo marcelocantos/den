@@ -53,19 +53,13 @@ pub fn read(den_home: &Path) -> Settings {
         Ok(s) => match serde_json::from_str(&s) {
             Ok(settings) => settings,
             Err(e) => {
-                eprintln!(
-                    "warning: failed to parse {}: {e}; using defaults",
-                    path.display()
-                );
+                tracing::warn!("failed to parse {}: {e}; using defaults", path.display());
                 Settings::default()
             }
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Settings::default(),
         Err(e) => {
-            eprintln!(
-                "warning: failed to read {}: {e}; using defaults",
-                path.display()
-            );
+            tracing::warn!("failed to read {}: {e}; using defaults", path.display());
             Settings::default()
         }
     }

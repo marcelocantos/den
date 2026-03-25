@@ -24,9 +24,18 @@ impl Config {
 
         let prefix = std::env::var("HOMEBREW_PREFIX")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| match arch {
-                Arch::Arm64 => PathBuf::from("/opt/homebrew"),
-                Arch::X86_64 => PathBuf::from("/usr/local"),
+            .unwrap_or_else(|_| {
+                #[cfg(target_os = "linux")]
+                {
+                    PathBuf::from("/home/linuxbrew/.linuxbrew")
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    match arch {
+                        Arch::Arm64 => PathBuf::from("/opt/homebrew"),
+                        Arch::X86_64 => PathBuf::from("/usr/local"),
+                    }
+                }
             });
 
         let cellar = std::env::var("HOMEBREW_CELLAR")
@@ -38,9 +47,15 @@ impl Config {
         let cache = std::env::var("HOMEBREW_CACHE")
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
-                dirs::home_dir()
-                    .unwrap_or_else(|| PathBuf::from("/tmp"))
-                    .join("Library/Caches/Homebrew")
+                let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
+                #[cfg(target_os = "linux")]
+                {
+                    home.join(".cache/Homebrew")
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    home.join("Library/Caches/Homebrew")
+                }
             });
 
         let taps = prefix.join("Library/Taps");

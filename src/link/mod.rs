@@ -50,7 +50,7 @@ fn link_tree(src_dir: &Path, dst_dir: &Path, created: &mut Vec<PathBuf>) -> anyh
         let file_name = entry.file_name();
         let dst_path = dst_dir.join(&file_name);
 
-        if src_path.is_dir() {
+        if src_path.symlink_metadata()?.file_type().is_dir() {
             link_tree(&src_path, &dst_path, created)?;
         } else {
             // Remove existing symlink/file if present.

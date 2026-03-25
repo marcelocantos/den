@@ -31,7 +31,7 @@ impl FormulaIndex {
             match parse_index(&data) {
                 Ok(index) => return Ok(index),
                 Err(e) => {
-                    eprintln!("warning: cached formula index is corrupt, re-fetching: {e}");
+                    tracing::warn!("cached formula index is corrupt, re-fetching: {e}");
                 }
             }
         }
@@ -118,13 +118,13 @@ fn parse_index(data: &[u8]) -> anyhow::Result<FormulaIndex> {
             }
             Err(e) => {
                 skipped += 1;
-                eprintln!("warning: skipping formula entry: {e}");
+                tracing::warn!("skipping formula entry: {e}");
             }
         }
     }
 
     if skipped > 0 {
-        eprintln!("warning: skipped {skipped} formula entries due to parse errors");
+        tracing::warn!("skipped {skipped} formula entries due to parse errors");
     }
 
     Ok(FormulaIndex { formulas: map })
