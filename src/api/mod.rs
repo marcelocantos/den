@@ -65,6 +65,11 @@ impl FormulaIndex {
         self.formulas.len()
     }
 
+    /// Returns true if the index contains no formulae.
+    pub fn is_empty(&self) -> bool {
+        self.formulas.is_empty()
+    }
+
     /// Iterate over all formulae.
     pub fn iter(&self) -> impl Iterator<Item = (&String, &FormulaInfo)> {
         self.formulas.iter()
@@ -78,9 +83,7 @@ fn index_cache_path(cache_dir: &Path) -> PathBuf {
 fn read_cached_index(path: &Path) -> Option<Vec<u8>> {
     let metadata = std::fs::metadata(path).ok()?;
     let modified = metadata.modified().ok()?;
-    let age = std::time::SystemTime::now()
-        .duration_since(modified)
-        .ok()?;
+    let age = std::time::SystemTime::now().duration_since(modified).ok()?;
 
     if age > INDEX_MAX_AGE {
         return None;
@@ -92,15 +95,12 @@ fn read_cached_index(path: &Path) -> Option<Vec<u8>> {
 async fn fetch_index(client: &Client) -> anyhow::Result<Vec<u8>> {
     let response = client
         .get(FORMULA_INDEX_URL)
-        .header("User-Agent", "den/0.1.0")
+        .header("User-Agent", concat!("den/", env!("CARGO_PKG_VERSION")))
         .send()
         .await?;
 
     if !response.status().is_success() {
-        anyhow::bail!(
-            "failed to fetch formula index (HTTP {})",
-            response.status()
-        );
+        anyhow::bail!("failed to fetch formula index (HTTP {})", response.status());
     }
 
     Ok(response.bytes().await?.to_vec())
@@ -135,10 +135,9 @@ fn validate_formula_name(name: &str) -> anyhow::Result<()> {
     if name.is_empty() {
         anyhow::bail!("formula name is empty");
     }
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '@' || c == '+')
-    {
+    if !name.chars().all(|c| {
+        c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '@' || c == '+'
+    }) {
         anyhow::bail!("invalid formula name: {name}");
     }
     Ok(())
@@ -152,16 +151,12 @@ pub async fn fetch_formula(client: &Client, name: &str) -> anyhow::Result<Formul
     let url = format!("{FORMULA_API_BASE}/{name}.json");
     let response = client
         .get(&url)
-        .header("User-Agent", "den/0.1.0")
+        .header("User-Agent", concat!("den/", env!("CARGO_PKG_VERSION")))
         .send()
         .await?;
 
     if !response.status().is_success() {
-        anyhow::bail!(
-            "formula '{}' not found (HTTP {})",
-            name,
-            response.status()
-        );
+        anyhow::bail!("formula '{}' not found (HTTP {})", name, response.status());
     }
 
     let info: FormulaInfo = response.json().await?;

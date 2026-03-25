@@ -104,11 +104,7 @@ pub fn bottle_tag_candidates(arch: Arch, macos: &MacOsVersion) -> Vec<String> {
 }
 
 /// Pick the best available bottle tag from a set of available tags.
-pub fn best_bottle_tag(
-    arch: Arch,
-    macos: &MacOsVersion,
-    available: &[String],
-) -> Option<String> {
+pub fn best_bottle_tag(arch: Arch, macos: &MacOsVersion, available: &[String]) -> Option<String> {
     let candidates = bottle_tag_candidates(arch, macos);
     candidates.into_iter().find(|tag| available.contains(tag))
 }

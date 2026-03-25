@@ -10,10 +10,7 @@ use crate::formula::FormulaInfo;
 /// Resolve all transitive runtime dependencies for a formula.
 /// Returns formulae in install order (deps before dependents).
 /// Uses the local index — no network calls.
-pub fn resolve_install_order(
-    index: &FormulaIndex,
-    name: &str,
-) -> anyhow::Result<Vec<FormulaInfo>> {
+pub fn resolve_install_order(index: &FormulaIndex, name: &str) -> anyhow::Result<Vec<FormulaInfo>> {
     let mut visited = HashSet::new();
     let mut order = Vec::new();
     resolve_recursive(index, name, &mut visited, &mut order)?;
@@ -46,10 +43,7 @@ fn resolve_recursive(
 }
 
 /// Check which packages from a resolved list still need to be installed.
-pub fn filter_missing<'a>(
-    formulas: &'a [FormulaInfo],
-    cellar: &Path,
-) -> Vec<&'a FormulaInfo> {
+pub fn filter_missing<'a>(formulas: &'a [FormulaInfo], cellar: &Path) -> Vec<&'a FormulaInfo> {
     formulas
         .iter()
         .filter(|info| {

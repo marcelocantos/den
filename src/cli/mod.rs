@@ -3,14 +3,20 @@
 
 use clap::{Parser, Subcommand};
 
-use crate::config::Config;
 use crate::api::FormulaIndex;
-use crate::{bottle, cask, daemon, deps, env, formula, keg, link, manifest, platform, service, settings, tab};
+use crate::config::Config;
+use crate::{
+    bottle, cask, daemon, deps, env, formula, keg, link, manifest, platform, service, settings, tab,
+};
 
 const AGENT_GUIDE: &str = include_str!("../../agents-guide.md");
 
 #[derive(Parser)]
-#[command(name = "den", version, about = "A universal development environment manager")]
+#[command(
+    name = "den",
+    version,
+    about = "A universal development environment manager"
+)]
 pub struct Cli {
     /// Print help text and agent guide
     #[arg(long)]
@@ -232,10 +238,7 @@ impl Cli {
                     println!("den {}", env!("CARGO_PKG_VERSION"));
                     println!("A universal development environment manager");
                     println!();
-                    println!(
-                        "Homebrew detected at {}.",
-                        config.prefix.display()
-                    );
+                    println!("Homebrew detected at {}.", config.prefix.display());
                     print!("Would you like to import your Homebrew packages? [Y/n] ");
                     use std::io::Write;
                     std::io::stdout().flush()?;
@@ -328,12 +331,8 @@ impl Cli {
                 let index = FormulaIndex::load(&client, &cache_dir).await?;
                 show_outdated(&config, &index, &active)
             }
-            Some(Command::Migrate) => {
-                migrate_cellar(&config)
-            }
-            Some(Command::Daemon { command }) => {
-                run_daemon_command(&config, command).await
-            }
+            Some(Command::Migrate) => migrate_cellar(&config),
+            Some(Command::Daemon { command }) => run_daemon_command(&config, command).await,
             Some(Command::List { names }) => list_packages(&config, &names),
             Some(Command::Use { name }) => use_version(&config, &name),
             Some(Command::Init { shell }) => {
@@ -359,16 +358,12 @@ impl Cli {
                 let index = FormulaIndex::load(&client, &cache_dir).await?;
                 show_deps(&index, &name, tree)
             }
-            Some(Command::Cleanup) => {
-                cleanup(&config)
-            }
+            Some(Command::Cleanup) => cleanup(&config),
             Some(Command::Autoremove) => {
                 let active = env::active_env_path(&config.den_home);
                 autoremove(&config, &active)
             }
-            Some(Command::Services { command }) => {
-                run_services_command(&config, command)
-            }
+            Some(Command::Services { command }) => run_services_command(&config, command),
             Some(Command::Set { key, value }) => {
                 settings::set(&config.den_home, &key, &value)?;
                 println!("{key} = {value}");
@@ -406,20 +401,12 @@ fn run_env_command(config: &Config, command: Option<EnvCommand>) -> anyhow::Resu
             let envs = env::list_envs(&config.den_home)?;
             if envs.is_empty() {
                 // Ensure root exists.
-                manifest::write_manifest(
-                    &config.den_home,
-                    "/",
-                    &manifest::Manifest::default(),
-                )?;
+                manifest::write_manifest(&config.den_home, "/", &manifest::Manifest::default())?;
                 println!("/ (active)");
             } else {
                 let active = env::active_env_path(&config.den_home);
                 for env_path in &envs {
-                    let marker = if *env_path == active {
-                        " (active)"
-                    } else {
-                        ""
-                    };
+                    let marker = if *env_path == active { " (active)" } else { "" };
                     // Show inheritance.
                     let parent_info = manifest::parent_path(env_path)
                         .map(|p| format!(" (from {p})"))
@@ -434,29 +421,24 @@ fn run_env_command(config: &Config, command: Option<EnvCommand>) -> anyhow::Resu
 
             // Ensure parent exists (except for root).
             if let Some(parent) = manifest::parent_path(&env_path)
-                && !manifest::manifest_exists(&config.den_home, &parent) {
-                    anyhow::bail!(
-                        "parent environment '{}' does not exist. Create it first.",
-                        parent
-                    );
-                }
+                && !manifest::manifest_exists(&config.den_home, &parent)
+            {
+                anyhow::bail!(
+                    "parent environment '{}' does not exist. Create it first.",
+                    parent
+                );
+            }
 
             if manifest::manifest_exists(&config.den_home, &env_path) {
                 anyhow::bail!("environment '{}' already exists", env_path);
             }
 
-            manifest::write_manifest(
-                &config.den_home,
-                &env_path,
-                &manifest::Manifest::default(),
-            )?;
+            manifest::write_manifest(&config.den_home, &env_path, &manifest::Manifest::default())?;
 
             // Materialise (inherits from parent).
             let links = env::materialise(&config.den_home, &config.cellar, &env_path)?;
             let slug = manifest::env_slug(&env_path);
-            println!(
-                "Created environment '{env_path}' ({links} symlinks, dir: {slug})"
-            );
+            println!("Created environment '{env_path}' ({links} symlinks, dir: {slug})");
             Ok(())
         }
         Some(EnvCommand::Use { path }) => {
@@ -477,7 +459,8 @@ fn run_env_command(config: &Config, command: Option<EnvCommand>) -> anyhow::Resu
         }
         Some(EnvCommand::Show { path }) => {
             let env_path = path
-                .map(|p| normalise_env_path(&p)).transpose()?
+                .map(|p| normalise_env_path(&p))
+                .transpose()?
                 .unwrap_or_else(|| env::active_env_path(&config.den_home));
 
             let resolved = manifest::resolve(&config.den_home, &env_path)?;
@@ -530,7 +513,8 @@ fn run_env_command(config: &Config, command: Option<EnvCommand>) -> anyhow::Resu
         }
         Some(EnvCommand::Freeze { path }) => {
             let env_path = path
-                .map(|p| normalise_env_path(&p)).transpose()?
+                .map(|p| normalise_env_path(&p))
+                .transpose()?
                 .unwrap_or_else(|| env::active_env_path(&config.den_home));
 
             let resolved = manifest::resolve(&config.den_home, &env_path)?;
@@ -547,9 +531,10 @@ fn find_source_env(config: &Config, env_path: &str, package: &str) -> String {
     // Walk from leaf to root to find the most specific provider.
     for ancestor in chain.iter().rev() {
         if let Ok(m) = manifest::read_manifest(&config.den_home, ancestor)
-            && m.packages.contains_key(package) {
-                return ancestor.clone();
-            }
+            && m.packages.contains_key(package)
+        {
+            return ancestor.clone();
+        }
     }
     env_path.to_string()
 }
@@ -612,10 +597,11 @@ async fn install_formula(
     // Show caveats for the main package.
     let main_info = all.iter().find(|f| f.name == name);
     if let Some(info) = main_info
-        && let Some(ref caveats) = info.caveats {
-            println!("==> Caveats");
-            println!("{caveats}");
-        }
+        && let Some(ref caveats) = info.caveats
+    {
+        println!("==> Caveats");
+        println!("{caveats}");
+    }
 
     println!("==> {name} installed to '{active_env}'.");
     Ok(())
@@ -639,15 +625,14 @@ async fn pour_bottle(
         .ok_or_else(|| anyhow::anyhow!("no bottle available for {}", info.name))?;
 
     let available_tags: Vec<String> = bottle_spec.files.keys().cloned().collect();
-    let tag = platform::best_bottle_tag(config.arch, macos, &available_tags)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "no bottle available for {} on {} {}",
-                info.name,
-                config.arch,
-                macos
-            )
-        })?;
+    let tag = platform::best_bottle_tag(config.arch, macos, &available_tags).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no bottle available for {} on {} {}",
+            info.name,
+            config.arch,
+            macos
+        )
+    })?;
 
     let bottle_file = &bottle_spec.files[&tag];
     let ghcr_path = formula::ghcr_path(&info.name);
@@ -663,11 +648,7 @@ async fn pour_bottle(
     Ok(())
 }
 
-fn uninstall_package(
-    config: &Config,
-    active_env: &str,
-    name: &str,
-) -> anyhow::Result<()> {
+fn uninstall_package(config: &Config, active_env: &str, name: &str) -> anyhow::Result<()> {
     let mut m = manifest::read_manifest(&config.den_home, active_env)?;
 
     if !m.packages.contains_key(name) {
@@ -734,10 +715,7 @@ fn migrate_cellar(config: &Config) -> anyhow::Result<()> {
 
     manifest::write_manifest(&config.den_home, "/", &m)?;
 
-    println!(
-        "  {} packages added, {} already tracked",
-        added, skipped
-    );
+    println!("  {} packages added, {} already tracked", added, skipped);
 
     // Materialise.
     println!("==> Materialising root environment...");
@@ -748,11 +726,7 @@ fn migrate_cellar(config: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn show_outdated(
-    config: &Config,
-    index: &FormulaIndex,
-    active_env: &str,
-) -> anyhow::Result<()> {
+fn show_outdated(config: &Config, index: &FormulaIndex, active_env: &str) -> anyhow::Result<()> {
     let resolved = manifest::resolve(&config.den_home, active_env)?;
     if resolved.is_empty() {
         println!("No packages to check.");
@@ -792,7 +766,10 @@ async fn upgrade_packages(
     let resolved = manifest::resolve(&config.den_home, active_env)?;
 
     let to_check: Vec<_> = if names.is_empty() {
-        resolved.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+        resolved
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
     } else {
         resolved
             .iter()
@@ -819,7 +796,10 @@ async fn upgrade_packages(
             continue;
         }
 
-        println!("==> Upgrading {} {} -> {}...", name, installed_version, latest);
+        println!(
+            "==> Upgrading {} {} -> {}...",
+            name, installed_version, latest
+        );
 
         let all = deps::resolve_install_order(index, name)?;
         for dep_info in &all {
@@ -874,10 +854,7 @@ async fn install_cask_cmd(
         );
     }
 
-    println!(
-        "==> Downloading {} {}...",
-        info.token, info.version
-    );
+    println!("==> Downloading {} {}...", info.token, info.version);
     let (data, ext) = cask::download_cask(client, &info).await?;
     println!("  {} bytes downloaded", data.len());
 
@@ -1010,9 +987,7 @@ fn use_version(config: &Config, name: &str) -> anyhow::Result<()> {
 
     let versions = keg::find_versions(&config.cellar, formula_name)?;
     if versions.is_empty() {
-        anyhow::bail!(
-            "{formula_name} is not installed. Run `den install {formula_name}` first."
-        );
+        anyhow::bail!("{formula_name} is not installed. Run `den install {formula_name}` first.");
     }
 
     let keg = if let Some(req_ver) = requested_version {
@@ -1020,8 +995,7 @@ fn use_version(config: &Config, name: &str) -> anyhow::Result<()> {
             .iter()
             .find(|k| k.version == req_ver)
             .ok_or_else(|| {
-                let available: Vec<_> =
-                    versions.iter().map(|k| k.version.as_str()).collect();
+                let available: Vec<_> = versions.iter().map(|k| k.version.as_str()).collect();
                 anyhow::anyhow!(
                     "{formula_name} version {req_ver} not found. Available: {}",
                     available.join(", ")
@@ -1049,11 +1023,7 @@ fn use_version(config: &Config, name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn show_info(
-    config: &Config,
-    index: &FormulaIndex,
-    name: &str,
-) -> anyhow::Result<()> {
+fn show_info(config: &Config, index: &FormulaIndex, name: &str) -> anyhow::Result<()> {
     let info = index
         .get(name)
         .ok_or_else(|| anyhow::anyhow!("formula '{}' not found", name))?;
@@ -1088,10 +1058,7 @@ fn show_info(
     Ok(())
 }
 
-fn search_packages(
-    index: &FormulaIndex,
-    text: &str,
-) -> anyhow::Result<()> {
+fn search_packages(index: &FormulaIndex, text: &str) -> anyhow::Result<()> {
     let query = text.to_lowercase();
 
     let mut matches: Vec<_> = index
@@ -1113,7 +1080,8 @@ fn search_packages(
         let b_exact = b.name.to_lowercase() == query;
         let a_name = a.name.to_lowercase().contains(&query);
         let b_name = b.name.to_lowercase().contains(&query);
-        b_exact.cmp(&a_exact)
+        b_exact
+            .cmp(&a_exact)
             .then(b_name.cmp(&a_name))
             .then(a.name.cmp(&b.name))
     });
@@ -1130,11 +1098,7 @@ fn search_packages(
     Ok(())
 }
 
-fn show_deps(
-    index: &FormulaIndex,
-    name: &str,
-    tree: bool,
-) -> anyhow::Result<()> {
+fn show_deps(index: &FormulaIndex, name: &str, tree: bool) -> anyhow::Result<()> {
     let info = index
         .get(name)
         .ok_or_else(|| anyhow::anyhow!("formula '{}' not found", name))?;
@@ -1160,7 +1124,10 @@ fn print_dep_tree(
 ) {
     let indent = "  ".repeat(depth);
     let circular = visited.contains(name);
-    println!("{indent}{name}{}", if circular { " (circular)" } else { "" });
+    println!(
+        "{indent}{name}{}",
+        if circular { " (circular)" } else { "" }
+    );
 
     if circular {
         return;
@@ -1189,9 +1156,7 @@ fn cleanup(config: &Config) -> anyhow::Result<()> {
 
 async fn run_daemon_command(config: &Config, command: DaemonCommand) -> anyhow::Result<()> {
     match command {
-        DaemonCommand::Run => {
-            daemon::run(config).await
-        }
+        DaemonCommand::Run => daemon::run(config).await,
         DaemonCommand::Stop => {
             let pid_path = config.den_home.join("daemon.pid");
             let pid_str = std::fs::read_to_string(&pid_path)
@@ -1207,8 +1172,8 @@ async fn run_daemon_command(config: &Config, command: DaemonCommand) -> anyhow::
         }
         DaemonCommand::Status => {
             if daemon::is_running(&config.den_home) {
-                let pid_str = std::fs::read_to_string(config.den_home.join("daemon.pid"))
-                    .unwrap_or_default();
+                let pid_str =
+                    std::fs::read_to_string(config.den_home.join("daemon.pid")).unwrap_or_default();
                 println!("Daemon: running (PID {})", pid_str.trim());
             } else {
                 println!("Daemon: not running");
@@ -1232,7 +1197,10 @@ async fn run_daemon_command(config: &Config, command: DaemonCommand) -> anyhow::
             }
 
             let s = settings::read(&config.den_home);
-            println!("Auto-upgrade: {}", if s.daemon.auto_upgrade { "on" } else { "off" });
+            println!(
+                "Auto-upgrade: {}",
+                if s.daemon.auto_upgrade { "on" } else { "off" }
+            );
             if let Some(ref window) = s.daemon.upgrade_window {
                 println!("Upgrade window: {window}");
             }

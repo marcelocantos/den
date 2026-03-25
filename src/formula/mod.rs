@@ -36,11 +36,7 @@ pub struct FormulaInfo {
 impl FormulaInfo {
     /// The package version string including revision suffix (e.g. "3.12.13_2").
     pub fn pkg_version(&self) -> String {
-        let stable = self
-            .versions
-            .stable
-            .as_deref()
-            .unwrap_or("0");
+        let stable = self.versions.stable.as_deref().unwrap_or("0");
         if self.revision > 0 {
             format!("{stable}_{}", self.revision)
         } else {

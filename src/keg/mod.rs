@@ -83,10 +83,7 @@ pub fn list_installed(cellar: &Path) -> anyhow::Result<Vec<Keg>> {
             continue;
         }
 
-        let formula_name = rack_entry
-            .file_name()
-            .to_string_lossy()
-            .into_owned();
+        let formula_name = rack_entry.file_name().to_string_lossy().into_owned();
 
         for keg_entry in std::fs::read_dir(&rack_path)? {
             let keg_entry = keg_entry?;
@@ -95,16 +92,17 @@ pub fn list_installed(cellar: &Path) -> anyhow::Result<Vec<Keg>> {
                 continue;
             }
 
-            let version = keg_entry
-                .file_name()
-                .to_string_lossy()
-                .into_owned();
+            let version = keg_entry.file_name().to_string_lossy().into_owned();
 
             kegs.push(Keg::new(formula_name.clone(), version, keg_path));
         }
     }
 
-    kegs.sort_by(|a, b| a.name.cmp(&b.name).then(compare_versions(&a.version, &b.version)));
+    kegs.sort_by(|a, b| {
+        a.name
+            .cmp(&b.name)
+            .then(compare_versions(&a.version, &b.version))
+    });
     Ok(kegs)
 }
 

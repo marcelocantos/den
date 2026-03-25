@@ -80,7 +80,9 @@ pub fn start_service(service: &Service) -> anyhow::Result<()> {
         .join("Library/LaunchAgents");
     std::fs::create_dir_all(&launch_agents)?;
 
-    let file_name = service.plist_path.file_name()
+    let file_name = service
+        .plist_path
+        .file_name()
         .ok_or_else(|| anyhow::anyhow!("plist path has no filename"))?;
     let dest = launch_agents.join(file_name);
     std::fs::copy(&service.plist_path, &dest)?;
@@ -103,7 +105,9 @@ pub fn stop_service(service: &Service) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))?
         .join("Library/LaunchAgents");
 
-    let file_name = service.plist_path.file_name()
+    let file_name = service
+        .plist_path
+        .file_name()
         .ok_or_else(|| anyhow::anyhow!("plist path has no filename"))?;
     let dest = launch_agents.join(file_name);
 

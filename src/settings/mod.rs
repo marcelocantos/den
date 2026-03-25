@@ -84,8 +84,7 @@ pub fn write(den_home: &Path, settings: &Settings) -> anyhow::Result<()> {
 pub fn get(den_home: &Path, key: &str) -> anyhow::Result<String> {
     let s = read(den_home);
     let json = serde_json::to_value(&s)?;
-    let value = resolve_key(&json, key)
-        .ok_or_else(|| anyhow::anyhow!("unknown setting: {key}"))?;
+    let value = resolve_key(&json, key).ok_or_else(|| anyhow::anyhow!("unknown setting: {key}"))?;
     Ok(format_value(value))
 }
 
@@ -122,7 +121,8 @@ fn set_key(json: &mut serde_json::Value, key: &str, value: &str) -> anyhow::Resu
             .ok_or_else(|| anyhow::anyhow!("unknown setting group: {part}"))?;
     }
 
-    let last = parts.last()
+    let last = parts
+        .last()
         .ok_or_else(|| anyhow::anyhow!("empty setting key"))?;
     let obj = current
         .as_object_mut()
@@ -135,11 +135,11 @@ fn set_key(json: &mut serde_json::Value, key: &str, value: &str) -> anyhow::Resu
     // Infer type from existing value.
     let existing = &obj[*last];
     let new_value = match existing {
-        serde_json::Value::Bool(_) => {
-            serde_json::Value::Bool(value.parse().map_err(|_| {
-                anyhow::anyhow!("expected true or false for {key}")
-            })?)
-        }
+        serde_json::Value::Bool(_) => serde_json::Value::Bool(
+            value
+                .parse()
+                .map_err(|_| anyhow::anyhow!("expected true or false for {key}"))?,
+        ),
         serde_json::Value::Number(_) => {
             if let Ok(n) = value.parse::<u64>() {
                 serde_json::Value::Number(n.into())

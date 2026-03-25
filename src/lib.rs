@@ -1,0 +1,20 @@
+// Copyright 2026 Marcelo Cantos
+// SPDX-License-Identifier: Apache-2.0
+
+pub mod api;
+pub mod bottle;
+pub mod cask;
+pub mod cli;
+pub mod config;
+pub mod daemon;
+pub mod deps;
+pub mod env;
+pub mod error;
+pub mod formula;
+pub mod keg;
+pub mod link;
+pub mod manifest;
+pub mod platform;
+pub mod service;
+pub mod settings;
+pub mod tab;

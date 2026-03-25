@@ -113,23 +113,23 @@ fn validate_tar_paths(data: &[u8]) -> Result<(), String> {
         if entry.header().entry_type().is_symlink()
             && let Some(link_target) = entry.link_name().map_err(|e| e.to_string())?
         {
-                if link_target.as_ref().is_absolute() {
-                    return Err(format!(
-                        "bottle contains absolute symlink target: {} -> {}",
-                        path.display(),
-                        link_target.display()
-                    ));
-                }
-                if link_target
-                    .components()
-                    .any(|c| matches!(c, std::path::Component::ParentDir))
-                {
-                    return Err(format!(
-                        "bottle contains symlink with path traversal: {} -> {}",
-                        path.display(),
-                        link_target.display()
-                    ));
-                }
+            if link_target.as_ref().is_absolute() {
+                return Err(format!(
+                    "bottle contains absolute symlink target: {} -> {}",
+                    path.display(),
+                    link_target.display()
+                ));
+            }
+            if link_target
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+            {
+                return Err(format!(
+                    "bottle contains symlink with path traversal: {} -> {}",
+                    path.display(),
+                    link_target.display()
+                ));
+            }
         }
     }
     Ok(())
@@ -149,8 +149,7 @@ fn create_malicious_tarball() -> Vec<u8> {
         header.set_entry_type(tar::EntryType::Regular);
         // Set the path by writing directly to the header bytes.
         let path_bytes = b"../../etc/evil";
-        header.as_gnu_mut().unwrap().name[..path_bytes.len()]
-            .copy_from_slice(path_bytes);
+        header.as_gnu_mut().unwrap().name[..path_bytes.len()].copy_from_slice(path_bytes);
         header.set_cksum();
         tar.append(&header, &data[..]).unwrap();
 
@@ -172,12 +171,10 @@ fn create_malicious_symlink_tarball() -> Vec<u8> {
         header.set_entry_type(tar::EntryType::Symlink);
         // Set a normal entry path.
         let path_bytes = b"tree/2.3.1/lib/evil";
-        header.as_gnu_mut().unwrap().name[..path_bytes.len()]
-            .copy_from_slice(path_bytes);
+        header.as_gnu_mut().unwrap().name[..path_bytes.len()].copy_from_slice(path_bytes);
         // Set a traversal symlink target.
         let target_bytes = b"../../../../etc/passwd";
-        header.as_gnu_mut().unwrap().linkname[..target_bytes.len()]
-            .copy_from_slice(target_bytes);
+        header.as_gnu_mut().unwrap().linkname[..target_bytes.len()].copy_from_slice(target_bytes);
         header.set_cksum();
         tar.append(&header, &[][..]).unwrap();
 
@@ -198,8 +195,7 @@ fn create_absolute_path_tarball() -> Vec<u8> {
         header.set_mode(0o644);
         header.set_entry_type(tar::EntryType::Regular);
         let path_bytes = b"/etc/cron.d/evil";
-        header.as_gnu_mut().unwrap().name[..path_bytes.len()]
-            .copy_from_slice(path_bytes);
+        header.as_gnu_mut().unwrap().name[..path_bytes.len()].copy_from_slice(path_bytes);
         header.set_cksum();
         tar.append(&header, &data[..]).unwrap();
 
@@ -219,11 +215,9 @@ fn create_absolute_symlink_tarball() -> Vec<u8> {
         header.set_mode(0o777);
         header.set_entry_type(tar::EntryType::Symlink);
         let path_bytes = b"tree/2.3.1/lib/evil";
-        header.as_gnu_mut().unwrap().name[..path_bytes.len()]
-            .copy_from_slice(path_bytes);
+        header.as_gnu_mut().unwrap().name[..path_bytes.len()].copy_from_slice(path_bytes);
         let target_bytes = b"/etc/passwd";
-        header.as_gnu_mut().unwrap().linkname[..target_bytes.len()]
-            .copy_from_slice(target_bytes);
+        header.as_gnu_mut().unwrap().linkname[..target_bytes.len()].copy_from_slice(target_bytes);
         header.set_cksum();
         tar.append(&header, &[][..]).unwrap();
 
@@ -243,11 +237,9 @@ fn create_hardlink_tarball() -> Vec<u8> {
         header.set_mode(0o644);
         header.set_entry_type(tar::EntryType::Link);
         let path_bytes = b"tree/2.3.1/bin/evil";
-        header.as_gnu_mut().unwrap().name[..path_bytes.len()]
-            .copy_from_slice(path_bytes);
+        header.as_gnu_mut().unwrap().name[..path_bytes.len()].copy_from_slice(path_bytes);
         let target_bytes = b"/etc/shadow";
-        header.as_gnu_mut().unwrap().linkname[..target_bytes.len()]
-            .copy_from_slice(target_bytes);
+        header.as_gnu_mut().unwrap().linkname[..target_bytes.len()].copy_from_slice(target_bytes);
         header.set_cksum();
         tar.append(&header, &[][..]).unwrap();
 

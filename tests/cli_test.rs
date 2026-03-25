@@ -21,7 +21,9 @@ fn help_flag() {
         .arg("--help")
         .assert()
         .success()
-        .stdout(predicate::str::contains("universal development environment manager"));
+        .stdout(predicate::str::contains(
+            "universal development environment manager",
+        ));
 }
 
 #[test]

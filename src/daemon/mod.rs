@@ -208,9 +208,7 @@ fn in_maintenance_window(window: &str) -> bool {
     };
 
     // Get current local time from the system.
-    let output = std::process::Command::new("date")
-        .args(["+%H:%M"])
-        .output();
+    let output = std::process::Command::new("date").args(["+%H:%M"]).output();
 
     let (cur_h, cur_m) = match output {
         Ok(out) => {
@@ -244,7 +242,10 @@ pub async fn run(config: &Config) -> anyhow::Result<()> {
 
     let settings = crate::settings::read(&config.den_home);
     let interval = Duration::from_secs(
-        settings.daemon.interval_secs.unwrap_or(DEFAULT_INTERVAL.as_secs()),
+        settings
+            .daemon
+            .interval_secs
+            .unwrap_or(DEFAULT_INTERVAL.as_secs()),
     );
 
     let client = Client::new();
@@ -333,40 +334,40 @@ async fn tick(client: &Client, config: &Config) -> anyhow::Result<()> {
 
             // Download bottle into cache (but don't pour yet).
             if let Some(ref bottle_spec) = info.bottle
-                && let Some(ref stable) = bottle_spec.stable {
-                    let macos = match config.macos_version.as_ref() {
-                        Some(v) => v,
-                        None => continue,
-                    };
-                    let tags: Vec<String> = stable.files.keys().cloned().collect();
-                    if let Some(tag) = platform::best_bottle_tag(config.arch, macos, &tags) {
-                        let bottle_file = &stable.files[&tag];
-                        let ghcr_path = formula::ghcr_path(&info.name);
-                        let bottle_cache = config.den_home.join("cache").join("bottles");
+                && let Some(ref stable) = bottle_spec.stable
+            {
+                let macos = match config.macos_version.as_ref() {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let tags: Vec<String> = stable.files.keys().cloned().collect();
+                if let Some(tag) = platform::best_bottle_tag(config.arch, macos, &tags) {
+                    let bottle_file = &stable.files[&tag];
+                    let ghcr_path = formula::ghcr_path(&info.name);
+                    let bottle_cache = config.den_home.join("cache").join("bottles");
 
-                        match bottle::fetch_bottle(client, bottle_file, &ghcr_path, &bottle_cache)
-                            .await
-                        {
-                            Ok(data) => {
-                                log(
-                                    &config.den_home,
-                                    &format!(
-                                        "cached {} {} ({} bytes)",
-                                        info.name,
-                                        upgrade.available,
-                                        data.len()
-                                    ),
-                                );
-                            }
-                            Err(e) => {
-                                log(
-                                    &config.den_home,
-                                    &format!("failed to cache {}: {e}", info.name),
-                                );
-                            }
+                    match bottle::fetch_bottle(client, bottle_file, &ghcr_path, &bottle_cache).await
+                    {
+                        Ok(data) => {
+                            log(
+                                &config.den_home,
+                                &format!(
+                                    "cached {} {} ({} bytes)",
+                                    info.name,
+                                    upgrade.available,
+                                    data.len()
+                                ),
+                            );
+                        }
+                        Err(e) => {
+                            log(
+                                &config.den_home,
+                                &format!("failed to cache {}: {e}", info.name),
+                            );
                         }
                     }
                 }
+            }
         }
     }
 
@@ -389,7 +390,10 @@ async fn tick(client: &Client, config: &Config) -> anyhow::Result<()> {
                 log(&config.den_home, "upgrades applied");
             }
         } else {
-            log(&config.den_home, "outside maintenance window, skipping upgrades");
+            log(
+                &config.den_home,
+                "outside maintenance window, skipping upgrades",
+            );
         }
     }
 

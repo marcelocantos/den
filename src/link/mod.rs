@@ -84,10 +84,11 @@ pub fn unlink_keg(keg_path: &Path, env_path: &Path, formula_name: &str) -> anyho
     // Remove opt/ symlink if it points to this keg.
     let opt_link = env_path.join("opt").join(formula_name);
     if let Ok(target) = opt_link.read_link()
-        && target == keg_path {
-            std::fs::remove_file(&opt_link)?;
-            removed += 1;
-        }
+        && target == keg_path
+    {
+        std::fs::remove_file(&opt_link)?;
+        removed += 1;
+    }
 
     Ok(removed)
 }
@@ -111,10 +112,11 @@ fn unlink_tree(src_dir: &Path, dst_dir: &Path) -> anyhow::Result<u32> {
             // Remove empty directory.
             let _ = std::fs::remove_dir(&dst_path);
         } else if let Ok(target) = dst_path.read_link()
-            && target == src_path {
-                std::fs::remove_file(&dst_path)?;
-                removed += 1;
-            }
+            && target == src_path
+        {
+            std::fs::remove_file(&dst_path)?;
+            removed += 1;
+        }
     }
 
     Ok(removed)
@@ -136,7 +138,9 @@ pub fn record_linked_version(
 /// Read which version of a formula is linked in an environment.
 pub fn linked_version(env_path: &Path, formula_name: &str) -> Option<String> {
     let path = env_path.join(".den").join("linked").join(formula_name);
-    std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|s| s.trim().to_string())
 }
 
 /// Remove the linked version record for a formula.

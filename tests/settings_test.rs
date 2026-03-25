@@ -24,7 +24,9 @@ fn set_and_get_bool() {
         .env("DEN_HOME", den_home)
         .assert()
         .success()
-        .stdout(predicates::prelude::predicate::str::contains("\"auto_upgrade\": true"));
+        .stdout(predicates::prelude::predicate::str::contains(
+            "\"auto_upgrade\": true",
+        ));
 }
 
 #[test]

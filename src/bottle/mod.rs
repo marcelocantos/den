@@ -69,7 +69,7 @@ pub async fn download_bottle(
     );
     let token: GhcrToken = client
         .get(&token_url)
-        .header("User-Agent", "den/0.1.0")
+        .header("User-Agent", concat!("den/", env!("CARGO_PKG_VERSION")))
         .send()
         .await?
         .json()
@@ -82,7 +82,7 @@ pub async fn download_bottle(
         .build()?;
     let response = no_redirect_client
         .get(&bottle.url)
-        .header("User-Agent", "den/0.1.0")
+        .header("User-Agent", concat!("den/", env!("CARGO_PKG_VERSION")))
         .header("Authorization", format!("Bearer {}", token.token))
         .send()
         .await?;
@@ -92,14 +92,14 @@ pub async fn download_bottle(
     }
 
     // Reject excessively large downloads before buffering.
-    if let Some(len) = response.content_length() {
-        if len > MAX_DOWNLOAD_SIZE {
-            anyhow::bail!(
-                "bottle download too large ({} bytes, max {} bytes)",
-                len,
-                MAX_DOWNLOAD_SIZE
-            );
-        }
+    if let Some(len) = response.content_length()
+        && len > MAX_DOWNLOAD_SIZE
+    {
+        anyhow::bail!(
+            "bottle download too large ({} bytes, max {} bytes)",
+            len,
+            MAX_DOWNLOAD_SIZE
+        );
     }
 
     let bytes = response.bytes().await?.to_vec();
@@ -140,10 +140,7 @@ pub fn pour_bottle(bottle_data: &[u8], cellar: &Path) -> anyhow::Result<PathBuf>
         // Reject hardlink entries — they can reference files outside
         // the Cellar and bypass normal path checks.
         if entry.header().entry_type().is_hard_link() {
-            anyhow::bail!(
-                "bottle contains hardlink (rejected): {}",
-                path.display()
-            );
+            anyhow::bail!("bottle contains hardlink (rejected): {}", path.display());
         }
 
         // The bottle tarball contains paths like "tree/2.3.1/bin/tree".
@@ -162,10 +159,7 @@ pub fn pour_bottle(bottle_data: &[u8], cellar: &Path) -> anyhow::Result<PathBuf>
         // This catches absolute paths (Path::join discards the base
         // when the second path is absolute).
         if !dest.starts_with(cellar) {
-            anyhow::bail!(
-                "bottle entry escapes cellar: {}",
-                path.display()
-            );
+            anyhow::bail!("bottle entry escapes cellar: {}", path.display());
         }
 
         // Create parent directories.
@@ -218,10 +212,7 @@ pub fn pour_bottle(bottle_data: &[u8], cellar: &Path) -> anyhow::Result<PathBuf>
 /// Reject paths that are absolute or contain parent directory traversal.
 fn reject_unsafe_path(path: &Path, kind: &str) -> anyhow::Result<()> {
     if path.is_absolute() {
-        anyhow::bail!(
-            "bottle contains absolute {kind} path: {}",
-            path.display()
-        );
+        anyhow::bail!("bottle contains absolute {kind} path: {}", path.display());
     }
     if path
         .components()

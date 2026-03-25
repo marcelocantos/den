@@ -118,11 +118,7 @@ pub fn read_manifest(den_home: &Path, env_path: &str) -> anyhow::Result<Manifest
 }
 
 /// Write a manifest file, creating parent directories as needed.
-pub fn write_manifest(
-    den_home: &Path,
-    env_path: &str,
-    manifest: &Manifest,
-) -> anyhow::Result<()> {
+pub fn write_manifest(den_home: &Path, env_path: &str, manifest: &Manifest) -> anyhow::Result<()> {
     let path = manifest_file(den_home, env_path);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -166,11 +162,7 @@ pub fn list_all(den_home: &Path) -> anyhow::Result<Vec<String>> {
     Ok(paths)
 }
 
-fn collect_manifests(
-    base: &Path,
-    dir: &Path,
-    paths: &mut Vec<String>,
-) -> anyhow::Result<()> {
+fn collect_manifests(base: &Path, dir: &Path, paths: &mut Vec<String>) -> anyhow::Result<()> {
     if !dir.is_dir() {
         return Ok(());
     }
