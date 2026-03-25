@@ -279,7 +279,9 @@ impl Cli {
                     anyhow::bail!("no formula specified");
                 }
 
-                let client = reqwest::Client::new();
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(300))
+                    .build()?;
                 let active = env::active_env_path(&config.den_home);
 
                 if is_cask {
@@ -308,7 +310,9 @@ impl Cli {
                 Ok(())
             }
             Some(Command::Upgrade { names }) => {
-                let client = reqwest::Client::new();
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(300))
+                    .build()?;
                 let active = env::active_env_path(&config.den_home);
                 let cache_dir = config.den_home.join("cache");
                 println!("==> Loading formula index...");
@@ -316,7 +320,9 @@ impl Cli {
                 upgrade_packages(&client, &config, &index, &active, &names).await
             }
             Some(Command::Update) => {
-                let client = reqwest::Client::new();
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(300))
+                    .build()?;
                 let cache_dir = config.den_home.join("cache");
                 println!("==> Refreshing formula index...");
                 let index = FormulaIndex::refresh(&client, &cache_dir).await?;
@@ -324,7 +330,9 @@ impl Cli {
                 Ok(())
             }
             Some(Command::Outdated) => {
-                let client = reqwest::Client::new();
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(300))
+                    .build()?;
                 let active = env::active_env_path(&config.den_home);
                 let cache_dir = config.den_home.join("cache");
                 println!("==> Loading formula index...");
@@ -341,19 +349,25 @@ impl Cli {
             }
             Some(Command::Env { command }) => run_env_command(&config, command),
             Some(Command::Info { name }) => {
-                let client = reqwest::Client::new();
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(300))
+                    .build()?;
                 let cache_dir = config.den_home.join("cache");
                 let index = FormulaIndex::load(&client, &cache_dir).await?;
                 show_info(&config, &index, &name)
             }
             Some(Command::Search { text }) => {
-                let client = reqwest::Client::new();
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(300))
+                    .build()?;
                 let cache_dir = config.den_home.join("cache");
                 let index = FormulaIndex::load(&client, &cache_dir).await?;
                 search_packages(&index, &text)
             }
             Some(Command::Deps { name, tree }) => {
-                let client = reqwest::Client::new();
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(300))
+                    .build()?;
                 let cache_dir = config.den_home.join("cache");
                 let index = FormulaIndex::load(&client, &cache_dir).await?;
                 show_deps(&index, &name, tree)
@@ -546,6 +560,8 @@ async fn install_formula(
     active_env: &str,
     name: &str,
 ) -> anyhow::Result<()> {
+    crate::api::validate_formula_name(name)?;
+
     // Resolve full dependency tree from local index — no network calls.
     println!("==> Resolving dependencies for {name}...");
     let all = deps::resolve_install_order(index, name)?;
@@ -1024,6 +1040,7 @@ fn use_version(config: &Config, name: &str) -> anyhow::Result<()> {
 }
 
 fn show_info(config: &Config, index: &FormulaIndex, name: &str) -> anyhow::Result<()> {
+    crate::api::validate_formula_name(name)?;
     let info = index
         .get(name)
         .ok_or_else(|| anyhow::anyhow!("formula '{}' not found", name))?;
@@ -1158,10 +1175,22 @@ async fn run_daemon_command(config: &Config, command: DaemonCommand) -> anyhow::
     match command {
         DaemonCommand::Run => daemon::run(config).await,
         DaemonCommand::Stop => {
+            // Verify daemon is actually running via flock before signalling.
+            if !daemon::is_running(&config.den_home) {
+                // Clean up stale PID file if present.
+                let pid_path = config.den_home.join("daemon.pid");
+                let _ = std::fs::remove_file(&pid_path);
+                anyhow::bail!("daemon is not running");
+            }
+
             let pid_path = config.den_home.join("daemon.pid");
             let pid_str = std::fs::read_to_string(&pid_path)
                 .map_err(|_| anyhow::anyhow!("daemon is not running"))?;
             let pid: i32 = pid_str.trim().parse()?;
+
+            if pid <= 0 {
+                anyhow::bail!("invalid PID in daemon.pid: {pid}");
+            }
 
             let result = unsafe { libc::kill(pid, libc::SIGTERM) };
             if result != 0 {
@@ -1270,7 +1299,8 @@ fn normalise_env_path(path: &str) -> anyhow::Result<String> {
 }
 
 fn print_shell_init(config: &Config, shell: &str) {
-    let den_home = config.den_home.display();
+    // Shell-escape the path to prevent injection via DEN_HOME.
+    let den_home = config.den_home.display().to_string().replace('\'', "'\\''");
     let root_slug = manifest::env_slug("/");
     match shell {
         "zsh" | "bash" => {

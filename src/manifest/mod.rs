@@ -117,14 +117,17 @@ pub fn read_manifest(den_home: &Path, env_path: &str) -> anyhow::Result<Manifest
     Ok(manifest)
 }
 
-/// Write a manifest file, creating parent directories as needed.
+/// Write a manifest file atomically, creating parent directories as needed.
 pub fn write_manifest(den_home: &Path, env_path: &str, manifest: &Manifest) -> anyhow::Result<()> {
     let path = manifest_file(den_home, env_path);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let json = serde_json::to_string_pretty(manifest)?;
-    std::fs::write(path, json)?;
+    let parent = path.parent().unwrap_or(den_home);
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+    std::io::Write::write_all(&mut tmp, json.as_bytes())?;
+    tmp.persist(&path)?;
     Ok(())
 }
 

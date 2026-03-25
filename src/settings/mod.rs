@@ -71,11 +71,14 @@ pub fn read(den_home: &Path) -> Settings {
     }
 }
 
-/// Write settings.
+/// Write settings atomically via temp file + rename.
 pub fn write(den_home: &Path, settings: &Settings) -> anyhow::Result<()> {
     std::fs::create_dir_all(den_home)?;
     let json = serde_json::to_string_pretty(settings)?;
-    std::fs::write(config_path(den_home), json)?;
+    let path = config_path(den_home);
+    let mut tmp = tempfile::NamedTempFile::new_in(den_home)?;
+    std::io::Write::write_all(&mut tmp, json.as_bytes())?;
+    tmp.persist(&path)?;
     Ok(())
 }
 
@@ -147,7 +150,18 @@ fn set_key(json: &mut serde_json::Value, key: &str, value: &str) -> anyhow::Resu
                 anyhow::bail!("expected a number for {key}");
             }
         }
-        serde_json::Value::Null | serde_json::Value::String(_) => {
+        serde_json::Value::Null => {
+            if value == "null" || value == "none" {
+                serde_json::Value::Null
+            } else if let Ok(n) = value.parse::<u64>() {
+                serde_json::Value::Number(n.into())
+            } else if let Ok(b) = value.parse::<bool>() {
+                serde_json::Value::Bool(b)
+            } else {
+                serde_json::Value::String(value.to_string())
+            }
+        }
+        serde_json::Value::String(_) => {
             if value == "null" || value == "none" {
                 serde_json::Value::Null
             } else {

@@ -1,7 +1,6 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use reqwest::Client;
@@ -75,12 +74,19 @@ pub async fn download_bottle(
         .json()
         .await?;
 
-    // Download the bottle blob. Disable redirects to prevent
-    // token leakage via HTTPS→HTTP downgrade.
-    let no_redirect_client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
+    // Download the bottle blob. Only follow HTTPS redirects to
+    // prevent token leakage via HTTPS→HTTP downgrade.
+    let https_only_client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.url().scheme() == "https" {
+                attempt.follow()
+            } else {
+                attempt.stop()
+            }
+        }))
+        .timeout(std::time::Duration::from_secs(300))
         .build()?;
-    let response = no_redirect_client
+    let response = https_only_client
         .get(&bottle.url)
         .header("User-Agent", concat!("den/", env!("CARGO_PKG_VERSION")))
         .header("Authorization", format!("Bearer {}", token.token))
@@ -103,6 +109,15 @@ pub async fn download_bottle(
     }
 
     let bytes = response.bytes().await?.to_vec();
+
+    // Post-download size check for chunked responses without Content-Length.
+    if bytes.len() as u64 > MAX_DOWNLOAD_SIZE {
+        anyhow::bail!(
+            "bottle download too large ({} bytes, max {} bytes)",
+            bytes.len(),
+            MAX_DOWNLOAD_SIZE
+        );
+    }
 
     // Verify SHA256.
     let mut hasher = Sha256::new();
@@ -193,9 +208,8 @@ pub fn pour_bottle(bottle_data: &[u8], cellar: &Path) -> anyhow::Result<PathBuf>
                 std::os::unix::fs::symlink(link_target.as_ref(), &dest)?;
             }
         } else {
-            let mut data = Vec::new();
-            entry.read_to_end(&mut data)?;
-            std::fs::write(&dest, &data)?;
+            let mut file = std::fs::File::create(&dest)?;
+            std::io::copy(&mut entry, &mut file)?;
 
             // Preserve executable permission but strip setuid/setgid/sticky bits.
             let mode = entry.header().mode()? & 0o0777;

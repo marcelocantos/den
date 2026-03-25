@@ -1,0 +1,46 @@
+This project includes the following third-party dependencies:
+
+anyhow 1 - MIT OR Apache-2.0
+  https://github.com/dtolnay/anyhow
+
+clap 4 - MIT OR Apache-2.0
+  https://github.com/clap-rs/clap
+
+ctrlc 3 - MIT/Apache-2.0
+  https://github.com/Detegr/rust-ctrlc
+
+dirs 6 - MIT OR Apache-2.0
+  https://github.com/dirs-dev/dirs-rs
+
+flate2 1 - MIT/Apache-2.0
+  https://github.com/rust-lang/flate2-rs
+
+libc 0.2 - MIT OR Apache-2.0
+  https://github.com/rust-lang/libc
+
+reqwest 0.12 - MIT OR Apache-2.0
+  https://github.com/seanmonstar/reqwest
+
+serde 1 - MIT OR Apache-2.0
+  https://github.com/serde-rs/serde
+
+serde_json 1 - MIT OR Apache-2.0
+  https://github.com/serde-rs/json
+
+sha2 0.10 - MIT OR Apache-2.0
+  https://github.com/RustCrypto/hashes
+
+tar 0.4 - MIT/Apache-2.0
+  https://github.com/alexcrichton/tar-rs
+
+tempfile 3 - MIT OR Apache-2.0
+  https://github.com/Stebalien/tempfile
+
+tokio 1 - MIT
+  https://github.com/tokio-rs/tokio
+
+tracing-subscriber 0.3 - MIT
+  https://github.com/tokio-rs/tracing
+
+walkdir 2 - Unlicense/MIT
+  https://github.com/BurntSushi/walkdir

@@ -126,7 +126,7 @@ pub async fn fetch_cask(client: &Client, token: &str) -> anyhow::Result<CaskInfo
 }
 
 /// Download a cask artifact, verify SHA256 if provided.
-pub async fn download_cask(client: &Client, info: &CaskInfo) -> anyhow::Result<(Vec<u8>, String)> {
+pub async fn download_cask(_client: &Client, info: &CaskInfo) -> anyhow::Result<(Vec<u8>, String)> {
     // Enforce HTTPS.
     if !info.url.starts_with("https://") {
         anyhow::bail!("refusing non-HTTPS cask URL: {}", info.url);
@@ -140,7 +140,18 @@ pub async fn download_cask(client: &Client, info: &CaskInfo) -> anyhow::Result<(
         );
     }
 
-    let response = client
+    // Only follow HTTPS redirects to prevent downgrade attacks.
+    let https_only_client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.url().scheme() == "https" {
+                attempt.follow()
+            } else {
+                attempt.stop()
+            }
+        }))
+        .timeout(std::time::Duration::from_secs(300))
+        .build()?;
+    let response = https_only_client
         .get(&info.url)
         .header("User-Agent", concat!("den/", env!("CARGO_PKG_VERSION")))
         .send()
@@ -182,6 +193,15 @@ pub async fn download_cask(client: &Client, info: &CaskInfo) -> anyhow::Result<(
         .to_string();
 
     let bytes = response.bytes().await?.to_vec();
+
+    // Post-download size check for chunked responses without Content-Length.
+    if bytes.len() as u64 > MAX_DOWNLOAD_SIZE {
+        anyhow::bail!(
+            "cask download too large ({} bytes, max {} bytes)",
+            bytes.len(),
+            MAX_DOWNLOAD_SIZE
+        );
+    }
 
     // Verify SHA256 if specified (some casks use "no_check").
     if let Some(ref expected) = info.sha256
@@ -230,6 +250,7 @@ pub fn install_from_dmg(
 
     // Copy app bundles.
     for app_name in apps {
+        validate_artifact_name(app_name)?;
         let src = mount_path.join(app_name);
         if !src.exists() {
             // Try finding the app in the mount root.
@@ -276,9 +297,20 @@ pub fn install_from_zip(
         anyhow::bail!("failed to extract ZIP");
     }
 
+    // Validate extracted paths stay within the sandbox directory.
+    let canonical_tmp = std::fs::canonicalize(tmp_dir.path())?;
+    for entry in walkdir::WalkDir::new(tmp_dir.path()) {
+        let entry = entry?;
+        let canonical = std::fs::canonicalize(entry.path())?;
+        if !canonical.starts_with(&canonical_tmp) {
+            anyhow::bail!("ZIP extraction escaped sandbox: {}", entry.path().display());
+        }
+    }
+
     let mut installed = Vec::new();
 
     for app_name in apps {
+        validate_artifact_name(app_name)?;
         let src = tmp_dir.path().join(app_name);
         if src.exists() {
             let dest = appdir.join(app_name);
@@ -305,6 +337,14 @@ fn find_app_in_dir(dir: &Path, app_name: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Validate artifact names from the API don't contain path traversal.
+fn validate_artifact_name(name: &str) -> anyhow::Result<()> {
+    if name.is_empty() || name.contains('/') || name.contains("..") {
+        anyhow::bail!("unsafe artifact name: {name}");
+    }
+    Ok(())
 }
 
 fn copy_app(src: &Path, dest: &Path) -> anyhow::Result<()> {

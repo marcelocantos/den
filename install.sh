@@ -147,7 +147,7 @@ verify_checksum() {
     _checksum_file="$2"
     _archive_name="$3"
 
-    _expected="$(grep "$_archive_name" "$_checksum_file" | awk '{print $1}')"
+    _expected="$(grep -F "$_archive_name" "$_checksum_file" | awk '{print $1}')"
     if [ -z "$_expected" ]; then
         err "checksum not found for $_archive_name in checksum file"
     fi

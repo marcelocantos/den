@@ -131,7 +131,7 @@ fn parse_index(data: &[u8]) -> anyhow::Result<FormulaIndex> {
 }
 
 /// Validate a formula name contains only safe characters.
-fn validate_formula_name(name: &str) -> anyhow::Result<()> {
+pub fn validate_formula_name(name: &str) -> anyhow::Result<()> {
     if name.is_empty() {
         anyhow::bail!("formula name is empty");
     }

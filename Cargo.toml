@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "A universal development environment manager"
 license = "Apache-2.0"
+rust-version = "1.87"
 repository = "https://github.com/marcelocantos/den"
 homepage = "https://github.com/marcelocantos/den"
 keywords = ["package-manager", "homebrew", "environment", "development"]
@@ -18,7 +19,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 reqwest = { version = "0.12", features = ["json"] }
 sha2 = "0.10"
 flate2 = "1"

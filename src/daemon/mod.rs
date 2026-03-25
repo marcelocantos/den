@@ -42,41 +42,13 @@ pub fn read_state(den_home: &Path) -> DaemonState {
         .unwrap_or_default()
 }
 
-/// Write the daemon state file.
+/// Write the daemon state file atomically.
 fn write_state(den_home: &Path, state: &DaemonState) -> anyhow::Result<()> {
     let path = den_home.join("daemon_state.json");
     let json = serde_json::to_string_pretty(state)?;
-    std::fs::write(path, json)?;
-    Ok(())
-}
-
-/// Read daemon settings.
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub struct DaemonSettings {
-    #[serde(default)]
-    pub auto_upgrade: bool,
-    /// Maintenance window, e.g. "3:00-5:00". Empty = upgrade when idle.
-    #[serde(default)]
-    pub upgrade_window: Option<String>,
-    /// Check interval in seconds (default: 6 hours).
-    #[serde(default)]
-    pub interval_secs: Option<u64>,
-}
-
-#[allow(dead_code)]
-pub fn read_settings(den_home: &Path) -> DaemonSettings {
-    let path = den_home.join("daemon_settings.json");
-    std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
-}
-
-#[allow(dead_code)]
-pub fn write_settings(den_home: &Path, settings: &DaemonSettings) -> anyhow::Result<()> {
-    let path = den_home.join("daemon_settings.json");
-    let json = serde_json::to_string_pretty(settings)?;
-    std::fs::write(path, json)?;
+    let mut tmp = tempfile::NamedTempFile::new_in(den_home)?;
+    std::io::Write::write_all(&mut tmp, json.as_bytes())?;
+    tmp.persist(&path)?;
     Ok(())
 }
 
@@ -154,9 +126,19 @@ pub fn is_running(den_home: &Path) -> bool {
     }
 }
 
-/// Log a message to the daemon log.
+/// Maximum log file size before rotation (10 MB).
+const MAX_LOG_SIZE: u64 = 10 * 1024 * 1024;
+
+/// Log a message to the daemon log with automatic rotation.
 fn log(den_home: &Path, msg: &str) {
     let log_path = den_home.join("daemon.log");
+    // Rotate if log is too large.
+    if let Ok(meta) = std::fs::metadata(&log_path)
+        && meta.len() > MAX_LOG_SIZE
+    {
+        let old = den_home.join("daemon.log.1");
+        let _ = std::fs::rename(&log_path, &old);
+    }
     let timestamp = chrono_timestamp();
     let line = format!("[{timestamp}] {msg}\n");
     let _ = std::fs::OpenOptions::new()
@@ -166,13 +148,33 @@ fn log(den_home: &Path, msg: &str) {
         .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
 }
 
+/// Get current local time as (hour, minute) using libc.
+fn current_local_time() -> (u32, u32) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as libc::time_t;
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    unsafe { libc::localtime_r(&now, &mut tm) };
+    (tm.tm_hour as u32, tm.tm_min as u32)
+}
+
 fn chrono_timestamp() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs();
-    // Simple ISO-ish timestamp without chrono dependency.
-    format!("{now}")
+        .as_secs() as libc::time_t;
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    unsafe { libc::localtime_r(&now, &mut tm) };
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        tm.tm_year + 1900,
+        tm.tm_mon + 1,
+        tm.tm_mday,
+        tm.tm_hour,
+        tm.tm_min,
+        tm.tm_sec
+    )
 }
 
 pub fn now_secs() -> u64 {
@@ -207,19 +209,7 @@ fn in_maintenance_window(window: &str) -> bool {
         None => return false,
     };
 
-    // Get current local time from the system.
-    let output = std::process::Command::new("date").args(["+%H:%M"]).output();
-
-    let (cur_h, cur_m) = match output {
-        Ok(out) => {
-            let s = String::from_utf8_lossy(&out.stdout);
-            match parse_hm(s.trim()) {
-                Some(v) => v,
-                None => return false,
-            }
-        }
-        Err(_) => return false,
-    };
+    let (cur_h, cur_m) = current_local_time();
 
     let start = start_h * 60 + start_m;
     let end = end_h * 60 + end_m;
@@ -248,7 +238,9 @@ pub async fn run(config: &Config) -> anyhow::Result<()> {
             .unwrap_or(DEFAULT_INTERVAL.as_secs()),
     );
 
-    let client = Client::new();
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()?;
 
     // Install signal handler for graceful shutdown.
     let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
