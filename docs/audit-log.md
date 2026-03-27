@@ -5,7 +5,7 @@
 - **Commit**: `18f56c8`
 - **Outcome**: 25 findings (4 high, 10 medium, 10 low, 1 deferred). Report: `docs/audit-2026-03-27.md`. 6 agents (4 opus, 2 sonnet) with adversarial review gate. 6 findings filtered/downgraded. Post-cli-split, post-round-2-fixes.
 - **Key findings**: Shell injection via eval'd output (high), env path allows unsafe chars (high), manifest-sourced names bypass validation (high), cask module ungated for macOS (high), XML injection in plist (medium), non-atomic writes in 5 locations (medium).
-- **Deferred**: F25: CI/CD pipeline (carried forward from round 2).
+- **Fixed**: 24 of 25 findings addressed in commit `b457a15`. Only F25 (CI/CD) remains deferred.
 
 ## 2026-03-25 — /audit (round 2) + fixes
 
