@@ -36,6 +36,9 @@ tar 0.4 - MIT/Apache-2.0
 tempfile 3 - MIT OR Apache-2.0
   https://github.com/Stebalien/tempfile
 
+tracing 0.1 - MIT
+  https://github.com/tokio-rs/tracing
+
 tokio 1 - MIT
   https://github.com/tokio-rs/tokio
 

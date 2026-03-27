@@ -3,9 +3,11 @@
 
 pub mod api;
 pub mod bottle;
+#[cfg(target_os = "macos")]
 pub mod cask;
 pub mod cli;
 pub mod config;
+#[cfg(unix)]
 pub mod daemon;
 pub mod deps;
 pub mod env;

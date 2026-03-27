@@ -135,6 +135,11 @@ Run `den --help` for the full list. Key commands:
 | `den daemon status` | Daemon and pending upgrade status |
 | `den migrate` | Import from Homebrew |
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for build instructions and PR guidelines.
+To report a security vulnerability, see [SECURITY.md](SECURITY.md).
+
 ## Licence
 
 Apache 2.0. See [LICENSE](LICENSE).

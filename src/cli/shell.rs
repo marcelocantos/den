@@ -6,7 +6,14 @@ use crate::manifest;
 
 pub(super) fn print_shell_init(config: &Config, shell: &str) {
     // Shell-escape the path to prevent injection via DEN_HOME.
-    let den_home = config.den_home.display().to_string().replace('\'', "'\\''");
+    let den_home = config
+        .den_home
+        .display()
+        .to_string()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('$', "\\$")
+        .replace('`', "\\`");
     let root_slug = manifest::env_slug("/");
     match shell {
         "zsh" | "bash" => {
@@ -86,7 +93,7 @@ end
             );
         }
         _ => {
-            eprintln!("unsupported shell: {shell}. Use zsh, bash, or fish.");
+            tracing::warn!("unsupported shell: {shell}. Use zsh, bash, or fish.");
         }
     }
 }
@@ -95,8 +102,14 @@ pub(super) fn print_env_switch_commands(config: &Config, env_slug: &str) {
     let den_home = &config.den_home;
     let new_env = den_home.join("envs").join(env_slug);
     let env_path = manifest::slug_to_path(env_slug);
-    let dh = den_home.display();
-    let ne = new_env.display();
+    let escape_for_shell = |s: &str| -> String {
+        s.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('$', "\\$")
+            .replace('`', "\\`")
+    };
+    let dh = escape_for_shell(&den_home.display().to_string());
+    let ne = escape_for_shell(&new_env.display().to_string());
 
     // Swap PATH, build env vars, and DEN_ENV in one eval.
     println!(

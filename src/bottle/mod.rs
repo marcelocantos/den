@@ -43,9 +43,11 @@ pub async fn fetch_bottle(
 
     let data = download_bottle(client, bottle, ghcr_repo_path).await?;
 
-    // Write to cache.
+    // Write to cache atomically.
     std::fs::create_dir_all(cache_dir)?;
-    std::fs::write(&cache_path, &data)?;
+    let mut tmp = tempfile::NamedTempFile::new_in(cache_dir)?;
+    std::io::Write::write_all(&mut tmp, &data)?;
+    tmp.persist(&cache_path)?;
 
     Ok(data)
 }
@@ -74,6 +76,7 @@ pub async fn download_bottle(
         .json()
         .await?;
 
+    // TODO: Create this client once and reuse across downloads for connection pooling.
     // Download the bottle blob. Only follow HTTPS redirects to
     // prevent token leakage via HTTPS→HTTP downgrade.
     let https_only_client = reqwest::Client::builder()

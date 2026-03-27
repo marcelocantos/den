@@ -242,12 +242,20 @@ pub async fn run(config: &Config) -> anyhow::Result<()> {
         .timeout(std::time::Duration::from_secs(300))
         .build()?;
 
-    // Install signal handler for graceful shutdown.
+    // Install signal handlers for graceful shutdown (SIGINT + SIGTERM).
     let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let r = running.clone();
-    ctrlc::set_handler(move || {
+    tokio::spawn(async move {
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to register SIGTERM handler");
+        let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+            .expect("failed to register SIGINT handler");
+        tokio::select! {
+            _ = sigterm.recv() => {},
+            _ = sigint.recv() => {},
+        }
         r.store(false, std::sync::atomic::Ordering::SeqCst);
-    })?;
+    });
 
     while running.load(std::sync::atomic::Ordering::SeqCst) {
         if let Err(e) = tick(&client, config).await {
@@ -335,7 +343,13 @@ async fn tick(client: &Client, config: &Config) -> anyhow::Result<()> {
                 let tags: Vec<String> = stable.files.keys().cloned().collect();
                 if let Some(tag) = platform::best_bottle_tag(config.arch, macos, &tags) {
                     let bottle_file = &stable.files[&tag];
-                    let ghcr_path = formula::ghcr_path(&info.name);
+                    let ghcr_path = match formula::ghcr_path(&info.name) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            log(&config.den_home, &format!("skipping {}: {e}", info.name));
+                            continue;
+                        }
+                    };
                     let bottle_cache = config.den_home.join("cache").join("bottles");
 
                     match bottle::fetch_bottle(client, bottle_file, &ghcr_path, &bottle_cache).await
@@ -458,7 +472,7 @@ async fn pour_bottle_quiet(
         .ok_or_else(|| anyhow::anyhow!("no bottle for {} on this platform", info.name))?;
 
     let bottle_file = &bottle_spec.files[&tag];
-    let ghcr_path = formula::ghcr_path(&info.name);
+    let ghcr_path = formula::ghcr_path(&info.name)?;
     let bottle_cache = config.den_home.join("cache").join("bottles");
 
     let data = bottle::fetch_bottle(client, bottle_file, &ghcr_path, &bottle_cache).await?;
@@ -472,8 +486,18 @@ async fn pour_bottle_quiet(
     Ok(())
 }
 
+/// Escape a string for safe interpolation into XML text content.
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
 /// Generate launchd plist content.
 pub fn launchd_plist(den_binary: &Path, den_home: &Path) -> String {
+    let bin = xml_escape(&den_binary.display().to_string());
+    let home = xml_escape(&den_home.display().to_string());
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -483,7 +507,7 @@ pub fn launchd_plist(den_binary: &Path, den_home: &Path) -> String {
     <string>dev.den.daemon</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{}</string>
+        <string>{bin}</string>
         <string>daemon</string>
         <string>run</string>
     </array>
@@ -492,13 +516,10 @@ pub fn launchd_plist(den_binary: &Path, den_home: &Path) -> String {
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>{}/daemon.stdout.log</string>
+    <string>{home}/daemon.stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>{}/daemon.stderr.log</string>
+    <string>{home}/daemon.stderr.log</string>
 </dict>
 </plist>"#,
-        den_binary.display(),
-        den_home.display(),
-        den_home.display(),
     )
 }

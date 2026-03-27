@@ -15,6 +15,8 @@ pub fn link_keg(
     env_path: &Path,
     formula_name: &str,
 ) -> anyhow::Result<Vec<PathBuf>> {
+    // Validate formula name to prevent path traversal via crafted manifests.
+    crate::api::validate_formula_name(formula_name)?;
     let mut created = Vec::new();
 
     for dir in LINK_DIRS {
@@ -129,14 +131,21 @@ pub fn record_linked_version(
     formula_name: &str,
     version: &str,
 ) -> anyhow::Result<()> {
+    crate::api::validate_formula_name(formula_name)?;
     let linked_dir = env_path.join(".den").join("linked");
     std::fs::create_dir_all(&linked_dir)?;
-    std::fs::write(linked_dir.join(formula_name), version)?;
+    let path = linked_dir.join(formula_name);
+    let mut tmp = tempfile::NamedTempFile::new_in(&linked_dir)?;
+    std::io::Write::write_all(&mut tmp, version.as_bytes())?;
+    tmp.persist(&path)?;
     Ok(())
 }
 
 /// Read which version of a formula is linked in an environment.
 pub fn linked_version(env_path: &Path, formula_name: &str) -> Option<String> {
+    if crate::api::validate_formula_name(formula_name).is_err() {
+        return None;
+    }
     let path = env_path.join(".den").join("linked").join(formula_name);
     std::fs::read_to_string(path)
         .ok()
@@ -146,6 +155,7 @@ pub fn linked_version(env_path: &Path, formula_name: &str) -> Option<String> {
 /// Remove the linked version record for a formula.
 #[allow(dead_code)]
 pub fn remove_linked_record(env_path: &Path, formula_name: &str) -> anyhow::Result<()> {
+    crate::api::validate_formula_name(formula_name)?;
     let path = env_path.join(".den").join("linked").join(formula_name);
     if path.exists() {
         std::fs::remove_file(path)?;

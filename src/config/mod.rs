@@ -29,12 +29,16 @@ impl Config {
                 {
                     PathBuf::from("/home/linuxbrew/.linuxbrew")
                 }
-                #[cfg(not(target_os = "linux"))]
+                #[cfg(target_os = "macos")]
                 {
                     match arch {
                         Arch::Arm64 => PathBuf::from("/opt/homebrew"),
                         Arch::X86_64 => PathBuf::from("/usr/local"),
                     }
+                }
+                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+                {
+                    PathBuf::from("/usr/local")
                 }
             });
 
@@ -52,9 +56,13 @@ impl Config {
                 {
                     home.join(".cache/Homebrew")
                 }
-                #[cfg(not(target_os = "linux"))]
+                #[cfg(target_os = "macos")]
                 {
                     home.join("Library/Caches/Homebrew")
+                }
+                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+                {
+                    home.join(".cache/Homebrew")
                 }
             });
 

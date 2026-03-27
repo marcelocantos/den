@@ -194,6 +194,18 @@ pub(super) fn normalise_env_path(path: &str) -> anyhow::Result<String> {
     } else {
         format!("/{path}")
     };
-    // Remove trailing slash.
-    Ok(p.trim_end_matches('/').to_string())
+    let trimmed = p.trim_end_matches('/');
+    // Validate each component contains only safe characters.
+    for component in trimmed.split('/').filter(|c| !c.is_empty()) {
+        if !component
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+        {
+            anyhow::bail!(
+                "environment path component '{}' contains invalid characters (allowed: a-z, A-Z, 0-9, '.', '_', '-')",
+                component
+            );
+        }
+    }
+    Ok(trimmed.to_string())
 }

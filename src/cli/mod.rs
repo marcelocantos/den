@@ -230,6 +230,9 @@ impl Cli {
                 let active = env::active_env_path(&config.den_home);
 
                 if is_cask {
+                    #[cfg(not(target_os = "macos"))]
+                    anyhow::bail!("cask installation is only supported on macOS");
+                    #[cfg(target_os = "macos")]
                     for name in &names {
                         install::install_cask_cmd(&client, &config, &active, name).await?;
                     }

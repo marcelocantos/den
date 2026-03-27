@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::api::FormulaIndex;
+#[cfg(target_os = "macos")]
+use crate::cask;
 use crate::config::Config;
-use crate::{bottle, cask, deps, env, formula, manifest, platform, tab};
+use crate::{bottle, deps, env, formula, manifest, platform, tab};
 
 pub(super) async fn install_formula(
     client: &reqwest::Client,
@@ -103,7 +105,7 @@ pub(super) async fn pour_bottle(
     })?;
 
     let bottle_file = &bottle_spec.files[&tag];
-    let ghcr_path = formula::ghcr_path(&info.name);
+    let ghcr_path = formula::ghcr_path(&info.name)?;
 
     let cache_dir = config.den_home.join("cache").join("bottles");
     println!("==> Fetching {} {} ({})...", info.name, pkg_version, tag);
@@ -259,6 +261,7 @@ pub(super) async fn upgrade_packages(
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 pub(super) async fn install_cask_cmd(
     client: &reqwest::Client,
     config: &Config,
@@ -277,7 +280,7 @@ pub(super) async fn install_cask_cmd(
     }
 
     println!("==> Downloading {} {}...", info.token, info.version);
-    let (data, ext) = cask::download_cask(client, &info).await?;
+    let (data, ext) = cask::download_cask(&info).await?;
     println!("  {} bytes downloaded", data.len());
 
     let appdir = std::path::PathBuf::from("/Applications");

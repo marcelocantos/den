@@ -87,7 +87,10 @@ pub fn active_env_name(den_home: &Path) -> Option<String> {
 /// Set the active environment path.
 pub fn set_active_env(den_home: &Path, env_path: &str) -> anyhow::Result<()> {
     std::fs::create_dir_all(den_home)?;
-    std::fs::write(den_home.join("active_env"), env_path)?;
+    let path = den_home.join("active_env");
+    let mut tmp = tempfile::NamedTempFile::new_in(den_home)?;
+    std::io::Write::write_all(&mut tmp, env_path.as_bytes())?;
+    tmp.persist(&path)?;
     Ok(())
 }
 

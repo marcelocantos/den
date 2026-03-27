@@ -50,16 +50,24 @@ See `docs/targets.md` for the convergence roadmap.
 ```
 src/
 ├── main.rs           # CLI entry point
-├── cli/              # Command definitions (clap)
+├── cli/              # Command definitions and handlers
+│   ├── mod.rs        # Cli struct, Command enum, dispatch
+│   ├── install.rs    # install, pour, uninstall, upgrade
+│   ├── query.rs      # info, search, deps, list, use, cleanup
+│   ├── env_cmd.rs    # environment management commands
+│   ├── daemon_cmd.rs # daemon lifecycle commands
+│   ├── shell.rs      # shell init and env switch output
+│   ├── services.rs   # service list/start/stop/restart
+│   └── migrate.rs    # Homebrew cellar migration
 ├── env/              # Environment management (create, switch, layer)
 ├── formula/          # Formula parsing, metadata, DSL
 ├── cask/             # Cask parsing, artifacts
 ├── keg/              # Keg/Cellar management
-├── tap/              # Tap (git repo) management
+├── tap/              # Tap (git repo) management (placeholder)
 ├── bottle/           # Bottle download, pour, relocation
 ├── deps/             # Dependency resolution, topological sort
 ├── link/             # Symlink management
-├── download/         # Download strategies, caching
+├── download/         # Download strategies, caching (placeholder)
 ├── api/              # formulae.brew.sh API client
 ├── tab/              # INSTALL_RECEIPT.json handling
 ├── daemon/           # Background upgrade service

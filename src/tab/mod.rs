@@ -76,6 +76,9 @@ pub fn write_tab(keg_path: &Path, arch: &str) -> anyhow::Result<()> {
     };
 
     let json = serde_json::to_string_pretty(&tab)?;
-    std::fs::write(keg_path.join("INSTALL_RECEIPT.json"), json)?;
+    let path = keg_path.join("INSTALL_RECEIPT.json");
+    let mut tmp = tempfile::NamedTempFile::new_in(keg_path)?;
+    std::io::Write::write_all(&mut tmp, json.as_bytes())?;
+    tmp.persist(&path)?;
     Ok(())
 }

@@ -39,9 +39,11 @@ impl FormulaIndex {
         // Fetch from API.
         let data = fetch_index(client).await?;
 
-        // Cache it.
+        // Cache it atomically.
         std::fs::create_dir_all(cache_dir)?;
-        std::fs::write(&cache_path, &data)?;
+        let mut tmp = tempfile::NamedTempFile::new_in(cache_dir)?;
+        std::io::Write::write_all(&mut tmp, &data)?;
+        tmp.persist(&cache_path)?;
 
         parse_index(&data)
     }
@@ -51,7 +53,9 @@ impl FormulaIndex {
         let cache_path = index_cache_path(cache_dir);
         let data = fetch_index(client).await?;
         std::fs::create_dir_all(cache_dir)?;
-        std::fs::write(&cache_path, &data)?;
+        let mut tmp = tempfile::NamedTempFile::new_in(cache_dir)?;
+        std::io::Write::write_all(&mut tmp, &data)?;
+        tmp.persist(&cache_path)?;
         parse_index(&data)
     }
 
@@ -92,6 +96,9 @@ fn read_cached_index(path: &Path) -> Option<Vec<u8>> {
     std::fs::read(path).ok()
 }
 
+/// Maximum allowed formula index size (500 MB).
+const MAX_INDEX_SIZE: u64 = 500 * 1024 * 1024;
+
 async fn fetch_index(client: &Client) -> anyhow::Result<Vec<u8>> {
     let response = client
         .get(FORMULA_INDEX_URL)
@@ -103,7 +110,29 @@ async fn fetch_index(client: &Client) -> anyhow::Result<Vec<u8>> {
         anyhow::bail!("failed to fetch formula index (HTTP {})", response.status());
     }
 
-    Ok(response.bytes().await?.to_vec())
+    // Check Content-Length if available.
+    if let Some(len) = response.content_length() {
+        if len > MAX_INDEX_SIZE {
+            anyhow::bail!(
+                "formula index too large ({} bytes, max {} bytes)",
+                len,
+                MAX_INDEX_SIZE
+            );
+        }
+    }
+
+    let bytes = response.bytes().await?.to_vec();
+
+    // Post-download size check for chunked responses.
+    if bytes.len() as u64 > MAX_INDEX_SIZE {
+        anyhow::bail!(
+            "formula index too large ({} bytes, max {} bytes)",
+            bytes.len(),
+            MAX_INDEX_SIZE
+        );
+    }
+
+    Ok(bytes)
 }
 
 fn parse_index(data: &[u8]) -> anyhow::Result<FormulaIndex> {

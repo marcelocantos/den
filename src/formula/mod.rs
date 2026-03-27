@@ -82,6 +82,10 @@ pub struct BottleFile {
 
 /// Convert a formula name to the GHCR repository path component.
 /// e.g. "python@3.12" -> "python/3.12", "tree" -> "tree"
-pub fn ghcr_path(name: &str) -> String {
-    name.replace('@', "/")
+pub fn ghcr_path(name: &str) -> anyhow::Result<String> {
+    let path = name.replace('@', "/");
+    if path.contains("..") || path.starts_with('/') {
+        anyhow::bail!("unsafe GHCR path derived from formula name: {name}");
+    }
+    Ok(path)
 }

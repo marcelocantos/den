@@ -4,7 +4,9 @@
 use clap::Subcommand;
 
 use crate::config::Config;
-use crate::{daemon, settings};
+#[cfg(unix)]
+use crate::daemon;
+use crate::settings;
 
 #[derive(Subcommand)]
 pub(super) enum DaemonCommand {
@@ -20,6 +22,15 @@ pub(super) enum DaemonCommand {
     Uninstall,
 }
 
+#[cfg(not(unix))]
+pub(super) async fn run_daemon_command(
+    _config: &Config,
+    _command: DaemonCommand,
+) -> anyhow::Result<()> {
+    anyhow::bail!("daemon is not supported on this platform")
+}
+
+#[cfg(unix)]
 pub(super) async fn run_daemon_command(
     config: &Config,
     command: DaemonCommand,
@@ -89,46 +100,56 @@ pub(super) async fn run_daemon_command(
             Ok(())
         }
         DaemonCommand::Install => {
-            let exe = std::env::current_exe()?;
-            let plist = daemon::launchd_plist(&exe, &config.den_home);
-            let plist_path = dirs::home_dir()
-                .ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))?
-                .join("Library/LaunchAgents/dev.den.daemon.plist");
+            #[cfg(not(target_os = "macos"))]
+            anyhow::bail!("daemon install via launchd is only supported on macOS");
+            #[cfg(target_os = "macos")]
+            {
+                let exe = std::env::current_exe()?;
+                let plist = daemon::launchd_plist(&exe, &config.den_home);
+                let plist_path = dirs::home_dir()
+                    .ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))?
+                    .join("Library/LaunchAgents/dev.den.daemon.plist");
 
-            if let Some(parent) = plist_path.parent() {
-                std::fs::create_dir_all(parent)?;
+                if let Some(parent) = plist_path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(&plist_path, &plist)?;
+
+                let status = std::process::Command::new("launchctl")
+                    .args(["load", "-w"])
+                    .arg(&plist_path)
+                    .status()?;
+
+                if status.success() {
+                    println!("Daemon installed and started.");
+                    println!("  Plist: {}", plist_path.display());
+                } else {
+                    anyhow::bail!("failed to load launchd plist");
+                }
+                Ok(())
             }
-            std::fs::write(&plist_path, &plist)?;
-
-            let status = std::process::Command::new("launchctl")
-                .args(["load", "-w"])
-                .arg(&plist_path)
-                .status()?;
-
-            if status.success() {
-                println!("Daemon installed and started.");
-                println!("  Plist: {}", plist_path.display());
-            } else {
-                anyhow::bail!("failed to load launchd plist");
-            }
-            Ok(())
         }
         DaemonCommand::Uninstall => {
-            let plist_path = dirs::home_dir()
-                .ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))?
-                .join("Library/LaunchAgents/dev.den.daemon.plist");
+            #[cfg(not(target_os = "macos"))]
+            anyhow::bail!("daemon uninstall via launchd is only supported on macOS");
+            #[cfg(target_os = "macos")]
+            {
+                let plist_path = dirs::home_dir()
+                    .ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))?
+                    .join("Library/LaunchAgents/dev.den.daemon.plist");
 
-            if plist_path.exists() {
-                let _ = std::process::Command::new("launchctl")
-                    .args(["unload", "-w"])
-                    .arg(&plist_path)
-                    .status();
-                std::fs::remove_file(&plist_path)?;
-                println!("Daemon uninstalled.");
-            } else {
-                println!("Daemon is not installed.");
+                if plist_path.exists() {
+                    let _ = std::process::Command::new("launchctl")
+                        .args(["unload", "-w"])
+                        .arg(&plist_path)
+                        .status();
+                    std::fs::remove_file(&plist_path)?;
+                    println!("Daemon uninstalled.");
+                } else {
+                    println!("Daemon is not installed.");
+                }
+                Ok(())
             }
-            Ok(())
         }
     }
 }

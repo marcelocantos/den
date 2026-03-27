@@ -126,7 +126,7 @@ pub async fn fetch_cask(client: &Client, token: &str) -> anyhow::Result<CaskInfo
 }
 
 /// Download a cask artifact, verify SHA256 if provided.
-pub async fn download_cask(_client: &Client, info: &CaskInfo) -> anyhow::Result<(Vec<u8>, String)> {
+pub async fn download_cask(info: &CaskInfo) -> anyhow::Result<(Vec<u8>, String)> {
     // Enforce HTTPS.
     if !info.url.starts_with("https://") {
         anyhow::bail!("refusing non-HTTPS cask URL: {}", info.url);
@@ -140,6 +140,7 @@ pub async fn download_cask(_client: &Client, info: &CaskInfo) -> anyhow::Result<
         );
     }
 
+    // TODO: Create this client once and reuse across downloads for connection pooling.
     // Only follow HTTPS redirects to prevent downgrade attacks.
     let https_only_client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
@@ -299,7 +300,7 @@ pub fn install_from_zip(
 
     // Validate extracted paths stay within the sandbox directory.
     let canonical_tmp = std::fs::canonicalize(tmp_dir.path())?;
-    for entry in walkdir::WalkDir::new(tmp_dir.path()) {
+    for entry in walkdir::WalkDir::new(tmp_dir.path()).follow_links(false) {
         let entry = entry?;
         let canonical = std::fs::canonicalize(entry.path())?;
         if !canonical.starts_with(&canonical_tmp) {
@@ -329,7 +330,7 @@ pub fn install_from_zip(
 }
 
 fn find_app_in_dir(dir: &Path, app_name: &str) -> Option<PathBuf> {
-    for entry in walkdir::WalkDir::new(dir).max_depth(3) {
+    for entry in walkdir::WalkDir::new(dir).max_depth(3).follow_links(false) {
         if let Ok(entry) = entry
             && entry.file_name().to_string_lossy() == app_name
         {
@@ -341,8 +342,17 @@ fn find_app_in_dir(dir: &Path, app_name: &str) -> Option<PathBuf> {
 
 /// Validate artifact names from the API don't contain path traversal.
 fn validate_artifact_name(name: &str) -> anyhow::Result<()> {
-    if name.is_empty() || name.contains('/') || name.contains("..") {
+    if name.is_empty() {
+        anyhow::bail!("empty artifact name");
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' || c == ' ')
+    {
         anyhow::bail!("unsafe artifact name: {name}");
+    }
+    if name.contains("..") {
+        anyhow::bail!("artifact name contains path traversal: {name}");
     }
     Ok(())
 }
