@@ -33,8 +33,37 @@ fn encode_component(component: &str) -> String {
 }
 
 /// Decode a single slug component back to the original path component.
+///
+/// Uses single-pass decoding to avoid chained-replace ambiguity.
+/// (Chained replaces fail when a component contains the literal text `%2D`:
+/// encoding produces `%252D`, and either replace order corrupts it.)
 fn decode_component(component: &str) -> String {
-    component.replace("%2D", "-").replace("%25", "%")
+    let mut result = String::with_capacity(component.len());
+    let bytes = component.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let seq = &component[i..i + 3];
+            match seq {
+                "%2D" => {
+                    result.push('-');
+                    i += 3;
+                }
+                "%25" => {
+                    result.push('%');
+                    i += 3;
+                }
+                _ => {
+                    result.push('%');
+                    i += 1;
+                }
+            }
+        } else {
+            result.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    result
 }
 
 /// Convert an environment path (e.g. "/work/ml") to a filesystem slug

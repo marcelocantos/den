@@ -97,14 +97,58 @@ fn round_trip_single_dash_component() {
     assert_eq!(to_path(&s), path);
 }
 
+#[test]
+fn round_trip_literal_percent_2d() {
+    // A component that is literally "%2D" must survive round-trip.
+    // This caught a bug where chained replace calls corrupted the decode.
+    let path = "/work/%2D";
+    let s = slug(path);
+    assert_eq!(to_path(&s), path);
+}
+
+#[test]
+fn round_trip_percent_25() {
+    // Component containing "%25" (literal percent-two-five).
+    let path = "/a/%25/b";
+    let s = slug(path);
+    assert_eq!(to_path(&s), path);
+}
+
 /// Encode a single path component for use in a slug.
 fn encode_component(component: &str) -> String {
     component.replace('%', "%25").replace('-', "%2D")
 }
 
 /// Decode a single slug component back to the original path component.
+///
+/// Uses single-pass decoding to avoid chained-replace ambiguity.
 fn decode_component(component: &str) -> String {
-    component.replace("%2D", "-").replace("%25", "%")
+    let mut result = String::with_capacity(component.len());
+    let bytes = component.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let seq = &component[i..i + 3];
+            match seq {
+                "%2D" => {
+                    result.push('-');
+                    i += 3;
+                }
+                "%25" => {
+                    result.push('%');
+                    i += 3;
+                }
+                _ => {
+                    result.push('%');
+                    i += 1;
+                }
+            }
+        } else {
+            result.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    result
 }
 
 /// Replicate the slug logic here since we can't import from the

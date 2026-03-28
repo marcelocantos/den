@@ -164,6 +164,10 @@ pub fn validate_formula_name(name: &str) -> anyhow::Result<()> {
     if name.is_empty() {
         anyhow::bail!("formula name is empty");
     }
+    // Reject `.` and `..` to prevent path traversal when used in filesystem paths.
+    if name == "." || name == ".." {
+        anyhow::bail!("invalid formula name: {name}");
+    }
     if !name.chars().all(|c| {
         c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '@' || c == '+'
     }) {

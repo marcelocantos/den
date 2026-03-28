@@ -138,7 +138,9 @@ fn set_key(json: &mut serde_json::Value, key: &str, value: &str) -> anyhow::Resu
                 .map_err(|_| anyhow::anyhow!("expected true or false for {key}"))?,
         ),
         serde_json::Value::Number(_) => {
-            if let Ok(n) = value.parse::<u64>() {
+            if value == "null" || value == "none" {
+                serde_json::Value::Null
+            } else if let Ok(n) = value.parse::<u64>() {
                 serde_json::Value::Number(n.into())
             } else {
                 anyhow::bail!("expected a number for {key}");
