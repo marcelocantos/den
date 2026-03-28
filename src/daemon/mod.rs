@@ -330,61 +330,70 @@ async fn tick(client: &Client, config: &Config) -> anyhow::Result<()> {
         &format!("{} packages outdated", pending.len()),
     );
 
-    // Pre-download bottles for pending upgrades.
-    for upgrade in &pending {
-        if let Some(info) = index.get(&upgrade.name) {
-            let keg_path = config.cellar.join(&info.name).join(&upgrade.available);
-            if keg_path.is_dir() {
-                continue; // Already poured.
-            }
+    // Pre-download bottles for pending upgrades (if auto_download is enabled).
+    let settings = crate::settings::read(&config.den_home);
 
-            // Download bottle into cache (but don't pour yet).
-            if let Some(ref bottle_spec) = info.bottle
-                && let Some(ref stable) = bottle_spec.stable
-            {
-                let macos = match config.macos_version.as_ref() {
-                    Some(v) => v,
-                    None => continue,
-                };
-                let tags: Vec<String> = stable.files.keys().cloned().collect();
-                if let Some(tag) = platform::best_bottle_tag(config.arch, macos, &tags) {
-                    let bottle_file = &stable.files[&tag];
-                    let ghcr_path = match formula::ghcr_path(&info.name) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            log(&config.den_home, &format!("skipping {}: {e}", info.name));
-                            continue;
-                        }
+    if settings.daemon.auto_download {
+        for upgrade in &pending {
+            if let Some(info) = index.get(&upgrade.name) {
+                let keg_path = config.cellar.join(&info.name).join(&upgrade.available);
+                if keg_path.is_dir() {
+                    continue; // Already poured.
+                }
+
+                // Download bottle into cache (but don't pour yet).
+                if let Some(ref bottle_spec) = info.bottle
+                    && let Some(ref stable) = bottle_spec.stable
+                {
+                    let macos = match config.macos_version.as_ref() {
+                        Some(v) => v,
+                        None => continue,
                     };
-                    let bottle_cache = config.den_home.join("cache").join("bottles");
+                    let tags: Vec<String> = stable.files.keys().cloned().collect();
+                    if let Some(tag) = platform::best_bottle_tag(config.arch, macos, &tags) {
+                        let bottle_file = &stable.files[&tag];
+                        let ghcr_path = match formula::ghcr_path(&info.name) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                log(&config.den_home, &format!("skipping {}: {e}", info.name));
+                                continue;
+                            }
+                        };
+                        let bottle_cache = config.den_home.join("cache").join("bottles");
 
-                    match bottle::fetch_bottle(client, bottle_file, &ghcr_path, &bottle_cache).await
-                    {
-                        Ok(data) => {
-                            log(
-                                &config.den_home,
-                                &format!(
-                                    "cached {} {} ({} bytes)",
-                                    info.name,
-                                    upgrade.available,
-                                    data.len()
-                                ),
-                            );
-                        }
-                        Err(e) => {
-                            log(
-                                &config.den_home,
-                                &format!("failed to cache {}: {e}", info.name),
-                            );
+                        match bottle::fetch_bottle(client, bottle_file, &ghcr_path, &bottle_cache)
+                            .await
+                        {
+                            Ok(data) => {
+                                log(
+                                    &config.den_home,
+                                    &format!(
+                                        "cached {} {} ({} bytes)",
+                                        info.name,
+                                        upgrade.available,
+                                        data.len()
+                                    ),
+                                );
+                            }
+                            Err(e) => {
+                                log(
+                                    &config.den_home,
+                                    &format!("failed to cache {}: {e}", info.name),
+                                );
+                            }
                         }
                     }
                 }
             }
         }
+    } else {
+        log(
+            &config.den_home,
+            "auto-download disabled, skipping bottle cache",
+        );
     }
 
     // Apply upgrades if auto-upgrade is enabled and we're in the window.
-    let settings = crate::settings::read(&config.den_home);
     if settings.daemon.auto_upgrade {
         let can_upgrade = match &settings.daemon.upgrade_window {
             Some(window) => in_maintenance_window(window),

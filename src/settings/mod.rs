@@ -23,7 +23,12 @@ pub struct Settings {
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct DaemonSettings {
+    /// Automatically download bottles for outdated packages (default: true).
+    /// When false, the daemon still checks for updates but skips downloading.
+    #[serde(default = "default_true")]
+    pub auto_download: bool,
     /// Automatically apply upgrades (default: false).
+    /// Requires auto_download to be true.
     #[serde(default)]
     pub auto_upgrade: bool,
     /// Maintenance window, e.g. "3:00-5:00". None = upgrade when idle.
@@ -32,6 +37,10 @@ pub struct DaemonSettings {
     /// Check interval in seconds (default: 21600 = 6 hours).
     #[serde(default)]
     pub interval_secs: Option<u64>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
