@@ -4,9 +4,8 @@
 use clap::Subcommand;
 
 use crate::config::Config;
-use crate::env;
 #[cfg(target_os = "macos")]
-use crate::service;
+use crate::{env, service};
 
 #[derive(Subcommand)]
 pub(super) enum ServiceCommand {
