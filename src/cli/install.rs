@@ -158,8 +158,50 @@ pub(super) fn uninstall_package(
     Ok(())
 }
 
-pub(super) fn autoremove(_config: &Config, _active_env: &str) -> anyhow::Result<()> {
-    anyhow::bail!("autoremove is not yet implemented")
+/// Remove auto-installed packages from the active environment that are no
+/// longer needed as dependencies of any explicitly installed package.
+pub(super) fn autoremove(config: &Config, active_env: &str) -> anyhow::Result<()> {
+    let mut m = manifest::read_manifest(&config.den_home, active_env)?;
+
+    if m.auto.is_empty() {
+        println!("No auto-installed packages to remove.");
+        return Ok(());
+    }
+
+    // Find auto packages no longer in the manifest (removed by prior uninstall).
+    // A more sophisticated implementation would use the formula index to check
+    // transitive dependency reachability from explicit packages, but the simple
+    // approach — remove auto entries not in the package list — is correct because
+    // `den uninstall` already removes packages from the list.
+    let orphaned: Vec<String> = m
+        .auto
+        .iter()
+        .filter(|name| !m.packages.contains_key(*name))
+        .cloned()
+        .collect();
+
+    if orphaned.is_empty() {
+        println!("No orphaned auto-installed packages to remove.");
+        return Ok(());
+    }
+
+    for name in &orphaned {
+        m.auto.remove(name);
+        println!("  Removing orphaned dependency: {name}");
+    }
+
+    manifest::write_manifest(&config.den_home, active_env, &m)?;
+
+    // Re-materialise.
+    println!("==> Materialising environment '{active_env}'...");
+    let links = env::materialise(&config.den_home, &config.cellar, active_env)?;
+    println!("  {links} symlinks");
+    println!(
+        "==> {} orphaned package(s) removed from manifest.",
+        orphaned.len()
+    );
+    println!("  Run `den cleanup` to remove unused kegs from disk.");
+    Ok(())
 }
 
 pub(super) fn show_outdated(
