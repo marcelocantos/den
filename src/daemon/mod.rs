@@ -246,13 +246,18 @@ pub async fn run(config: &Config) -> anyhow::Result<()> {
     let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let r = running.clone();
     tokio::spawn(async move {
-        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to register SIGTERM handler");
-        let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
-            .expect("failed to register SIGINT handler");
-        tokio::select! {
-            _ = sigterm.recv() => {},
-            _ = sigint.recv() => {},
+        let sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate());
+        let sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt());
+        match (sigterm, sigint) {
+            (Ok(mut sigterm), Ok(mut sigint)) => {
+                tokio::select! {
+                    _ = sigterm.recv() => {},
+                    _ = sigint.recv() => {},
+                }
+            }
+            (Err(e), _) | (_, Err(e)) => {
+                tracing::error!("failed to register signal handlers: {e}");
+            }
         }
         r.store(false, std::sync::atomic::Ordering::SeqCst);
     });

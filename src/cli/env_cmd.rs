@@ -132,6 +132,20 @@ pub(super) fn run_env_command(config: &Config, command: Option<EnvCommand>) -> a
                 anyhow::bail!("environment '{}' does not exist", env_path);
             }
 
+            // Check for child environments before removing.
+            let prefix = format!("{}/", env_path.trim_end_matches('/'));
+            let children: Vec<_> = env::list_envs(&config.den_home)?
+                .into_iter()
+                .filter(|e| e.starts_with(&prefix))
+                .collect();
+            if !children.is_empty() {
+                anyhow::bail!(
+                    "environment '{}' has children: {}. Remove them first.",
+                    env_path,
+                    children.join(", ")
+                );
+            }
+
             // Remove materialised env.
             let env_dir = env::env_dir(&config.den_home, &env_path);
             if env_dir.is_dir() {
@@ -194,9 +208,13 @@ pub(super) fn normalise_env_path(path: &str) -> anyhow::Result<String> {
     } else {
         format!("/{path}")
     };
-    let trimmed = p.trim_end_matches('/');
-    // Validate each component contains only safe characters.
-    for component in trimmed.split('/').filter(|c| !c.is_empty()) {
+    // Collect non-empty components, collapsing multiple slashes.
+    let components: Vec<&str> = p.split('/').filter(|c| !c.is_empty()).collect();
+    // Validate each component.
+    for component in &components {
+        if *component == "." {
+            anyhow::bail!("environment path component must not be '.'");
+        }
         if !component
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
@@ -207,5 +225,8 @@ pub(super) fn normalise_env_path(path: &str) -> anyhow::Result<String> {
             );
         }
     }
-    Ok(trimmed.to_string())
+    if components.is_empty() {
+        return Ok("/".to_string());
+    }
+    Ok(format!("/{}", components.join("/")))
 }

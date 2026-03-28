@@ -188,7 +188,7 @@ fn print_dep_tree(
     let circular = visited.contains(name);
     println!(
         "{indent}{name}{}",
-        if circular { " (circular)" } else { "" }
+        if circular { " (already listed)" } else { "" }
     );
 
     if circular {

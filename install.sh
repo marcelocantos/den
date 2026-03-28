@@ -49,6 +49,13 @@ main() {
         fi
     fi
 
+    # Validate version format (vN.N.N or N.N.N).
+    case "$version" in
+        v[0-9]*.[0-9]*.[0-9]*) ;;
+        [0-9]*.[0-9]*.[0-9]*)  ;;
+        *) err "invalid version format: $version (expected vN.N.N)" ;;
+    esac
+
     say "installing den $version for $os/$arch"
 
     # --- Check for existing install ---

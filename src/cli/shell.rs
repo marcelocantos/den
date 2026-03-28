@@ -13,7 +13,8 @@ pub(super) fn print_shell_init(config: &Config, shell: &str) {
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
         .replace('$', "\\$")
-        .replace('`', "\\`");
+        .replace('`', "\\`")
+        .replace('!', "\\!");
     let root_slug = manifest::env_slug("/");
     match shell {
         "zsh" | "bash" => {
@@ -107,6 +108,7 @@ pub(super) fn print_env_switch_commands(config: &Config, env_slug: &str) {
             .replace('"', "\\\"")
             .replace('$', "\\$")
             .replace('`', "\\`")
+            .replace('!', "\\!")
     };
     let dh = escape_for_shell(&den_home.display().to_string());
     let ne = escape_for_shell(&new_env.display().to_string());

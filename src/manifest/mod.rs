@@ -93,8 +93,15 @@ pub fn ancestor_chain(env_path: &str) -> Vec<String> {
 }
 
 /// Path to the manifest file for a given environment path.
+///
+/// Panics if `env_path` contains `..` (defense-in-depth — callers should
+/// validate via `normalise_env_path` before reaching here).
 fn manifest_file(den_home: &Path, env_path: &str) -> PathBuf {
     let trimmed = env_path.trim_matches('/');
+    assert!(
+        !trimmed.contains(".."),
+        "manifest_file called with unsafe env_path: {env_path}"
+    );
     if trimmed.is_empty() {
         den_home.join("manifests").join("manifest.json")
     } else {
