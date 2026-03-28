@@ -21,3 +21,4 @@ pub mod platform;
 pub mod service;
 pub mod settings;
 pub mod tab;
+pub mod trust;

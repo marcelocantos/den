@@ -44,6 +44,8 @@ impl FormulaIndex {
         let mut tmp = tempfile::NamedTempFile::new_in(cache_dir)?;
         std::io::Write::write_all(&mut tmp, &data)?;
         tmp.persist(&cache_path)?;
+        crate::trust::set_file_permissions_0600(&cache_path);
+        seal_cache(cache_dir, &data)?;
 
         parse_index(&data)
     }
@@ -56,6 +58,8 @@ impl FormulaIndex {
         let mut tmp = tempfile::NamedTempFile::new_in(cache_dir)?;
         std::io::Write::write_all(&mut tmp, &data)?;
         tmp.persist(&cache_path)?;
+        crate::trust::set_file_permissions_0600(&cache_path);
+        seal_cache(cache_dir, &data)?;
         parse_index(&data)
     }
 
@@ -93,7 +97,16 @@ fn read_cached_index(path: &Path) -> Option<Vec<u8>> {
         return None;
     }
 
-    std::fs::read(path).ok()
+    let data = std::fs::read(path).ok()?;
+
+    // Verify integrity seal before trusting cached data.
+    let cache_dir = path.parent()?;
+    if !verify_seal(cache_dir, &data) {
+        tracing::warn!("index cache integrity seal failed, re-fetching");
+        return None;
+    }
+
+    Some(data)
 }
 
 /// Maximum allowed formula index size (500 MB).
@@ -174,6 +187,69 @@ pub fn validate_formula_name(name: &str) -> anyhow::Result<()> {
         anyhow::bail!("invalid formula name: {name}");
     }
     Ok(())
+}
+
+fn seal_cache(cache_dir: &Path, data: &[u8]) -> anyhow::Result<()> {
+    use sha2::{Digest, Sha256};
+    let key = get_or_create_seal_key(cache_dir)?;
+    let mut mac = Sha256::new();
+    mac.update(&key);
+    mac.update(data);
+    let seal = format!("{:x}", mac.finalize());
+    let seal_path = cache_dir.join("formula_index.seal");
+    let mut tmp = tempfile::NamedTempFile::new_in(cache_dir)?;
+    std::io::Write::write_all(&mut tmp, seal.as_bytes())?;
+    tmp.persist(&seal_path)?;
+    crate::trust::set_file_permissions_0600(&seal_path);
+    Ok(())
+}
+
+fn verify_seal(cache_dir: &Path, data: &[u8]) -> bool {
+    use sha2::{Digest, Sha256};
+    let key = match std::fs::read(cache_dir.join(".seal_key")) {
+        Ok(k) => k,
+        Err(_) => return false, // No key = can't verify = treat as miss
+    };
+    let mut mac = Sha256::new();
+    mac.update(&key);
+    mac.update(data);
+    let expected = format!("{:x}", mac.finalize());
+    let actual = std::fs::read_to_string(cache_dir.join("formula_index.seal")).unwrap_or_default();
+    expected == actual.trim()
+}
+
+fn get_or_create_seal_key(cache_dir: &Path) -> anyhow::Result<Vec<u8>> {
+    let key_path = cache_dir.join(".seal_key");
+    if let Ok(key) = std::fs::read(&key_path) {
+        if key.len() == 32 {
+            return Ok(key);
+        }
+    }
+    // Generate random key.
+    std::fs::create_dir_all(cache_dir)?;
+    let key: Vec<u8> = (0..32).map(|_| rand_byte()).collect();
+    let mut tmp = tempfile::NamedTempFile::new_in(cache_dir)?;
+    std::io::Write::write_all(&mut tmp, &key)?;
+    tmp.persist(&key_path)?;
+    crate::trust::set_file_permissions_0600(&key_path);
+    Ok(key)
+}
+
+/// Simple random byte without adding a dependency.
+fn rand_byte() -> u8 {
+    use std::hash::{Hash, Hasher};
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+        .hash(&mut hasher);
+    COUNTER
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        .hash(&mut hasher);
+    std::thread::current().id().hash(&mut hasher);
+    (hasher.finish() & 0xFF) as u8
 }
 
 /// Fetch a single formula from the API (fallback for tap formulae

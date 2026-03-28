@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::api::FormulaIndex;
 use crate::config::Config;
-use crate::{bottle, deps, env, formula, manifest, platform, tab};
+use crate::{bottle, deps, env, formula, manifest, platform, tab, trust};
 
 /// Default interval between index refresh checks.
 const DEFAULT_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60); // 6 hours
@@ -49,6 +49,7 @@ fn write_state(den_home: &Path, state: &DaemonState) -> anyhow::Result<()> {
     let mut tmp = tempfile::NamedTempFile::new_in(den_home)?;
     std::io::Write::write_all(&mut tmp, json.as_bytes())?;
     tmp.persist(&path)?;
+    crate::trust::set_file_permissions_0600(&path);
     Ok(())
 }
 
@@ -480,7 +481,25 @@ async fn pour_bottle_quiet(
     let ghcr_path = formula::ghcr_path(&info.name)?;
     let bottle_cache = config.den_home.join("cache").join("bottles");
 
+    // Verify bottle hash against known-good database before fetching.
+    let pkg_version = info.pkg_version();
+    trust::verify_hash(
+        &config.den_home,
+        &info.name,
+        &pkg_version,
+        &bottle_file.sha256,
+    )?;
+
     let data = bottle::fetch_bottle(client, bottle_file, &ghcr_path, &bottle_cache).await?;
+
+    // Record verified hash for future pin-on-first-install checks.
+    trust::record_hash(
+        &config.den_home,
+        &info.name,
+        &pkg_version,
+        &bottle_file.sha256,
+    )?;
+
     let poured = bottle::pour_bottle(&data, &config.cellar)?;
     tab::write_tab(&poured, &config.arch.to_string())?;
 

@@ -5,7 +5,7 @@ use crate::api::FormulaIndex;
 #[cfg(target_os = "macos")]
 use crate::cask;
 use crate::config::Config;
-use crate::{bottle, deps, env, formula, manifest, platform, tab};
+use crate::{bottle, deps, env, formula, manifest, platform, tab, trust};
 
 pub(super) async fn install_formula(
     client: &reqwest::Client,
@@ -107,10 +107,26 @@ pub(super) async fn pour_bottle(
     let bottle_file = &bottle_spec.files[&tag];
     let ghcr_path = formula::ghcr_path(&info.name)?;
 
+    // Verify bottle hash against known-good database before fetching.
+    trust::verify_hash(
+        &config.den_home,
+        &info.name,
+        &pkg_version,
+        &bottle_file.sha256,
+    )?;
+
     let cache_dir = config.den_home.join("cache").join("bottles");
     println!("==> Fetching {} {} ({})...", info.name, pkg_version, tag);
     let bottle_data = bottle::fetch_bottle(client, bottle_file, &ghcr_path, &cache_dir).await?;
     println!("  {} bytes, SHA256 verified", bottle_data.len());
+
+    // Record verified hash for future pin-on-first-install checks.
+    trust::record_hash(
+        &config.den_home,
+        &info.name,
+        &pkg_version,
+        &bottle_file.sha256,
+    )?;
 
     println!("==> Pouring {} {}...", info.name, pkg_version);
     let poured_keg = bottle::pour_bottle(&bottle_data, &config.cellar)?;

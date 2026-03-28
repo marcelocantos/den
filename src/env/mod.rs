@@ -91,6 +91,7 @@ pub fn set_active_env(den_home: &Path, env_path: &str) -> anyhow::Result<()> {
     let mut tmp = tempfile::NamedTempFile::new_in(den_home)?;
     std::io::Write::write_all(&mut tmp, env_path.as_bytes())?;
     tmp.persist(&path)?;
+    crate::trust::set_file_permissions_0600(&path);
     Ok(())
 }
 

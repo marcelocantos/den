@@ -48,6 +48,7 @@ pub async fn fetch_bottle(
     let mut tmp = tempfile::NamedTempFile::new_in(cache_dir)?;
     std::io::Write::write_all(&mut tmp, &data)?;
     tmp.persist(&cache_path)?;
+    crate::trust::set_file_permissions_0600(&cache_path);
 
     Ok(data)
 }
@@ -62,6 +63,9 @@ pub async fn download_bottle(
     if !bottle.url.starts_with("https://") {
         anyhow::bail!("refusing non-HTTPS bottle URL: {}", bottle.url);
     }
+
+    // Validate bottle URL hostname before sending auth token.
+    validate_bottle_url(&bottle.url)?;
 
     // Fetch anonymous GHCR token.
     let token_url = format!(
@@ -238,6 +242,28 @@ fn reject_unsafe_path(path: &Path, kind: &str) -> anyhow::Result<()> {
         anyhow::bail!(
             "bottle contains {kind} with path traversal: {}",
             path.display()
+        );
+    }
+    Ok(())
+}
+
+/// Allowed hostnames for bottle downloads. The auth token is only sent
+/// to these hosts (or subdomains thereof).
+const ALLOWED_BOTTLE_HOSTS: &[&str] = &["ghcr.io", "pkg-containers.githubusercontent.com"];
+
+fn validate_bottle_url(url: &str) -> anyhow::Result<()> {
+    let parsed = url
+        .strip_prefix("https://")
+        .ok_or_else(|| anyhow::anyhow!("bottle URL is not HTTPS"))?;
+    let host = parsed.split('/').next().unwrap_or("");
+    if !ALLOWED_BOTTLE_HOSTS
+        .iter()
+        .any(|allowed| host == *allowed || host.ends_with(&format!(".{allowed}")))
+    {
+        anyhow::bail!(
+            "bottle URL host '{}' is not in the allowed list. \
+             This could indicate a compromised formula index.",
+            host
         );
     }
     Ok(())

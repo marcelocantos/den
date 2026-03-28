@@ -164,6 +164,7 @@ pub fn write_manifest(den_home: &Path, env_path: &str, manifest: &Manifest) -> a
     let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
     std::io::Write::write_all(&mut tmp, json.as_bytes())?;
     tmp.persist(&path)?;
+    crate::trust::set_file_permissions_0600(&path);
     Ok(())
 }
 

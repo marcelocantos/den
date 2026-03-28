@@ -138,6 +138,7 @@ pub fn record_linked_version(
     let mut tmp = tempfile::NamedTempFile::new_in(&linked_dir)?;
     std::io::Write::write_all(&mut tmp, version.as_bytes())?;
     tmp.persist(&path)?;
+    crate::trust::set_file_permissions_0600(&path);
     Ok(())
 }
 

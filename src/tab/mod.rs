@@ -80,5 +80,6 @@ pub fn write_tab(keg_path: &Path, arch: &str) -> anyhow::Result<()> {
     let mut tmp = tempfile::NamedTempFile::new_in(keg_path)?;
     std::io::Write::write_all(&mut tmp, json.as_bytes())?;
     tmp.persist(&path)?;
+    crate::trust::set_file_permissions_0600(&path);
     Ok(())
 }
