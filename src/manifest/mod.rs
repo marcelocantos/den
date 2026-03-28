@@ -171,6 +171,7 @@ pub fn write_manifest(den_home: &Path, env_path: &str, manifest: &Manifest) -> a
 }
 
 /// Path to the lock file for a given environment's manifest.
+#[cfg(unix)]
 fn manifest_lock_file(den_home: &Path, env_path: &str) -> PathBuf {
     let manifest = manifest_file(den_home, env_path);
     manifest.with_extension("lock")
