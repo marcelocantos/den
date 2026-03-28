@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 mod daemon_cmd;
+mod doctor;
 mod env_cmd;
 mod install;
 mod migrate;
@@ -379,9 +380,7 @@ impl Cli {
             Some(Command::Unlink { .. }) => {
                 anyhow::bail!("'unlink' is not yet implemented")
             }
-            Some(Command::Doctor) => {
-                anyhow::bail!("'doctor' is not yet implemented")
-            }
+            Some(Command::Doctor) => doctor::doctor(&config),
             Some(Command::Status) => {
                 anyhow::bail!("'status' is not yet implemented")
             }
