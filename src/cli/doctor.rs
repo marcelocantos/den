@@ -78,10 +78,7 @@ pub(super) fn doctor(config: &Config) -> anyhow::Result<()> {
 
         println!();
         if errors > 0 {
-            println!(
-                "Found {} error(s) and {} warning(s).",
-                errors, warnings
-            );
+            println!("Found {} error(s) and {} warning(s).", errors, warnings);
         } else {
             println!("Found {} warning(s).", warnings);
         }
