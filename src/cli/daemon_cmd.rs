@@ -110,10 +110,13 @@ pub(super) async fn run_daemon_command(
                     .ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))?
                     .join("Library/LaunchAgents/dev.den.daemon.plist");
 
-                if let Some(parent) = plist_path.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                std::fs::write(&plist_path, &plist)?;
+                let parent = plist_path
+                    .parent()
+                    .ok_or_else(|| anyhow::anyhow!("plist path has no parent"))?;
+                std::fs::create_dir_all(parent)?;
+                let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+                std::io::Write::write_all(&mut tmp, plist.as_bytes())?;
+                tmp.persist(&plist_path)?;
 
                 let status = std::process::Command::new("launchctl")
                     .args(["load", "-w"])
