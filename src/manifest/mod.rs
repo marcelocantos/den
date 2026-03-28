@@ -194,6 +194,7 @@ impl ManifestLock {
         }
         let file = std::fs::OpenOptions::new()
             .create(true)
+            .truncate(false)
             .write(true)
             .open(&lock_path)?;
 
