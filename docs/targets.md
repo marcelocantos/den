@@ -642,7 +642,9 @@ GitHub Actions workflow for the den project:
   fetch Homebrew index, diff, verify changed bottles, commit to
   `known_hashes.json`.
 
-**Status**: not started (requires GitHub repo `marcelocantos/den`)
+**Status**: partially achieved — push/PR CI is green on macOS + Linux
+(`f8f19fb`). Release tag workflow and scheduled hash verification
+remain.
 
 ### 🎯T18 — Testing oracle
 Automated Homebrew-equivalence testing.
