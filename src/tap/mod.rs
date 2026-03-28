@@ -716,11 +716,18 @@ mod tests {
             install_steps: vec![],
         };
         // On macOS arm64, we should get the darwin-arm64 override.
+        // On Linux, we get the linux-intel override (test runner is x86_64).
         #[cfg(target_os = "macos")]
         {
             let (url, sha) = resolve_for_platform(&formula, Arch::Arm64).unwrap();
             assert_eq!(url, "https://example.com/darwin-arm64.tar.gz");
             assert_eq!(sha, "specific123");
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let (url, sha) = resolve_for_platform(&formula, Arch::X86_64).unwrap();
+            assert_eq!(url, "https://example.com/linux-amd64.tar.gz");
+            assert_eq!(sha, "linux123");
         }
     }
 }
