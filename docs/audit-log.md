@@ -1,5 +1,19 @@
 # Audit Log
 
+## 2026-03-28 — /audit (round 5)
+
+- **Commit**: `2f8d4a2`
+- **Outcome**: Manual deep audit of all source files. 6 actionable findings (2 high, 3 medium, 1 low). Build/clippy/fmt/test all clean (36 tests, 2 new).
+- **Fixed**: 3 findings in commit `2f8d4a2`:
+  - `decode_component` chained-replace corruption when path components contain literal `%2D` (high)
+  - `validate_formula_name` allows `.`/`..` enabling path traversal in cellar/opt paths (medium)
+  - `settings::set_key` cannot reset numeric fields to null once set (medium)
+- **Deferred / documented**:
+  - Manifest read-modify-write has no file locking — concurrent `den install` can lose changes (high). Needs advisory locking around the cycle.
+  - `parent_path("")` returns `Some("/")` causing double root traversal in `ancestor_chain` (medium). CLI normalisation prevents this path but internal callers could trigger it.
+  - Concurrent `pour_bottle` of same formula can interleave files (medium). Needs keg-level locking or pour-to-temp-then-rename.
+  - CI/CD pipeline (carried forward from round 2).
+
 ## 2026-03-28 — /audit (round 4)
 
 - **Commit**: `b5838f9`
