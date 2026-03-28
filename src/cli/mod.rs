@@ -8,12 +8,13 @@ mod migrate;
 mod query;
 mod services;
 mod shell;
+mod tap_cmd;
 
 use clap::{Parser, Subcommand};
 
 use crate::api::FormulaIndex;
 use crate::config::Config;
-use crate::{env, manifest, settings};
+use crate::{env, manifest, settings, tap};
 
 use daemon_cmd::DaemonCommand;
 use env_cmd::EnvCommand;
@@ -237,12 +238,39 @@ impl Cli {
                         install::install_cask_cmd(&client, &config, &active, name).await?;
                     }
                 } else {
-                    let cache_dir = config.den_home.join("cache");
-                    println!("==> Loading formula index...");
-                    let index = FormulaIndex::load(&client, &cache_dir).await?;
-                    println!("  {} formulae", index.len());
+                    // Separate tap-qualified names from regular names.
+                    let mut regular_names = Vec::new();
+                    let mut tap_refs = Vec::new();
                     for name in &names {
-                        install::install_formula(&client, &config, &index, &active, name).await?;
+                        if let Some((tap_name, formula_name)) = tap::parse_tap_formula_ref(name) {
+                            tap_refs.push((tap_name, formula_name));
+                        } else {
+                            regular_names.push(name.as_str());
+                        }
+                    }
+
+                    // Install tap formulae.
+                    for (tap_name, formula_name) in &tap_refs {
+                        tap_cmd::install_tap_formula(
+                            &client,
+                            &config,
+                            &active,
+                            tap_name,
+                            formula_name,
+                        )
+                        .await?;
+                    }
+
+                    // Install regular formulae.
+                    if !regular_names.is_empty() {
+                        let cache_dir = config.den_home.join("cache");
+                        println!("==> Loading formula index...");
+                        let index = FormulaIndex::load(&client, &cache_dir).await?;
+                        println!("  {} formulae", index.len());
+                        for name in &regular_names {
+                            install::install_formula(&client, &config, &index, &active, name)
+                                .await?;
+                        }
                     }
                 }
                 Ok(())
@@ -325,11 +353,25 @@ impl Cli {
                 println!("{}", settings::display_all(&config.den_home));
                 Ok(())
             }
-            Some(Command::Tap { .. }) => {
-                anyhow::bail!("'tap' is not yet implemented")
+            Some(Command::Tap { name }) => {
+                match name {
+                    Some(tap_name) => tap::add_tap(&config.den_home, &tap_name)?,
+                    None => {
+                        let taps = tap::list_taps(&config.den_home)?;
+                        if taps.is_empty() {
+                            println!("No taps installed.");
+                        } else {
+                            for t in &taps {
+                                println!("{t}");
+                            }
+                        }
+                    }
+                }
+                Ok(())
             }
-            Some(Command::Untap { .. }) => {
-                anyhow::bail!("'untap' is not yet implemented")
+            Some(Command::Untap { name }) => {
+                tap::remove_tap(&config.den_home, &name)?;
+                Ok(())
             }
             Some(Command::Link { .. }) => {
                 anyhow::bail!("'link' is not yet implemented")
