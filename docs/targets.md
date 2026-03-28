@@ -646,6 +646,80 @@ GitHub Actions workflow for the den project:
 (`f8f19fb`). Release tag workflow and scheduled hash verification
 remain.
 
+### 🎯T44 — Advanced trust model
+
+den's trust model should substantially exceed Homebrew's. The
+foundation is in place (🎯T42 independent hash verification, hash
+pinning, cache sealing, URL allowlist, 0600 permissions). This target
+covers the remaining layers.
+
+#### 🎯T44.1 — TUF (The Update Framework)
+
+Adopt TUF for the formula index. TUF provides threshold signing
+(N-of-M keys), key rotation, snapshot consistency, and rollback
+protection. It is purpose-built for secure software updates and used
+by PEP 458 (PyPI), cargo-crev, and major Linux distros.
+
+Concrete steps:
+- Generate a root key (offline, hardware-backed ideally) and signing
+  key (online, used by CI)
+- Sign the verified `known_hashes.json` (from 🎯T42) with the signing key
+- den verifies the signature before trusting the hash file
+- Key rotation procedure documented
+
+This eliminates the "compromise den's GitHub repo" half of the attack
+surface — even with repo write access, an attacker can't produce a
+valid signature without the signing key.
+
+#### 🎯T44.2 — Binary transparency log
+
+Append-only, publicly auditable log of every bottle hash den has
+verified. Modelled on Certificate Transparency. Any change to a
+formula's hash is permanently visible, even if the attacker later
+reverts the index.
+
+Options:
+- Sigstore Rekor (public, free, production-grade)
+- A simple append-only file in the den repo (lower assurance but zero
+  external dependencies)
+- A dedicated transparency service if den gains adoption
+
+The value: even a temporary index compromise is detectable after the
+fact. Monitors can alert on unexpected hash changes.
+
+#### 🎯T44.3 — Reproducible bottle builds
+
+If den eventually builds its own bottles (rather than consuming
+Homebrew's), reproducible builds let anyone rebuild from source and
+verify the binary matches. This is the gold standard — you don't need
+to trust the builder at all.
+
+Concrete steps:
+- Investigate Homebrew's build reproducibility (some formulae are
+  already reproducible)
+- For den-built bottles, pin toolchain versions, use deterministic
+  build flags, strip timestamps
+- Publish source + build recipe alongside each bottle so third
+  parties can reproduce
+
+#### 🎯T44.4 — Streaming downloads
+
+Download bottles and casks to disk via streaming rather than buffering
+entirely in memory. Compute SHA256 incrementally. This eliminates OOM
+from large packages (current limit is 2GB in RAM) and is a
+prerequisite for proper download progress reporting.
+
+#### 🎯T44.5 — Manifest file locking
+
+Advisory flock-based locking around manifest read-modify-write cycles.
+Prevents concurrent `den install` / daemon operations from silently
+clobbering each other's changes. Same pattern as the daemon's
+PidGuard.
+
+**Status**: not started. 🎯T44.1 and 🎯T44.2 depend on 🎯T42. 🎯T44.3
+is long-term. 🎯T44.4 and 🎯T44.5 are independent and could be done
+any time.
+
 ### 🎯T18 — Testing oracle
 Automated Homebrew-equivalence testing.
 **Status**: not started
