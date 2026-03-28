@@ -64,7 +64,9 @@ installs. **Achieved.**
 runs as a long-lived process, refreshes the formula index, downloads
 bottles for outdated packages, and supports auto-upgrade with
 configurable maintenance windows. State stored in
-`~/.den/daemon_state.json`. **Achieved.**
+`~/.den/daemon_state.json`. Granular user control via
+`daemon.auto_download` (default: on) and `daemon.auto_upgrade`
+(default: off). **Achieved.**
 
 ### 🎯T35 — Build environment integration
 `den init` exports LIBRARY_PATH, CPATH, PKG_CONFIG_PATH,
@@ -123,7 +125,7 @@ Show disk usage, which envs reference a keg, all-Cellar listing.
 
 ### 🎯T15 — Cleanup and maintenance
 `den cleanup` (remove old kegs), `den doctor` (system health).
-**Status**: partially achieved (cleanup works, doctor is stub)
+**Status**: achieved
 
 ### 🎯T34 — Daemon socket API
 

@@ -90,6 +90,10 @@ pub(super) async fn run_daemon_command(
 
             let s = settings::read(&config.den_home);
             println!(
+                "Auto-download: {}",
+                if s.daemon.auto_download { "on" } else { "off" }
+            );
+            println!(
                 "Auto-upgrade: {}",
                 if s.daemon.auto_upgrade { "on" } else { "off" }
             );
