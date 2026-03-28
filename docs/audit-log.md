@@ -1,5 +1,10 @@
 # Audit Log
 
+## 2026-03-29 — /release v0.1.0
+
+- **Commit**: `b9c1764`
+- **Outcome**: Released v0.1.0 (darwin-aarch64, linux-x86_64, linux-aarch64). First public release. Streaming downloads, doctor command, daemon auto_download setting, STABILITY.md, release workflow fixes. Install via `curl -fsSL .../install.sh | sh`.
+
 ## 2026-03-28 — /audit (round 5)
 
 - **Commit**: `ef7eaf9` + `ff1cb42`
