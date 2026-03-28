@@ -204,14 +204,48 @@ fn print_dep_tree(
 }
 
 pub(super) fn cleanup(config: &Config) -> anyhow::Result<()> {
-    // Remove cached bottles.
+    // 1. GC kegs not referenced by any manifest.
+    let all_envs = env::list_envs(&config.den_home)?;
+    let mut referenced: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
+
+    for env_path in &all_envs {
+        let resolved = manifest::resolve(&config.den_home, env_path)?;
+        for (name, version) in &resolved {
+            referenced.insert((name.clone(), version.clone()));
+        }
+    }
+
+    let kegs = keg::list_installed(&config.cellar)?;
+    let mut removed_kegs = 0u32;
+
+    for k in &kegs {
+        if !referenced.contains(&(k.name.clone(), k.version.clone())) {
+            println!("  Removing unreferenced keg: {} {}", k.name, k.version);
+            std::fs::remove_dir_all(&k.path)?;
+            // Remove empty rack directory if this was the last version.
+            if let Some(rack) = k.path.parent() {
+                let _ = std::fs::remove_dir(rack); // Fails silently if not empty.
+            }
+            removed_kegs += 1;
+        }
+    }
+
+    if removed_kegs > 0 {
+        println!("Removed {removed_kegs} unreferenced keg(s).");
+    } else {
+        println!("No unreferenced kegs to remove.");
+    }
+
+    // 2. Remove cached bottles.
     let cache_dir = config.den_home.join("cache").join("bottles");
     if cache_dir.is_dir() {
         let count = std::fs::read_dir(&cache_dir)?.count();
         std::fs::remove_dir_all(&cache_dir)?;
-        println!("Removed {count} cached bottles.");
+        println!("Removed {count} cached bottle(s).");
     } else {
         println!("No cached bottles to remove.");
     }
+
     Ok(())
 }
