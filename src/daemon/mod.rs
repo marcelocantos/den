@@ -364,14 +364,12 @@ async fn tick(client: &Client, config: &Config) -> anyhow::Result<()> {
                         match bottle::fetch_bottle(client, bottle_file, &ghcr_path, &bottle_cache)
                             .await
                         {
-                            Ok(data) => {
+                            Ok(fetched) => {
                                 log(
                                     &config.den_home,
                                     &format!(
                                         "cached {} {} ({} bytes)",
-                                        info.name,
-                                        upgrade.available,
-                                        data.len()
+                                        info.name, upgrade.available, fetched.size
                                     ),
                                 );
                             }
@@ -500,7 +498,7 @@ async fn pour_bottle_quiet(
         &bottle_file.sha256,
     )?;
 
-    let data = bottle::fetch_bottle(client, bottle_file, &ghcr_path, &bottle_cache).await?;
+    let fetched = bottle::fetch_bottle(client, bottle_file, &ghcr_path, &bottle_cache).await?;
 
     // Record verified hash for future pin-on-first-install checks.
     trust::record_hash(
@@ -510,7 +508,7 @@ async fn pour_bottle_quiet(
         &bottle_file.sha256,
     )?;
 
-    let poured = bottle::pour_bottle(&data, &config.cellar)?;
+    let poured = bottle::pour_bottle(&fetched.path, &config.cellar)?;
     tab::write_tab(&poured, &config.arch.to_string())?;
 
     log(

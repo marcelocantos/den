@@ -1,9 +1,8 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  release:
+    types: [published]
 
 permissions:
   contents: write
@@ -21,10 +20,16 @@ jobs:
         include:
           - target: aarch64-apple-darwin
             os: macos-14
+            archive_os: darwin
+            archive_arch: aarch64
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+            archive_os: linux
+            archive_arch: x86_64
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
+            archive_os: linux
+            archive_arch: aarch64
 
     steps:
       - uses: actions/checkout@v4
@@ -47,52 +52,48 @@ jobs:
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
 
+      - name: Run tests
+        if: matrix.target != 'aarch64-unknown-linux-gnu'
+        run: cargo test --release --target ${{ matrix.target }}
+
       - name: Package binary
         shell: bash
         run: |
-          tag="${GITHUB_REF#refs/tags/}"
+          version="${GITHUB_REF_NAME#v}"
           bin="den"
           src="target/${{ matrix.target }}/release/${bin}"
 
-          staging="den-${tag}-${{ matrix.target }}"
-          mkdir -p "${staging}"
-          cp "${src}" "${staging}/"
-          cp LICENSE README.md "${staging}/" 2>/dev/null || true
+          archive="den-${version}-${{ matrix.archive_os }}-${{ matrix.archive_arch }}.tar.gz"
+          tar czf "${archive}" -C "target/${{ matrix.target }}/release" "${bin}"
+          shasum -a 256 "${archive}" > "${archive}.sha256"
 
-          tar czf "${staging}.tar.gz" "${staging}"
-          shasum -a 256 "${staging}.tar.gz" > "${staging}.tar.gz.sha256"
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          archive="den-${version}-${{ matrix.archive_os }}-${{ matrix.archive_arch }}.tar.gz"
+          gh release upload "$GITHUB_REF_NAME" "${archive}" "${archive}.sha256" --clobber
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: den-${{ matrix.target }}
-          path: |
-            den-*.tar.gz
-            den-*.tar.gz.sha256
-
-  release:
-    name: Create Release
+  checksums:
+    name: Consolidated checksums
     needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
-
-      - name: Generate combined checksums
+      - name: Download and consolidate checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          cd artifacts
-          cat *.sha256 > checksums-sha256.txt
+          version="${GITHUB_REF_NAME#v}"
+          checksums="den-${version}-checksums.txt"
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          files: |
-            artifacts/*.tar.gz
-            artifacts/*.sha256
-            artifacts/checksums-sha256.txt
+          # Download individual .sha256 files from the release.
+          for asset in $(gh release view "$GITHUB_REF_NAME" --json assets -q '.assets[].name' | grep '\.sha256$'); do
+            gh release download "$GITHUB_REF_NAME" -p "$asset" -D /tmp/checksums
+          done
+
+          # Consolidate into one file.
+          cat /tmp/checksums/*.sha256 > "${checksums}"
+          gh release upload "$GITHUB_REF_NAME" "${checksums}" --clobber

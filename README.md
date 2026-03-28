@@ -108,6 +108,7 @@ Cellar, the same formulae API. What's different is the layer above:
 All settings in `~/.den/config.json`, managed via `den set`:
 
 ```bash
+den set daemon.auto_download false       # disable background downloads
 den set daemon.auto_upgrade true        # auto-apply upgrades
 den set daemon.upgrade_window "3:00-5:00"  # when to apply
 den set search.provider keyword         # search provider
@@ -133,7 +134,14 @@ Run `den --help` for the full list. Key commands:
 | `den env show [path]` | Show resolved packages |
 | `den services list` | Show managed services |
 | `den daemon status` | Daemon and pending upgrade status |
+| `den doctor` | Check system health and report issues |
 | `den migrate` | Import from Homebrew |
+
+## Agent guide
+
+If you use an agentic coding tool (Claude Code, Cursor, etc.), include
+[`agents-guide.md`](agents-guide.md) in your project context for
+den-aware assistance.
 
 ## Contributing
 

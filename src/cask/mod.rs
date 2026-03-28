@@ -1,8 +1,10 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use futures_util::StreamExt;
 use reqwest::Client;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -11,6 +13,13 @@ const CASK_API_BASE: &str = "https://formulae.brew.sh/api/cask";
 
 /// Maximum allowed download size (2 GB).
 const MAX_DOWNLOAD_SIZE: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Result of a successful cask download: the path to the temp file, its size, and the format.
+pub struct DownloadedCask {
+    pub path: PathBuf,
+    pub size: u64,
+    pub ext: String,
+}
 
 /// RAII guard that detaches a mounted DMG when dropped, preventing mount leaks
 /// if an error occurs mid-function.
@@ -125,8 +134,9 @@ pub async fn fetch_cask(client: &Client, token: &str) -> anyhow::Result<CaskInfo
     Ok(info)
 }
 
-/// Download a cask artifact, verify SHA256 if provided.
-pub async fn download_cask(info: &CaskInfo) -> anyhow::Result<(Vec<u8>, String)> {
+/// Download a cask artifact via streaming, verify SHA256.
+/// Returns the path to a temp file containing the verified download, its size, and format.
+pub async fn download_cask(info: &CaskInfo) -> anyhow::Result<DownloadedCask> {
     // Enforce HTTPS.
     if !info.url.starts_with("https://") {
         anyhow::bail!("refusing non-HTTPS cask URL: {}", info.url);
@@ -162,7 +172,7 @@ pub async fn download_cask(info: &CaskInfo) -> anyhow::Result<(Vec<u8>, String)>
         anyhow::bail!("cask download failed (HTTP {})", response.status());
     }
 
-    // Reject excessively large downloads before buffering.
+    // Reject excessively large downloads before streaming.
     if let Some(len) = response.content_length()
         && len > MAX_DOWNLOAD_SIZE
     {
@@ -193,41 +203,55 @@ pub async fn download_cask(info: &CaskInfo) -> anyhow::Result<(Vec<u8>, String)>
         .unwrap_or("dmg")
         .to_string();
 
-    let bytes = response.bytes().await?.to_vec();
+    // Stream the response to a temp file while computing SHA256 incrementally.
+    let mut tmp = tempfile::NamedTempFile::new()?;
+    let mut hasher = Sha256::new();
+    let mut total_bytes: u64 = 0;
+    let mut stream = response.bytes_stream();
 
-    // Post-download size check for chunked responses without Content-Length.
-    if bytes.len() as u64 > MAX_DOWNLOAD_SIZE {
-        anyhow::bail!(
-            "cask download too large ({} bytes, max {} bytes)",
-            bytes.len(),
-            MAX_DOWNLOAD_SIZE
-        );
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        total_bytes += chunk.len() as u64;
+        if total_bytes > MAX_DOWNLOAD_SIZE {
+            anyhow::bail!(
+                "cask download too large ({} bytes so far, max {} bytes)",
+                total_bytes,
+                MAX_DOWNLOAD_SIZE
+            );
+        }
+        hasher.update(&chunk);
+        tmp.write_all(&chunk)?;
     }
+    tmp.flush()?;
 
-    // Verify SHA256 if specified (some casks use "no_check").
+    // Verify SHA256.
     if let Some(ref expected) = info.sha256
         && expected != "no_check"
     {
-        let mut hasher = Sha256::new();
-        hasher.update(&bytes);
         let digest = format!("{:x}", hasher.finalize());
         if digest != *expected {
             anyhow::bail!("SHA256 mismatch: expected {}, got {}", expected, digest);
         }
     }
 
-    Ok((bytes, ext))
+    let path = tmp
+        .into_temp_path()
+        .keep()
+        .map_err(|_| anyhow::anyhow!("failed to persist temp file"))?;
+
+    Ok(DownloadedCask {
+        path,
+        size: total_bytes,
+        ext,
+    })
 }
 
-/// Install a cask from a downloaded DMG.
+/// Install a cask from a downloaded DMG file on disk.
 pub fn install_from_dmg(
-    dmg_data: &[u8],
+    dmg_path: &Path,
     apps: &[String],
     appdir: &Path,
 ) -> anyhow::Result<Vec<PathBuf>> {
-    let tmp = tempfile::NamedTempFile::new()?.into_temp_path();
-    std::fs::write(&tmp, dmg_data)?;
-
     let mount_dir = tempfile::tempdir()?;
     let mount_path = mount_dir.path();
 
@@ -235,7 +259,7 @@ pub fn install_from_dmg(
     let status = std::process::Command::new("hdiutil")
         .args(["attach", "-nobrowse", "-readonly", "-mountpoint"])
         .arg(mount_path)
-        .arg(&tmp)
+        .arg(dmg_path)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()?;
@@ -276,20 +300,18 @@ pub fn install_from_dmg(
     Ok(installed)
 }
 
-/// Install a cask from a downloaded ZIP.
+/// Install a cask from a downloaded ZIP file on disk.
 pub fn install_from_zip(
-    zip_data: &[u8],
+    zip_path: &Path,
     apps: &[String],
     appdir: &Path,
 ) -> anyhow::Result<Vec<PathBuf>> {
     let tmp_dir = tempfile::tempdir()?;
-    let zip_path = tmp_dir.path().join("download.zip");
-    std::fs::write(&zip_path, zip_data)?;
 
     // Extract.
     let status = std::process::Command::new("unzip")
         .args(["-q", "-o"])
-        .arg(&zip_path)
+        .arg(zip_path)
         .arg("-d")
         .arg(tmp_dir.path())
         .status()?;
