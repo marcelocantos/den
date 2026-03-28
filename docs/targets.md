@@ -593,6 +593,57 @@ Delegate to Ruby via lazy-vendored Portable Ruby (T31).
 Ruby DSL parsing for non-API taps. Uses lazy-vendored Ruby (T31).
 **Status**: not started
 
+### 🎯T42 — Independent hash verification pipeline
+
+den maintains a verified replica of Homebrew bottle SHA256 hashes in
+its own GitHub repo, hosted on a different CDN than formulae.brew.sh.
+On install, den cross-references both sources — an attacker must
+compromise both Homebrew's CDN and den's GitHub repo simultaneously.
+
+The CI replication job does NOT blindly trust the upstream index.
+It builds a diff-based trust model:
+
+1. Fetch the current formula index from formulae.brew.sh.
+2. Diff against the previous verified snapshot — identify changed hashes.
+3. For each changed hash, independently verify by downloading the
+   actual bottle from GHCR and computing SHA256 locally. If the
+   bottle's computed hash matches the index claim, the entry is genuine.
+   If not, reject it and alert (open a GitHub issue, fail the CI run).
+4. Only commit verified changes to the replica (`known_hashes.json`).
+
+This means an attacker who modifies the index must also host a
+matching bottle at the correct GHCR path — they can't just change
+the hash arbitrarily. The CI job verifies actual bottle content.
+
+Optimisation: only download bottles whose hash changed since the last
+snapshot. Typical daily churn is a few dozen formulae, making the
+verification tractable. For very large bottles, a HEAD request +
+Content-Length check can provide a fast first-pass filter (a hash
+change with identical Content-Length is suspicious).
+
+The verified hashes file is fetched by den from GitHub raw content
+(separate CDN) and checked alongside the formula index hashes. If
+either source is unavailable, den falls back to the other with a
+warning. If both are available and disagree, den refuses the install.
+
+**Depends on**: CI/CD pipeline, GitHub repo existence.
+**Status**: not started (blocked by CI)
+
+### 🎯T43 — CI/CD pipeline
+
+GitHub Actions workflow for the den project:
+
+- **On push/PR**: `cargo build`, `cargo test`, `cargo clippy -- -D warnings`,
+  `cargo fmt --check`, on macOS arm64 and Linux x86_64.
+- **On release tag**: cross-compile release binaries for macOS arm64,
+  Linux x86_64, Linux arm64. Publish as GitHub Release assets with
+  checksums. Update install.sh download URLs.
+- **Scheduled (daily)**: Run the 🎯T42 hash verification pipeline —
+  fetch Homebrew index, diff, verify changed bottles, commit to
+  `known_hashes.json`.
+
+**Status**: not started (requires GitHub repo `marcelocantos/den`)
+
 ### 🎯T18 — Testing oracle
 Automated Homebrew-equivalence testing.
 **Status**: not started
