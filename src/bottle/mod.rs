@@ -1,8 +1,10 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use futures_util::StreamExt;
 use reqwest::Client;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -12,6 +14,12 @@ use crate::formula::BottleFile;
 /// Maximum allowed download size (2 GB).
 const MAX_DOWNLOAD_SIZE: u64 = 2 * 1024 * 1024 * 1024;
 
+/// Result of a successful bottle fetch: the path to the cached file and its size.
+pub struct FetchedBottle {
+    pub path: PathBuf,
+    pub size: u64,
+}
+
 #[derive(Deserialize)]
 struct GhcrToken {
     token: String,
@@ -19,46 +27,64 @@ struct GhcrToken {
 
 /// Fetch a bottle, using the content-addressed cache if available.
 /// Cache key is the SHA256 digest — the same hash we verify against.
+/// Returns the path to the cached bottle file and its size.
 pub async fn fetch_bottle(
     client: &Client,
     bottle: &BottleFile,
     ghcr_repo_path: &str,
     cache_dir: &Path,
-) -> anyhow::Result<Vec<u8>> {
+) -> anyhow::Result<FetchedBottle> {
     let cache_path = cache_dir.join(&bottle.sha256);
 
     // Check cache first.
     if cache_path.is_file() {
-        let data = std::fs::read(&cache_path)?;
-        // Verify integrity (cache could be corrupted/truncated).
+        // Verify integrity by streaming the file through SHA256.
         let mut hasher = Sha256::new();
-        hasher.update(&data);
+        let file = std::fs::File::open(&cache_path)?;
+        let mut reader = std::io::BufReader::new(file);
+        let mut buf = [0u8; 8192];
+        let mut size: u64 = 0;
+        loop {
+            let n = std::io::Read::read(&mut reader, &mut buf)?;
+            if n == 0 {
+                break;
+            }
+            size += n as u64;
+            hasher.update(&buf[..n]);
+        }
         let digest = format!("{:x}", hasher.finalize());
         if digest == bottle.sha256 {
-            return Ok(data);
+            return Ok(FetchedBottle {
+                path: cache_path,
+                size,
+            });
         }
         // Corrupted — re-download.
         let _ = std::fs::remove_file(&cache_path);
     }
 
-    let data = download_bottle(client, bottle, ghcr_repo_path).await?;
+    let fetched = download_bottle(client, bottle, ghcr_repo_path, cache_dir).await?;
 
-    // Write to cache atomically.
+    // Move the downloaded file into the cache atomically.
     std::fs::create_dir_all(cache_dir)?;
-    let mut tmp = tempfile::NamedTempFile::new_in(cache_dir)?;
-    std::io::Write::write_all(&mut tmp, &data)?;
-    tmp.persist(&cache_path)?;
+    // The download already wrote to a temp file; rename it to the cache path.
+    std::fs::rename(&fetched.path, &cache_path)?;
     crate::trust::set_file_permissions_0600(&cache_path);
 
-    Ok(data)
+    Ok(FetchedBottle {
+        path: cache_path,
+        size: fetched.size,
+    })
 }
 
-/// Download a bottle from GHCR, verify its SHA256, and return the raw bytes.
+/// Download a bottle from GHCR via streaming, verify its SHA256, and write to a temp file.
+/// Returns the path to the verified temp file and its size.
 pub async fn download_bottle(
     client: &Client,
     bottle: &BottleFile,
     ghcr_repo_path: &str,
-) -> anyhow::Result<Vec<u8>> {
+    dest_dir: &Path,
+) -> anyhow::Result<FetchedBottle> {
     // Enforce HTTPS to prevent token leakage.
     if !bottle.url.starts_with("https://") {
         anyhow::bail!("refusing non-HTTPS bottle URL: {}", bottle.url);
@@ -104,7 +130,7 @@ pub async fn download_bottle(
         anyhow::bail!("bottle download failed (HTTP {})", response.status());
     }
 
-    // Reject excessively large downloads before buffering.
+    // Reject excessively large downloads before streaming.
     if let Some(len) = response.content_length()
         && len > MAX_DOWNLOAD_SIZE
     {
@@ -115,22 +141,31 @@ pub async fn download_bottle(
         );
     }
 
-    let bytes = response.bytes().await?.to_vec();
+    // Stream the response to a temp file while computing SHA256 incrementally.
+    std::fs::create_dir_all(dest_dir)?;
+    let mut tmp = tempfile::NamedTempFile::new_in(dest_dir)?;
+    let mut hasher = Sha256::new();
+    let mut total_bytes: u64 = 0;
+    let mut stream = response.bytes_stream();
 
-    // Post-download size check for chunked responses without Content-Length.
-    if bytes.len() as u64 > MAX_DOWNLOAD_SIZE {
-        anyhow::bail!(
-            "bottle download too large ({} bytes, max {} bytes)",
-            bytes.len(),
-            MAX_DOWNLOAD_SIZE
-        );
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        total_bytes += chunk.len() as u64;
+        if total_bytes > MAX_DOWNLOAD_SIZE {
+            // Clean up the temp file (dropped automatically).
+            anyhow::bail!(
+                "bottle download too large ({} bytes so far, max {} bytes)",
+                total_bytes,
+                MAX_DOWNLOAD_SIZE
+            );
+        }
+        hasher.update(&chunk);
+        tmp.write_all(&chunk)?;
     }
+    tmp.flush()?;
 
     // Verify SHA256.
-    let mut hasher = Sha256::new();
-    hasher.update(&bytes);
     let digest = format!("{:x}", hasher.finalize());
-
     if digest != bottle.sha256 {
         anyhow::bail!(
             "SHA256 mismatch: expected {}, got {}",
@@ -139,13 +174,23 @@ pub async fn download_bottle(
         );
     }
 
-    Ok(bytes)
+    let path = tmp
+        .into_temp_path()
+        .keep()
+        .map_err(|_| anyhow::anyhow!("failed to persist temp file"))?;
+
+    Ok(FetchedBottle {
+        path,
+        size: total_bytes,
+    })
 }
 
 /// Pour (extract) a bottle tarball into the Cellar directory.
+/// Reads from a file on disk rather than an in-memory buffer.
 /// Returns the path to the newly created keg.
-pub fn pour_bottle(bottle_data: &[u8], cellar: &Path) -> anyhow::Result<PathBuf> {
-    let decoder = flate2::read::GzDecoder::new(bottle_data);
+pub fn pour_bottle(bottle_path: &Path, cellar: &Path) -> anyhow::Result<PathBuf> {
+    let file = std::fs::File::open(bottle_path)?;
+    let decoder = flate2::read::GzDecoder::new(std::io::BufReader::new(file));
     let mut archive = tar::Archive::new(decoder);
 
     // Peek at the first entry to determine the keg path (name/version/).

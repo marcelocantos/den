@@ -118,8 +118,8 @@ pub(super) async fn pour_bottle(
 
     let cache_dir = config.den_home.join("cache").join("bottles");
     println!("==> Fetching {} {} ({})...", info.name, pkg_version, tag);
-    let bottle_data = bottle::fetch_bottle(client, bottle_file, &ghcr_path, &cache_dir).await?;
-    println!("  {} bytes, SHA256 verified", bottle_data.len());
+    let fetched = bottle::fetch_bottle(client, bottle_file, &ghcr_path, &cache_dir).await?;
+    println!("  {} bytes, SHA256 verified", fetched.size);
 
     // Record verified hash for future pin-on-first-install checks.
     trust::record_hash(
@@ -130,7 +130,7 @@ pub(super) async fn pour_bottle(
     )?;
 
     println!("==> Pouring {} {}...", info.name, pkg_version);
-    let poured_keg = bottle::pour_bottle(&bottle_data, &config.cellar)?;
+    let poured_keg = bottle::pour_bottle(&fetched.path, &config.cellar)?;
     tab::write_tab(&poured_keg, &config.arch.to_string())?;
     Ok(())
 }
@@ -338,17 +338,20 @@ pub(super) async fn install_cask_cmd(
     }
 
     println!("==> Downloading {} {}...", info.token, info.version);
-    let (data, ext) = cask::download_cask(&info).await?;
-    println!("  {} bytes downloaded", data.len());
+    let downloaded = cask::download_cask(&info).await?;
+    println!("  {} bytes downloaded", downloaded.size);
 
     let appdir = std::path::PathBuf::from("/Applications");
 
     println!("==> Installing {}...", apps.join(", "));
-    let installed = match ext.as_str() {
-        "dmg" => cask::install_from_dmg(&data, &apps, &appdir)?,
-        "zip" => cask::install_from_zip(&data, &apps, &appdir)?,
-        _ => anyhow::bail!("unsupported cask format: {ext}"),
+    let installed = match downloaded.ext.as_str() {
+        "dmg" => cask::install_from_dmg(&downloaded.path, &apps, &appdir)?,
+        "zip" => cask::install_from_zip(&downloaded.path, &apps, &appdir)?,
+        _ => anyhow::bail!("unsupported cask format: {}", downloaded.ext),
     };
+
+    // Clean up the downloaded temp file.
+    let _ = std::fs::remove_file(&downloaded.path);
 
     // Track in manifest.
     manifest::with_manifest(&config.den_home, active_env, |m| {

@@ -15,6 +15,9 @@ dirs 6 - MIT OR Apache-2.0
 flate2 1 - MIT/Apache-2.0
   https://github.com/rust-lang/flate2-rs
 
+futures-util 0.3 - MIT/Apache-2.0
+  https://github.com/rust-lang/futures-rs
+
 libc 0.2 - MIT OR Apache-2.0
   https://github.com/rust-lang/libc
 
