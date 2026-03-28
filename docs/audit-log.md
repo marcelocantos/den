@@ -1,5 +1,12 @@
 # Audit Log
 
+## 2026-03-28 — /audit (round 4)
+
+- **Commit**: `b5838f9`
+- **Outcome**: 14 raw findings from 3 agents (2 opus, 1 sonnet). After dedup against rounds 2-3: 7 new actionable findings (0 high, 5 medium, 2 low). Build/clippy/fmt/test all clean. Only file >500 lines: daemon/mod.rs (525).
+- **Fixed**: All 7 in commit `4f5c06d`. Shell `!` escaping, env path slash collapsing + `.` rejection, child env protection on remove, manifest_file defense-in-depth assert, install.sh version validation, signal handler error propagation, dep tree label fix.
+- **Deferred**: CI/CD pipeline (carried forward).
+
 ## 2026-03-27 — /audit (round 3)
 
 - **Commit**: `18f56c8`
