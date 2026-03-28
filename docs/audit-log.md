@@ -2,17 +2,24 @@
 
 ## 2026-03-28 — /audit (round 5)
 
-- **Commit**: `2f8d4a2`
-- **Outcome**: Manual deep audit of all source files. 6 actionable findings (2 high, 3 medium, 1 low). Build/clippy/fmt/test all clean (36 tests, 2 new).
-- **Fixed**: 3 findings in commit `2f8d4a2`:
-  - `decode_component` chained-replace corruption when path components contain literal `%2D` (high)
-  - `validate_formula_name` allows `.`/`..` enabling path traversal in cellar/opt paths (medium)
-  - `settings::set_key` cannot reset numeric fields to null once set (medium)
-- **Deferred / documented**:
-  - Manifest read-modify-write has no file locking — concurrent `den install` can lose changes (high). Needs advisory locking around the cycle.
-  - `parent_path("")` returns `Some("/")` causing double root traversal in `ancestor_chain` (medium). CLI normalisation prevents this path but internal callers could trigger it.
-  - Concurrent `pour_bottle` of same formula can interleave files (medium). Needs keg-level locking or pour-to-temp-then-rename.
-  - CI/CD pipeline (carried forward from round 2).
+- **Commit**: `ef7eaf9` + `ff1cb42`
+- **Outcome**: 2 opus agents (adversarial security + correctness/edge cases). 13 raw findings total; after dedup: 4 fixed, 5 deferred as architectural/design items, 4 filtered (trust-model observations not actionable as code changes).
+- **Fixed**:
+  - `decode_component` chained-replace corruption for `%2D` in path components (high) — `2f8d4a2`
+  - `validate_formula_name` allows `.`/`..` enabling cellar path traversal (medium) — `2f8d4a2`
+  - `settings::set_key` cannot reset numeric fields to null (medium) — `2f8d4a2`
+  - Plist write in daemon_cmd.rs uses non-atomic `fs::write` (medium) — `ff1cb42`
+- **Deferred / documented** (architectural — need targets):
+  - Manifest read-modify-write has no file locking — concurrent `den install` can lose changes (high)
+  - Concurrent `pour_bottle` of same formula can interleave files (medium)
+  - `parent_path("")` returns `Some("/")` — double root in `ancestor_chain` (medium)
+  - Formula index has no integrity verification — supply-chain trust model (high, design)
+  - Download streaming to disk instead of full in-memory buffering (low, performance)
+  - CI/CD pipeline (carried forward from round 2)
+- **Filtered** (trust-model observations, same as Homebrew):
+  - GHCR token sent to URL from formula index (index IS the trust root)
+  - HOMEBREW_PREFIX/CELLAR env vars accepted without validation (user env is trusted)
+  - Service plist loaded from kegs without content validation (same trust model as Homebrew)
 
 ## 2026-03-28 — /audit (round 4)
 
