@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(unix)]
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -166,6 +168,85 @@ pub fn write_manifest(den_home: &Path, env_path: &str, manifest: &Manifest) -> a
     tmp.persist(&path)?;
     crate::trust::set_file_permissions_0600(&path);
     Ok(())
+}
+
+/// Path to the lock file for a given environment's manifest.
+fn manifest_lock_file(den_home: &Path, env_path: &str) -> PathBuf {
+    let manifest = manifest_file(den_home, env_path);
+    manifest.with_extension("lock")
+}
+
+/// Guard that holds an exclusive advisory lock on a manifest file.
+/// The lock is released when the guard is dropped.
+#[cfg(unix)]
+struct ManifestLock {
+    _file: std::fs::File,
+}
+
+#[cfg(unix)]
+impl ManifestLock {
+    /// Acquire a blocking exclusive lock on the manifest lock file.
+    fn acquire(den_home: &Path, env_path: &str) -> anyhow::Result<Self> {
+        let lock_path = manifest_lock_file(den_home, env_path);
+        if let Some(parent) = lock_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&lock_path)?;
+
+        // Blocking exclusive lock — waits if another process holds it.
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        if rc != 0 {
+            anyhow::bail!(
+                "failed to acquire manifest lock for env '{}': {}",
+                env_path,
+                std::io::Error::last_os_error()
+            );
+        }
+
+        Ok(Self { _file: file })
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ManifestLock {
+    fn drop(&mut self) {
+        unsafe { libc::flock(self._file.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+
+/// Acquire an exclusive lock on the manifest for `env_path`, read it,
+/// pass it to the closure for modification, and write it back.
+///
+/// The lock is held for the entire read-modify-write cycle, preventing
+/// concurrent operations from clobbering each other's changes.
+pub fn with_manifest<F>(den_home: &Path, env_path: &str, f: F) -> anyhow::Result<()>
+where
+    F: FnOnce(&mut Manifest) -> anyhow::Result<()>,
+{
+    #[cfg(unix)]
+    let _lock = ManifestLock::acquire(den_home, env_path)?;
+
+    let mut manifest = read_manifest(den_home, env_path)?;
+    f(&mut manifest)?;
+    write_manifest(den_home, env_path, &manifest)?;
+    Ok(())
+}
+
+/// Variant of `with_manifest` that returns a value from the closure.
+pub fn with_manifest_ret<F, T>(den_home: &Path, env_path: &str, f: F) -> anyhow::Result<T>
+where
+    F: FnOnce(&mut Manifest) -> anyhow::Result<T>,
+{
+    #[cfg(unix)]
+    let _lock = ManifestLock::acquire(den_home, env_path)?;
+
+    let mut manifest = read_manifest(den_home, env_path)?;
+    let result = f(&mut manifest)?;
+    write_manifest(den_home, env_path, &manifest)?;
+    Ok(result)
 }
 
 /// Resolve the full package set for an environment by merging from root

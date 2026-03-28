@@ -68,10 +68,11 @@ pub(super) fn use_version(config: &Config, name: &str) -> anyhow::Result<()> {
     };
 
     // Update the manifest.
-    let mut m = manifest::read_manifest(&config.den_home, &active)?;
-    m.packages
-        .insert(formula_name.to_string(), keg.version.clone());
-    manifest::write_manifest(&config.den_home, &active, &m)?;
+    manifest::with_manifest(&config.den_home, &active, |m| {
+        m.packages
+            .insert(formula_name.to_string(), keg.version.clone());
+        Ok(())
+    })?;
 
     // Re-materialise.
     println!(

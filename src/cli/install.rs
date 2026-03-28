@@ -49,15 +49,16 @@ pub(super) async fn install_formula(
     }
 
     // Update manifest: requested package is explicit, deps are auto.
-    let mut m = manifest::read_manifest(&config.den_home, active_env)?;
-    for info in &all {
-        let pkg_version = info.pkg_version();
-        m.packages.insert(info.name.clone(), pkg_version);
-        if info.name != name {
-            m.auto.insert(info.name.clone());
+    manifest::with_manifest(&config.den_home, active_env, |m| {
+        for info in &all {
+            let pkg_version = info.pkg_version();
+            m.packages.insert(info.name.clone(), pkg_version);
+            if info.name != name {
+                m.auto.insert(info.name.clone());
+            }
         }
-    }
-    manifest::write_manifest(&config.den_home, active_env, &m)?;
+        Ok(())
+    })?;
 
     // Re-materialise.
     println!("==> Materialising environment '{active_env}'...");
@@ -139,15 +140,14 @@ pub(super) fn uninstall_package(
     active_env: &str,
     name: &str,
 ) -> anyhow::Result<()> {
-    let mut m = manifest::read_manifest(&config.den_home, active_env)?;
-
-    if !m.packages.contains_key(name) {
-        anyhow::bail!("{name} is not in environment '{active_env}'");
-    }
-
-    m.packages.remove(name);
-    m.auto.remove(name);
-    manifest::write_manifest(&config.den_home, active_env, &m)?;
+    manifest::with_manifest(&config.den_home, active_env, |m| {
+        if !m.packages.contains_key(name) {
+            anyhow::bail!("{name} is not in environment '{active_env}'");
+        }
+        m.packages.remove(name);
+        m.auto.remove(name);
+        Ok(())
+    })?;
 
     // Re-materialise.
     println!("==> Removing {name} from '{active_env}'...");
@@ -161,36 +161,35 @@ pub(super) fn uninstall_package(
 /// Remove auto-installed packages from the active environment that are no
 /// longer needed as dependencies of any explicitly installed package.
 pub(super) fn autoremove(config: &Config, active_env: &str) -> anyhow::Result<()> {
-    let mut m = manifest::read_manifest(&config.den_home, active_env)?;
+    let orphaned = manifest::with_manifest_ret(&config.den_home, active_env, |m| {
+        if m.auto.is_empty() {
+            return Ok(Vec::new());
+        }
 
-    if m.auto.is_empty() {
-        println!("No auto-installed packages to remove.");
-        return Ok(());
-    }
+        // Find auto packages no longer in the manifest (removed by prior uninstall).
+        // A more sophisticated implementation would use the formula index to check
+        // transitive dependency reachability from explicit packages, but the simple
+        // approach — remove auto entries not in the package list — is correct because
+        // `den uninstall` already removes packages from the list.
+        let orphaned: Vec<String> = m
+            .auto
+            .iter()
+            .filter(|name| !m.packages.contains_key(*name))
+            .cloned()
+            .collect();
 
-    // Find auto packages no longer in the manifest (removed by prior uninstall).
-    // A more sophisticated implementation would use the formula index to check
-    // transitive dependency reachability from explicit packages, but the simple
-    // approach — remove auto entries not in the package list — is correct because
-    // `den uninstall` already removes packages from the list.
-    let orphaned: Vec<String> = m
-        .auto
-        .iter()
-        .filter(|name| !m.packages.contains_key(*name))
-        .cloned()
-        .collect();
+        for name in &orphaned {
+            m.auto.remove(name);
+            println!("  Removing orphaned dependency: {name}");
+        }
+
+        Ok(orphaned)
+    })?;
 
     if orphaned.is_empty() {
         println!("No orphaned auto-installed packages to remove.");
         return Ok(());
     }
-
-    for name in &orphaned {
-        m.auto.remove(name);
-        println!("  Removing orphaned dependency: {name}");
-    }
-
-    manifest::write_manifest(&config.den_home, active_env, &m)?;
 
     // Re-materialise.
     println!("==> Materialising environment '{active_env}'...");
@@ -294,16 +293,17 @@ pub(super) async fn upgrade_packages(
             }
         }
 
-        let mut m = manifest::read_manifest(&config.den_home, active_env)?;
-        m.packages.insert(name.clone(), latest.clone());
-        for dep_info in &all {
-            let dep_ver = dep_info.pkg_version();
-            m.packages.insert(dep_info.name.clone(), dep_ver);
-            if dep_info.name != *name {
-                m.auto.insert(dep_info.name.clone());
+        manifest::with_manifest(&config.den_home, active_env, |m| {
+            m.packages.insert(name.clone(), latest.clone());
+            for dep_info in &all {
+                let dep_ver = dep_info.pkg_version();
+                m.packages.insert(dep_info.name.clone(), dep_ver);
+                if dep_info.name != *name {
+                    m.auto.insert(dep_info.name.clone());
+                }
             }
-        }
-        manifest::write_manifest(&config.den_home, active_env, &m)?;
+            Ok(())
+        })?;
         upgraded += 1;
     }
 
@@ -351,9 +351,10 @@ pub(super) async fn install_cask_cmd(
     };
 
     // Track in manifest.
-    let mut m = manifest::read_manifest(&config.den_home, active_env)?;
-    m.casks.insert(info.token.clone(), info.version.clone());
-    manifest::write_manifest(&config.den_home, active_env, &m)?;
+    manifest::with_manifest(&config.den_home, active_env, |m| {
+        m.casks.insert(info.token.clone(), info.version.clone());
+        Ok(())
+    })?;
 
     for path in &installed {
         println!("  Installed {}", path.display());

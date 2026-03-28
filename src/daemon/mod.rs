@@ -446,9 +446,10 @@ async fn apply_upgrades(
         }
 
         // Update manifest.
-        let mut m = manifest::read_manifest(&config.den_home, active_env)?;
-        m.packages.insert(info.name.clone(), pkg_version.clone());
-        manifest::write_manifest(&config.den_home, active_env, &m)?;
+        manifest::with_manifest(&config.den_home, active_env, |m| {
+            m.packages.insert(info.name.clone(), pkg_version.clone());
+            Ok(())
+        })?;
     }
 
     // Re-materialise.
