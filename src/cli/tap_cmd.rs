@@ -43,10 +43,11 @@ pub(super) async fn install_tap_formula(
     println!("  Installed to {}", keg_path.display());
 
     // Update manifest.
-    let mut m = manifest::read_manifest(&config.den_home, active_env)?;
-    m.packages
-        .insert(formula.name.clone(), formula.version.clone());
-    manifest::write_manifest(&config.den_home, active_env, &m)?;
+    manifest::with_manifest(&config.den_home, active_env, |m| {
+        m.packages
+            .insert(formula.name.clone(), formula.version.clone());
+        Ok(())
+    })?;
 
     // Materialise environment.
     println!("==> Materialising environment '{active_env}'...");

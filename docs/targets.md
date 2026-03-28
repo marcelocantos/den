@@ -716,9 +716,11 @@ Prevents concurrent `den install` / daemon operations from silently
 clobbering each other's changes. Same pattern as the daemon's
 PidGuard.
 
-**Status**: not started. 🎯T44.1 and 🎯T44.2 depend on 🎯T42. 🎯T44.3
-is long-term. 🎯T44.4 and 🎯T44.5 are independent and could be done
-any time.
+**Status**: achieved. All read-modify-write call sites converted to
+`with_manifest` / `with_manifest_ret` which acquire an exclusive
+`flock` on a `.lock` file next to the manifest before reading.
+🎯T44.1 and 🎯T44.2 depend on 🎯T42. 🎯T44.3 is long-term.
+🎯T44.4 is independent and could be done any time.
 
 ### 🎯T18 — Testing oracle
 Automated Homebrew-equivalence testing.
