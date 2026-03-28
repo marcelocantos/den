@@ -73,9 +73,18 @@ configurable maintenance windows. State stored in
 CMAKE_PREFIX_PATH, and MANPATH pointing at the active environment.
 These swap when `den env use` switches environments. **Achieved.**
 
+### 🎯T15 — Cleanup and maintenance
+`den cleanup` (remove old kegs), `den doctor` (system health).
+**Achieved.**
+
+### 🎯T44.5 — Manifest file locking
+Advisory flock-based locking around manifest read-modify-write cycles.
+All read-modify-write call sites use `with_manifest` / `with_manifest_ret`
+with exclusive `flock`. **Achieved.**
+
 ---
 
-## Remaining for production quality
+## Active
 
 ### 🎯T33 — Built-in process supervisor
 
@@ -111,21 +120,20 @@ one binary does the lot.
 The den daemon is the only thing that touches launchd — everything
 else is supervised directly by den.
 
-**Status**: not started
+- **Weight**: 0.6 (value 8 / cost 13)
+- **Status**: not started
 
 ---
 
 ### 🎯T2 — Configuration and environment detection
 Xcode/CLT version detection, full Homebrew config parity.
-**Status**: partially achieved
+- **Weight**: 1.5 (value 3 / cost 2)
+- **Status**: partially achieved
 
 ### 🎯T4 — Cellar inspection improvements
 Show disk usage, which envs reference a keg, all-Cellar listing.
-**Status**: partially achieved
-
-### 🎯T15 — Cleanup and maintenance
-`den cleanup` (remove old kegs), `den doctor` (system health).
-**Status**: achieved
+- **Weight**: 1 (value 3 / cost 3)
+- **Status**: partially achieved
 
 ### 🎯T34 — Daemon socket API
 
@@ -134,11 +142,11 @@ for real-time CLI↔daemon communication. Required for T33 (process
 supervision) where the CLI needs to send commands to a running
 supervisor. Not needed for background maintenance alone.
 
-**Status**: not started (blocked by T33 need)
+- **Weight**: 1 (value 5 / cost 5)
+- **Depends on**: 🎯T33
+- **Status**: not started
 
 ---
-
-## Future
 
 ### 🎯T23 — Multi-provider package management
 
@@ -163,7 +171,8 @@ ripgrep` → cargo, `den install httpie` → pip).
 switches versions regardless of source. One tool, one environment,
 all ecosystems.
 
-**Status**: not started
+- **Weight**: 0.6 (value 13 / cost 21)
+- **Status**: not started
 
 ---
 
@@ -194,7 +203,9 @@ is explicit. Both work.
 **Replaces:** pyenv (version management) + virtualenv/venv (package
 isolation) + pipx (binary isolation). One tool.
 
-**Status**: not started
+- **Weight**: 1 (value 8 / cost 8)
+- **Depends on**: 🎯T23
+- **Status**: not started
 
 ---
 
@@ -211,7 +222,9 @@ global packages.
 
 **Replaces:** nvm/fnm (version management) + npm global installs.
 
-**Status**: not started
+- **Weight**: 1 (value 5 / cost 5)
+- **Depends on**: 🎯T23
+- **Status**: not started
 
 ---
 
@@ -226,7 +239,9 @@ global packages.
 
 **Replaces:** manual `go install` + PATH management.
 
-**Status**: not started
+- **Weight**: 1 (value 3 / cost 3)
+- **Depends on**: 🎯T23
+- **Status**: not started
 
 ---
 
@@ -241,7 +256,9 @@ global packages.
 
 **Replaces:** manual `cargo install` + scattered `~/.cargo/bin`.
 
-**Status**: not started
+- **Weight**: 1 (value 3 / cost 3)
+- **Depends on**: 🎯T23
+- **Status**: not started
 
 ---
 
@@ -286,7 +303,8 @@ den set search-provider claude-opus-4-6    # best quality
 `den search --smart` overrides to the highest-configured provider
 for a single query without changing the default.
 
-**Status**: not started
+- **Weight**: 0.4 (value 5 / cost 13)
+- **Status**: not started
 
 ---
 
@@ -309,7 +327,9 @@ version is pinned in the manifest to prevent query/index mismatch.
 Artifacts: `embeddings.bin` (~24MB), `bm25.bin` (~5MB),
 `reranker.onnx` (~25MB), `metadata.json`, `manifest.json`.
 
-**Status**: not started
+- **Weight**: 0.4 (value 3 / cost 8)
+- **Depends on**: 🎯T24
+- **Status**: not started
 
 ---
 
@@ -338,7 +358,8 @@ the build process.
 The store is explicitly non-precious — everything can be re-fetched
 from bottles. `den cleanup` can aggressively prune without worry.
 
-**Status**: not started
+- **Weight**: 0.6 (value 8 / cost 13)
+- **Status**: not started
 
 ---
 
@@ -358,7 +379,8 @@ This inverts the Homebrew model where `def post_install` runs
 arbitrary Ruby as the installing user. In den, you can pour a
 bottle with zero trust in the build system — just verify the hash.
 
-**Status**: partially achieved (bottles already don't run code;
+- **Weight**: 2.5 (value 5 / cost 2)
+- **Status**: partially achieved (bottles already don't run code;
 needs enforcement and documentation as a guarantee)
 
 ---
@@ -389,7 +411,8 @@ current "link all of bin/" when no binding spec exists.
 Inspired by 0install's `<environment>` and `<executable-in-path>`
 binding elements.
 
-**Status**: not started
+- **Weight**: 0.6 (value 5 / cost 8)
+- **Status**: not started
 
 ---
 
@@ -415,7 +438,8 @@ reason about all of it simultaneously.
 Inspired by 0install's OPIUM-derived solver and the broader
 SAT-for-packages literature (Debian apt, Nix).
 
-**Status**: not started
+- **Weight**: 0.6 (value 8 / cost 13)
+- **Status**: not started
 
 ---
 
@@ -441,7 +465,9 @@ versions when CVEs are published.
 Inspired by 0install's stability ratings as a first-class solver
 input.
 
-**Status**: not started
+- **Weight**: 0.6 (value 3 / cost 5)
+- **Depends on**: 🎯T29
+- **Status**: not started
 
 ---
 
@@ -455,7 +481,8 @@ bottle into `~/.den/vendor/ruby/<version>/` automatically.
 Content-addressed, non-precious (re-fetchable), version-pinned.
 Extends to other vendored tools if T23 providers need them.
 
-**Status**: not started
+- **Weight**: 1 (value 5 / cost 5)
+- **Status**: not started
 
 ---
 
@@ -510,7 +537,8 @@ Sent. (204 No Content)
 `den telemetry history` shows what was previously sent (kept in
 `~/.den/telemetry/sent/` as timestamped JSONL).
 
-**Status**: not started
+- **Weight**: 0.3 (value 2 / cost 8)
+- **Status**: not started
 
 ---
 
@@ -533,7 +561,8 @@ This is the escape hatch for the small number of tools that ignore
 env vars and hardcode `/opt/homebrew`. Telemetry (T32) can track
 how often users need this to inform whether it's worth maintaining.
 
-**Status**: not started
+- **Weight**: 0.6 (value 3 / cost 5)
+- **Status**: not started
 
 ---
 
@@ -579,21 +608,27 @@ to den. The user runs one command and den takes over entirely.
 - Idempotent — safe to run multiple times (picks up new installs).
 - Dry-run mode — `den migrate --dry-run` shows what would happen.
 
-**Status**: not started (T20 covers step 1 only)
+- **Weight**: 1 (value 8 / cost 8)
+- **Status**: not started (T20 covers step 1 only)
 
 ---
 
 ### 🎯T5 — Tap management
 Third-party taps.
-**Status**: not started
+- **Weight**: 1 (value 5 / cost 5)
+- **Status**: not started
 
 ### 🎯T11 — Source builds
 Delegate to Ruby via lazy-vendored Portable Ruby (T31).
-**Status**: not started
+- **Weight**: 0.6 (value 5 / cost 8)
+- **Depends on**: 🎯T31
+- **Status**: not started
 
 ### 🎯T17 — Formula metadata parsing (third-party taps)
 Ruby DSL parsing for non-API taps. Uses lazy-vendored Ruby (T31).
-**Status**: not started
+- **Weight**: 0.6 (value 3 / cost 5)
+- **Depends on**: 🎯T31
+- **Status**: not started
 
 ### 🎯T42 — Independent hash verification pipeline
 
@@ -628,8 +663,9 @@ The verified hashes file is fetched by den from GitHub raw content
 either source is unavailable, den falls back to the other with a
 warning. If both are available and disagree, den refuses the install.
 
-**Depends on**: CI/CD pipeline, GitHub repo existence.
-**Status**: not started (blocked by CI)
+- **Weight**: 1 (value 8 / cost 8)
+- **Depends on**: 🎯T43
+- **Status**: not started
 
 ### 🎯T43 — CI/CD pipeline
 
@@ -644,7 +680,8 @@ GitHub Actions workflow for the den project:
   fetch Homebrew index, diff, verify changed bottles, commit to
   `known_hashes.json`.
 
-**Status**: partially achieved — push/PR CI is green on macOS + Linux
+- **Weight**: 4.3 (value 13 / cost 3)
+- **Status**: partially achieved — push/PR CI is green on macOS + Linux
 (`f8f19fb`). Release tag workflow and scheduled hash verification
 remain.
 
@@ -654,6 +691,8 @@ den's trust model should substantially exceed Homebrew's. The
 foundation is in place (🎯T42 independent hash verification, hash
 pinning, cache sealing, URL allowlist, 0600 permissions). This target
 covers the remaining layers.
+
+- **Weight**: 0.6 (value 13 / cost 21)
 
 #### 🎯T44.1 — TUF (The Update Framework)
 
@@ -673,6 +712,11 @@ This eliminates the "compromise den's GitHub repo" half of the attack
 surface — even with repo write access, an attacker can't produce a
 valid signature without the signing key.
 
+- **Weight**: 1 (value 8 / cost 8)
+- **Parent**: 🎯T44
+- **Depends on**: 🎯T42
+- **Status**: not started
+
 #### 🎯T44.2 — Binary transparency log
 
 Append-only, publicly auditable log of every bottle hash den has
@@ -689,6 +733,11 @@ Options:
 The value: even a temporary index compromise is detectable after the
 fact. Monitors can alert on unexpected hash changes.
 
+- **Weight**: 1 (value 5 / cost 5)
+- **Parent**: 🎯T44
+- **Depends on**: 🎯T42
+- **Status**: not started
+
 #### 🎯T44.3 — Reproducible bottle builds
 
 If den eventually builds its own bottles (rather than consuming
@@ -704,6 +753,10 @@ Concrete steps:
 - Publish source + build recipe alongside each bottle so third
   parties can reproduce
 
+- **Weight**: 0.2 (value 3 / cost 13)
+- **Parent**: 🎯T44
+- **Status**: not started
+
 #### 🎯T44.4 — Streaming downloads
 
 Download bottles and casks to disk via streaming rather than buffering
@@ -711,23 +764,16 @@ entirely in memory. Compute SHA256 incrementally. This eliminates OOM
 from large packages (current limit is 2GB in RAM) and is a
 prerequisite for proper download progress reporting.
 
-#### 🎯T44.5 — Manifest file locking
-
-Advisory flock-based locking around manifest read-modify-write cycles.
-Prevents concurrent `den install` / daemon operations from silently
-clobbering each other's changes. Same pattern as the daemon's
-PidGuard.
-
-**Status**: achieved. All read-modify-write call sites converted to
-`with_manifest` / `with_manifest_ret` which acquire an exclusive
-`flock` on a `.lock` file next to the manifest before reading.
-🎯T44.1 and 🎯T44.2 depend on 🎯T42. 🎯T44.3 is long-term.
-🎯T44.4 is independent and could be done any time.
+- **Weight**: 1.7 (value 5 / cost 3)
+- **Parent**: 🎯T44
+- **Status**: not started
 
 ### 🎯T18 — Testing oracle
 Automated Homebrew-equivalence testing.
-**Status**: not started
+- **Weight**: 0.6 (value 5 / cost 8)
+- **Status**: not started
 
 ### 🎯T19 — Performance
 Benchmarking against Homebrew.
-**Status**: not started
+- **Weight**: 0.6 (value 3 / cost 5)
+- **Status**: not started
