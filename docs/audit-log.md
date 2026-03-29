@@ -1,5 +1,10 @@
 # Audit Log
 
+## 2026-03-29 — /release v0.2.0
+
+- **Commit**: `ce00af6`
+- **Outcome**: Released v0.2.0 (darwin-aarch64, linux-x86_64, linux-aarch64). Complete C++ rewrite: independent store, unified package model, install/uninstall/upgrade with dependency resolution, embedded Ruby VM prototype, 85 tests, tiered smoke test infrastructure.
+
 ## 2026-03-29 — /release v0.1.0
 
 - **Commit**: `b9c1764`
