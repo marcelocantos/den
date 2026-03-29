@@ -43,7 +43,6 @@ std::optional<Tab> read_tab(const fs::path& keg_path);
 /// den's root manifest. Files are not copied — this is metadata migration only.
 ///
 /// Prints a summary: N packages found, N added, N skipped (already tracked).
-void migrate_from_homebrew(const Config& config,
-                           const std::vector<std::string>& names);
+void migrate_from_homebrew(const Config& config, const std::vector<std::string>& names);
 
 } // namespace den

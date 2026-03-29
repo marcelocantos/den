@@ -20,13 +20,11 @@ bool is_valid_package_name(const std::string& name);
 /// include, share) into an environment directory. Also creates
 /// opt/<name> pointing to the package root.
 /// Returns the number of symlinks created.
-uint32_t link_package(const fs::path& pkg_path, const fs::path& env_dir,
-                      const std::string& name);
+uint32_t link_package(const fs::path& pkg_path, const fs::path& env_dir, const std::string& name);
 
 /// Remove symlinks created by link_package.
 /// Returns the number of symlinks removed.
-uint32_t unlink_package(const fs::path& pkg_path, const fs::path& env_dir,
-                        const std::string& name);
+uint32_t unlink_package(const fs::path& pkg_path, const fs::path& env_dir, const std::string& name);
 
 /// Record which version of a package is linked in an environment.
 /// Writes to env_dir/.den/linked/<name>.
@@ -34,7 +32,6 @@ void record_linked_version(const fs::path& env_dir, const std::string& name,
                            const std::string& version);
 
 /// Read which version of a package is linked in an environment.
-std::optional<std::string> linked_version(const fs::path& env_dir,
-                                          const std::string& name);
+std::optional<std::string> linked_version(const fs::path& env_dir, const std::string& name);
 
 } // namespace den

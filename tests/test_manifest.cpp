@@ -89,7 +89,9 @@ static std::string env_slug(const std::string& env_path) {
 
     std::string slug;
     for (size_t i = 0; i < parts.size(); ++i) {
-        if (i > 0) { slug += "--"; }
+        if (i > 0) {
+            slug += "--";
+        }
         slug += parts[i];
     }
     return slug;
@@ -179,9 +181,15 @@ TEST_SUITE("manifest::round_trip") {
         CHECK(slug_to_path(env_slug(path)) == path);
     }
 
-    TEST_CASE("root") { check_round_trip("/"); }
-    TEST_CASE("/ml") { check_round_trip("/ml"); }
-    TEST_CASE("/work/ml") { check_round_trip("/work/ml"); }
+    TEST_CASE("root") {
+        check_round_trip("/");
+    }
+    TEST_CASE("/ml") {
+        check_round_trip("/ml");
+    }
+    TEST_CASE("/work/ml") {
+        check_round_trip("/work/ml");
+    }
 
     TEST_CASE("path with dash") {
         // /work/legacy — the task specifies "/" -> "ROOT", "/ml" -> "ml",

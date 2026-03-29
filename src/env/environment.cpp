@@ -21,8 +21,7 @@ fs::path env_dir(const fs::path& den_home, const std::string& env_path) {
     return den_home / "envs" / env_slug(env_path);
 }
 
-uint32_t materialise(const fs::path& den_home, const fs::path& store,
-                     const std::string& env_path) {
+uint32_t materialise(const fs::path& den_home, const fs::path& store, const std::string& env_path) {
     auto resolved = resolve(den_home, env_path);
     auto dir = env_dir(den_home, env_path);
 
@@ -90,8 +89,7 @@ void set_active_env(const fs::path& den_home, const std::string& env_path) {
     }
 
     if (std::rename(tmp_path.c_str(), path.c_str()) != 0) {
-        throw InternalError("failed to rename active_env: " +
-                            std::string(std::strerror(errno)));
+        throw InternalError("failed to rename active_env: " + std::string(std::strerror(errno)));
     }
 
     SPDLOG_INFO("active environment set to '{}'", env_path);

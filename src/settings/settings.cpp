@@ -25,10 +25,12 @@ namespace den {
 inline void to_json(nlohmann::json& j, const DaemonSettings& d) {
     j = nlohmann::json{
         {"auto_download", d.auto_download},
-        {"auto_upgrade",  d.auto_upgrade},
+        {"auto_upgrade", d.auto_upgrade},
     };
-    if (d.upgrade_window) j["upgrade_window"] = *d.upgrade_window;
-    if (d.interval_secs)  j["interval_secs"]  = *d.interval_secs;
+    if (d.upgrade_window)
+        j["upgrade_window"] = *d.upgrade_window;
+    if (d.interval_secs)
+        j["interval_secs"] = *d.interval_secs;
 }
 
 inline void from_json(const nlohmann::json& j, DaemonSettings& d) {
@@ -45,7 +47,8 @@ inline void from_json(const nlohmann::json& j, DaemonSettings& d) {
 
 inline void to_json(nlohmann::json& j, const SearchSettings& s) {
     j = nlohmann::json::object();
-    if (s.provider) j["provider"] = *s.provider;
+    if (s.provider)
+        j["provider"] = *s.provider;
 }
 
 inline void from_json(const nlohmann::json& j, SearchSettings& s) {
@@ -164,8 +167,7 @@ std::string get_setting(const fs::path& den_home, const std::string& key) {
     return cur->dump();
 }
 
-void set_setting(const fs::path& den_home, const std::string& key,
-                 const std::string& value) {
+void set_setting(const fs::path& den_home, const std::string& key, const std::string& value) {
     auto parts = split_key(key);
     nlohmann::json j = load_json(den_home);
 
@@ -176,8 +178,8 @@ void set_setting(const fs::path& den_home, const std::string& key,
         if (!cur->contains(part)) {
             (*cur)[part] = nlohmann::json::object();
         } else if (!(*cur)[part].is_object()) {
-            throw std::invalid_argument(
-                "path component '" + part + "' is not an object in key: " + key);
+            throw std::invalid_argument("path component '" + part +
+                                        "' is not an object in key: " + key);
         }
         cur = &(*cur)[part];
     }
@@ -188,10 +190,12 @@ void set_setting(const fs::path& den_home, const std::string& key,
     if (cur->contains(leaf)) {
         const nlohmann::json& existing = (*cur)[leaf];
         if (existing.is_boolean()) {
-            if (value == "true")       (*cur)[leaf] = true;
-            else if (value == "false") (*cur)[leaf] = false;
-            else throw std::invalid_argument(
-                "expected 'true' or 'false' for boolean key: " + key);
+            if (value == "true")
+                (*cur)[leaf] = true;
+            else if (value == "false")
+                (*cur)[leaf] = false;
+            else
+                throw std::invalid_argument("expected 'true' or 'false' for boolean key: " + key);
             save_json_atomic(den_home, j);
             return;
         }
@@ -199,8 +203,7 @@ void set_setting(const fs::path& den_home, const std::string& key,
             try {
                 (*cur)[leaf] = static_cast<uint64_t>(std::stoull(value));
             } catch (...) {
-                throw std::invalid_argument(
-                    "expected unsigned integer for key: " + key);
+                throw std::invalid_argument("expected unsigned integer for key: " + key);
             }
             save_json_atomic(den_home, j);
             return;
@@ -209,8 +212,7 @@ void set_setting(const fs::path& den_home, const std::string& key,
             try {
                 (*cur)[leaf] = std::stoll(value);
             } catch (...) {
-                throw std::invalid_argument(
-                    "expected integer for key: " + key);
+                throw std::invalid_argument("expected integer for key: " + key);
             }
             save_json_atomic(den_home, j);
             return;
@@ -219,8 +221,7 @@ void set_setting(const fs::path& den_home, const std::string& key,
             try {
                 (*cur)[leaf] = std::stod(value);
             } catch (...) {
-                throw std::invalid_argument(
-                    "expected number for key: " + key);
+                throw std::invalid_argument("expected number for key: " + key);
             }
             save_json_atomic(den_home, j);
             return;

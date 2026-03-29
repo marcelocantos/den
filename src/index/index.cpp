@@ -19,10 +19,8 @@ using json = nlohmann::json;
 
 namespace {
 
-constexpr const char* kFormulaUrl =
-    "https://formulae.brew.sh/api/formula.json";
-constexpr const char* kCaskUrl =
-    "https://formulae.brew.sh/api/cask.json";
+constexpr const char* kFormulaUrl = "https://formulae.brew.sh/api/formula.json";
+constexpr const char* kCaskUrl = "https://formulae.brew.sh/api/cask.json";
 
 /// Map Homebrew's cellar string to our RelocationType.
 RelocationType parse_relocation(const std::string& cellar) {
@@ -39,17 +37,22 @@ RelocationType parse_relocation(const std::string& cellar) {
 /// Serialize a RelocationType to a string for JSON persistence.
 std::string relocation_to_string(RelocationType r) {
     switch (r) {
-    case RelocationType::Portable: return "portable";
-    case RelocationType::NeedsSubstitution: return "needs_substitution";
-    case RelocationType::HardcodedPrefix: return "hardcoded_prefix";
+    case RelocationType::Portable:
+        return "portable";
+    case RelocationType::NeedsSubstitution:
+        return "needs_substitution";
+    case RelocationType::HardcodedPrefix:
+        return "hardcoded_prefix";
     }
     return "portable";
 }
 
 /// Deserialize a RelocationType from a JSON string.
 RelocationType relocation_from_string(const std::string& s) {
-    if (s == "needs_substitution") return RelocationType::NeedsSubstitution;
-    if (s == "hardcoded_prefix") return RelocationType::HardcodedPrefix;
+    if (s == "needs_substitution")
+        return RelocationType::NeedsSubstitution;
+    if (s == "hardcoded_prefix")
+        return RelocationType::HardcodedPrefix;
     return RelocationType::Portable;
 }
 
@@ -75,8 +78,7 @@ Package transform_formula(const json& f) {
             pkg.dependencies.push_back(dep.get<std::string>());
         }
     }
-    if (f.contains("build_dependencies") &&
-        f["build_dependencies"].is_array()) {
+    if (f.contains("build_dependencies") && f["build_dependencies"].is_array()) {
         for (const auto& dep : f["build_dependencies"]) {
             pkg.build_dependencies.push_back(dep.get<std::string>());
         }
@@ -113,8 +115,7 @@ Package transform_formula(const json& f) {
     }
 
     // Source URL.
-    if (f.contains("urls") && f["urls"].contains("stable") &&
-        f["urls"]["stable"].contains("url")) {
+    if (f.contains("urls") && f["urls"].contains("stable") && f["urls"]["stable"].contains("url")) {
         pkg.source_url = f["urls"]["stable"]["url"].get<std::string>();
         if (f["urls"]["stable"].contains("checksum")) {
             auto& cs = f["urls"]["stable"]["checksum"];
@@ -163,8 +164,7 @@ json package_to_json(const Package& pkg) {
     j["description"] = pkg.description;
     j["homepage"] = pkg.homepage;
     j["license"] = pkg.license;
-    j["artifact_type"] =
-        pkg.artifact_type == ArtifactType::App ? "app" : "binary";
+    j["artifact_type"] = pkg.artifact_type == ArtifactType::App ? "app" : "binary";
     j["deprecated"] = pkg.deprecated;
     j["disabled"] = pkg.disabled;
 
@@ -181,8 +181,10 @@ json package_to_json(const Package& pkg) {
     }
     j["archives"] = std::move(archives_json);
 
-    if (pkg.source_url) j["source_url"] = *pkg.source_url;
-    if (pkg.source_sha256) j["source_sha256"] = *pkg.source_sha256;
+    if (pkg.source_url)
+        j["source_url"] = *pkg.source_url;
+    if (pkg.source_sha256)
+        j["source_sha256"] = *pkg.source_sha256;
 
     return j;
 }
@@ -197,8 +199,7 @@ Package package_from_json(const json& j) {
     pkg.license = j.value("license", "");
 
     std::string at = j.value("artifact_type", "binary");
-    pkg.artifact_type =
-        at == "app" ? ArtifactType::App : ArtifactType::Binary;
+    pkg.artifact_type = at == "app" ? ArtifactType::App : ArtifactType::Binary;
 
     pkg.deprecated = j.value("deprecated", false);
     pkg.disabled = j.value("disabled", false);
@@ -208,21 +209,18 @@ Package package_from_json(const json& j) {
             pkg.dependencies.push_back(d.get<std::string>());
         }
     }
-    if (j.contains("build_dependencies") &&
-        j["build_dependencies"].is_array()) {
+    if (j.contains("build_dependencies") && j["build_dependencies"].is_array()) {
         for (const auto& d : j["build_dependencies"]) {
             pkg.build_dependencies.push_back(d.get<std::string>());
         }
     }
 
     if (j.contains("archives") && j["archives"].is_object()) {
-        for (auto it = j["archives"].begin(); it != j["archives"].end();
-             ++it) {
+        for (auto it = j["archives"].begin(); it != j["archives"].end(); ++it) {
             Package::Archive ar;
             ar.url = it.value().value("url", "");
             ar.sha256 = it.value().value("sha256", "");
-            ar.relocation = relocation_from_string(
-                it.value().value("relocation", "portable"));
+            ar.relocation = relocation_from_string(it.value().value("relocation", "portable"));
             pkg.archives[it.key()] = std::move(ar);
         }
     }
@@ -317,8 +315,7 @@ PackageIndex fetch_and_transform(const Config& /*config*/) {
             }
         }
     } catch (const json::exception& e) {
-        throw DownloadError(
-            std::string("failed to parse formula.json: ") + e.what());
+        throw DownloadError(std::string("failed to parse formula.json: ") + e.what());
     }
 
     SPDLOG_INFO("indexed {} formulae", idx.packages.size());
@@ -345,12 +342,11 @@ PackageIndex fetch_and_transform(const Config& /*config*/) {
             }
         }
     } catch (const json::exception& e) {
-        throw DownloadError(
-            std::string("failed to parse cask.json: ") + e.what());
+        throw DownloadError(std::string("failed to parse cask.json: ") + e.what());
     }
 
-    SPDLOG_INFO("indexed {} casks ({} total packages)",
-                idx.packages.size() - formula_count, idx.packages.size());
+    SPDLOG_INFO("indexed {} casks ({} total packages)", idx.packages.size() - formula_count,
+                idx.packages.size());
 
     return idx;
 }

@@ -46,7 +46,7 @@ bool is_daemon_running(const Config& config);
 // ---- State I/O -------------------------------------------------------------
 
 DaemonState read_daemon_state(const fs::path& den_home);
-void        write_daemon_state(const fs::path& den_home, const DaemonState& state);
+void write_daemon_state(const fs::path& den_home, const DaemonState& state);
 
 // ---- Utilities -------------------------------------------------------------
 

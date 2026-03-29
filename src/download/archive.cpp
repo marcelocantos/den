@@ -38,13 +38,11 @@ bool is_path_unsafe(const std::string& entry_path) {
     return false;
 }
 
-using ArchivePtr =
-    std::unique_ptr<struct archive, decltype(&archive_read_free)>;
+using ArchivePtr = std::unique_ptr<struct archive, decltype(&archive_read_free)>;
 
 } // namespace
 
-ExtractResult extract_archive(const fs::path& archive_path,
-                              const fs::path& dest) {
+ExtractResult extract_archive(const fs::path& archive_path, const fs::path& dest) {
     ArchivePtr ar(archive_read_new(), archive_read_free);
     if (!ar) {
         throw ArchiveError("failed to create archive reader");
@@ -53,11 +51,9 @@ ExtractResult extract_archive(const fs::path& archive_path,
     archive_read_support_filter_all(ar.get());
     archive_read_support_format_all(ar.get());
 
-    int rc =
-        archive_read_open_filename(ar.get(), archive_path.c_str(), 16384);
+    int rc = archive_read_open_filename(ar.get(), archive_path.c_str(), 16384);
     if (rc != ARCHIVE_OK) {
-        throw ArchiveError("failed to open archive " +
-                           archive_path.string() + ": " +
+        throw ArchiveError("failed to open archive " + archive_path.string() + ": " +
                            archive_error_string(ar.get()));
     }
 
@@ -73,16 +69,13 @@ ExtractResult extract_archive(const fs::path& archive_path,
 
         // Security: reject unsafe paths.
         if (is_path_unsafe(entry_path)) {
-            throw ArchiveError(
-                "archive contains unsafe path: " + entry_path);
+            throw ArchiveError("archive contains unsafe path: " + entry_path);
         }
 
         // Security: reject hardlinks pointing outside dest.
         const char* hardlink = archive_entry_hardlink(entry);
         if (hardlink != nullptr && is_path_unsafe(hardlink)) {
-            throw ArchiveError(
-                "archive contains unsafe hardlink: " +
-                std::string(hardlink));
+            throw ArchiveError("archive contains unsafe hardlink: " + std::string(hardlink));
         }
 
         // Track the common root directory.
@@ -113,31 +106,25 @@ ExtractResult extract_archive(const fs::path& archive_path,
             // archive_write_free are the same symbol in practice.
 
             archive_entry_set_pathname(entry, full_path.c_str());
-            archive_write_disk_set_options(
-                disk.get(),
-                ARCHIVE_EXTRACT_TIME | ARCHIVE_EXTRACT_PERM |
-                    ARCHIVE_EXTRACT_SECURE_NODOTDOT |
-                    ARCHIVE_EXTRACT_SECURE_SYMLINKS);
+            archive_write_disk_set_options(disk.get(), ARCHIVE_EXTRACT_TIME | ARCHIVE_EXTRACT_PERM |
+                                                           ARCHIVE_EXTRACT_SECURE_NODOTDOT |
+                                                           ARCHIVE_EXTRACT_SECURE_SYMLINKS);
 
             rc = archive_write_header(disk.get(), entry);
             if (rc != ARCHIVE_OK) {
-                throw ArchiveError(
-                    "failed to write header for " + entry_path +
-                    ": " + archive_error_string(disk.get()));
+                throw ArchiveError("failed to write header for " + entry_path + ": " +
+                                   archive_error_string(disk.get()));
             }
 
             const void* buf = nullptr;
             size_t size = 0;
             la_int64_t offset = 0;
 
-            while (archive_read_data_block(ar.get(), &buf, &size,
-                                           &offset) == ARCHIVE_OK) {
-                rc = archive_write_data_block(disk.get(), buf, size,
-                                              offset);
+            while (archive_read_data_block(ar.get(), &buf, &size, &offset) == ARCHIVE_OK) {
+                rc = archive_write_data_block(disk.get(), buf, size, offset);
                 if (rc != ARCHIVE_OK) {
-                    throw ArchiveError(
-                        "failed to write data for " + entry_path +
-                        ": " + archive_error_string(disk.get()));
+                    throw ArchiveError("failed to write data for " + entry_path + ": " +
+                                       archive_error_string(disk.get()));
                 }
             }
 
@@ -152,8 +139,7 @@ ExtractResult extract_archive(const fs::path& archive_path,
             }
         } else {
             // Skip other file types (devices, sockets, etc.).
-            SPDLOG_WARN("skipping unsupported entry type in archive: {}",
-                        entry_path);
+            SPDLOG_WARN("skipping unsupported entry type in archive: {}", entry_path);
             continue;
         }
 
@@ -162,8 +148,7 @@ ExtractResult extract_archive(const fs::path& archive_path,
 
     result.root = common_root;
 
-    SPDLOG_INFO("extracted {} files from {}", result.files.size(),
-                archive_path.string());
+    SPDLOG_INFO("extracted {} files from {}", result.files.size(), archive_path.string());
 
     return result;
 }

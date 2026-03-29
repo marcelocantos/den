@@ -16,9 +16,9 @@ namespace fs = std::filesystem;
 
 struct DaemonSettings {
     bool auto_download = true;
-    bool auto_upgrade  = false;
-    std::optional<std::string> upgrade_window;   // e.g. "02:00-04:00"
-    std::optional<uint64_t>    interval_secs;    // override polling interval
+    bool auto_upgrade = false;
+    std::optional<std::string> upgrade_window; // e.g. "02:00-04:00"
+    std::optional<uint64_t> interval_secs;     // override polling interval
 };
 
 struct SearchSettings {
@@ -45,8 +45,7 @@ std::string get_setting(const fs::path& den_home, const std::string& key);
 // Write a single dotted key.  The type is inferred from the existing
 // value (bool, number, string).  New keys are always stored as strings.
 // Throws std::invalid_argument if a parent path is not an object.
-void set_setting(const fs::path& den_home, const std::string& key,
-                 const std::string& value);
+void set_setting(const fs::path& den_home, const std::string& key, const std::string& value);
 
 // Return a pretty-printed JSON representation of all settings.
 std::string display_all_settings(const fs::path& den_home);

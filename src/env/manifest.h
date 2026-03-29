@@ -38,19 +38,17 @@ std::string slug_to_path(const std::string& slug);
 Manifest read_manifest(const fs::path& den_home, const std::string& env_path);
 
 /// Write a manifest atomically (temp file + rename).
-void write_manifest(const fs::path& den_home, const std::string& env_path,
-                    const Manifest& m);
+void write_manifest(const fs::path& den_home, const std::string& env_path, const Manifest& m);
 
 /// Lock the manifest file, read it, pass to fn for modification, then
 /// write back atomically. Uses flock for concurrency safety.
 template <typename F>
-auto with_manifest(const fs::path& den_home, const std::string& env_path,
-                   F&& fn) -> decltype(fn(std::declval<Manifest&>()));
+auto with_manifest(const fs::path& den_home, const std::string& env_path, F&& fn)
+    -> decltype(fn(std::declval<Manifest&>()));
 
 /// Resolve the effective package set by walking the parent chain.
 /// Child entries override parent entries.
-std::map<std::string, std::string> resolve(const fs::path& den_home,
-                                           const std::string& env_path);
+std::map<std::string, std::string> resolve(const fs::path& den_home, const std::string& env_path);
 
 /// List all environment paths that have manifests.
 std::vector<std::string> list_all(const fs::path& den_home);

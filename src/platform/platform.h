@@ -29,15 +29,11 @@ std::optional<std::string> bottle_tag(Arch arch, const MacOsVersion& macos);
 /// Return all bottle tag candidates to try, from the current macOS version
 /// down to older ones. The first entry is the most preferred tag.
 /// Returns {"x86_64_linux"} on Linux.
-std::vector<std::string> bottle_tag_candidates(
-    Arch arch,
-    const std::optional<MacOsVersion>& macos);
+std::vector<std::string> bottle_tag_candidates(Arch arch, const std::optional<MacOsVersion>& macos);
 
 /// Pick the best available bottle tag from a list of available tags.
 /// Returns nullopt if none of the candidates appear in available_tags.
-std::optional<std::string> best_archive_tag(
-    Arch arch,
-    const std::optional<MacOsVersion>& macos,
-    const std::vector<std::string>& available_tags);
+std::optional<std::string> best_archive_tag(Arch arch, const std::optional<MacOsVersion>& macos,
+                                            const std::vector<std::string>& available_tags);
 
 } // namespace den

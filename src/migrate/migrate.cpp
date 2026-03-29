@@ -21,8 +21,7 @@ namespace {
 
 /// Return true if path looks like a version directory (starts with a digit).
 bool looks_like_version(const std::string& name) {
-    return !name.empty() && (std::isdigit(static_cast<unsigned char>(name[0]))
-                             || name[0] == 'v');
+    return !name.empty() && (std::isdigit(static_cast<unsigned char>(name[0])) || name[0] == 'v');
 }
 
 } // namespace
@@ -47,13 +46,11 @@ std::vector<HomebrewKeg> scan_homebrew_cellar(const fs::path& cellar) {
         const std::string name = formula_entry.path().filename().string();
 
         // Each subdirectory of the formula directory is a version.
-        for (const auto& version_entry :
-             fs::directory_iterator(formula_entry.path())) {
+        for (const auto& version_entry : fs::directory_iterator(formula_entry.path())) {
             if (!version_entry.is_directory()) {
                 continue;
             }
-            const std::string version =
-                version_entry.path().filename().string();
+            const std::string version = version_entry.path().filename().string();
             if (!looks_like_version(version)) {
                 continue;
             }
@@ -62,8 +59,7 @@ std::vector<HomebrewKeg> scan_homebrew_cellar(const fs::path& cellar) {
     }
 
     // Stable sort: by name, then version descending (newest first).
-    std::sort(kegs.begin(), kegs.end(), [](const HomebrewKeg& a,
-                                           const HomebrewKeg& b) {
+    std::sort(kegs.begin(), kegs.end(), [](const HomebrewKeg& a, const HomebrewKeg& b) {
         if (a.name != b.name) {
             return a.name < b.name;
         }
@@ -88,14 +84,11 @@ std::optional<Tab> read_tab(const fs::path& keg_path) {
         const auto j = nlohmann::json::parse(f);
 
         Tab tab;
-        tab.installed_on_request =
-            j.value("installed_on_request", true);
+        tab.installed_on_request = j.value("installed_on_request", true);
 
-        if (j.contains("runtime_dependencies")
-            && j["runtime_dependencies"].is_array()) {
+        if (j.contains("runtime_dependencies") && j["runtime_dependencies"].is_array()) {
             for (const auto& dep : j["runtime_dependencies"]) {
-                if (dep.contains("full_name")
-                    && dep["full_name"].is_string()) {
+                if (dep.contains("full_name") && dep["full_name"].is_string()) {
                     tab.runtime_deps.push_back(dep["full_name"].get<std::string>());
                 }
             }
@@ -103,32 +96,25 @@ std::optional<Tab> read_tab(const fs::path& keg_path) {
 
         return tab;
     } catch (const nlohmann::json::exception& e) {
-        SPDLOG_WARN("Failed to parse INSTALL_RECEIPT.json at {}: {}",
-                    receipt.string(), e.what());
+        SPDLOG_WARN("Failed to parse INSTALL_RECEIPT.json at {}: {}", receipt.string(), e.what());
         return std::nullopt;
     }
 }
 
-void migrate_from_homebrew(const Config& config,
-                           const std::vector<std::string>& names)
-{
-    SPDLOG_INFO("Scanning Homebrew Cellar at {}",
-                config.homebrew_cellar.string());
+void migrate_from_homebrew(const Config& config, const std::vector<std::string>& names) {
+    SPDLOG_INFO("Scanning Homebrew Cellar at {}", config.homebrew_cellar.string());
 
-    const auto filter = std::unordered_set<std::string>(names.begin(),
-                                                         names.end());
+    const auto filter = std::unordered_set<std::string>(names.begin(), names.end());
     const bool filter_all = filter.empty();
 
     auto kegs = scan_homebrew_cellar(config.homebrew_cellar);
 
     // Filter to requested names if provided.
     if (!filter_all) {
-        kegs.erase(
-            std::remove_if(kegs.begin(), kegs.end(),
-                           [&](const HomebrewKeg& k) {
-                               return filter.find(k.name) == filter.end();
-                           }),
-            kegs.end());
+        kegs.erase(std::remove_if(
+                       kegs.begin(), kegs.end(),
+                       [&](const HomebrewKeg& k) { return filter.find(k.name) == filter.end(); }),
+                   kegs.end());
     }
 
     const int found = static_cast<int>(kegs.size());
@@ -146,8 +132,7 @@ void migrate_from_homebrew(const Config& config,
             try {
                 manifest = nlohmann::json::parse(f);
             } catch (const nlohmann::json::exception& e) {
-                SPDLOG_WARN("Could not parse existing root manifest: {}",
-                            e.what());
+                SPDLOG_WARN("Could not parse existing root manifest: {}", e.what());
             }
         }
     }
@@ -196,8 +181,7 @@ void migrate_from_homebrew(const Config& config,
             auto_set.insert(keg.name);
         }
         ++added;
-        SPDLOG_DEBUG("Added {}: {}{}", keg.name, keg.version,
-                     on_request ? "" : " [auto]");
+        SPDLOG_DEBUG("Added {}: {}{}", keg.name, keg.version, on_request ? "" : " [auto]");
     }
 
     // Write manifest back.
@@ -205,18 +189,16 @@ void migrate_from_homebrew(const Config& config,
         fs::create_directories(manifest_dir);
         std::ofstream out(manifest_path);
         if (!out) {
-            SPDLOG_ERROR("Failed to write root manifest to {}",
-                         manifest_path.string());
+            SPDLOG_ERROR("Failed to write root manifest to {}", manifest_path.string());
         } else {
             out << manifest.dump(2) << "\n";
             SPDLOG_DEBUG("Wrote manifest to {}", manifest_path.string());
         }
     }
 
-    SPDLOG_INFO("Migration complete: {} packages found, {} added, {} skipped",
-                found, added, skipped);
-    std::printf("==> Migration complete: %d found, %d added, %d skipped\n",
-                found, added, skipped);
+    SPDLOG_INFO("Migration complete: {} packages found, {} added, {} skipped", found, added,
+                skipped);
+    std::printf("==> Migration complete: %d found, %d added, %d skipped\n", found, added, skipped);
 }
 
 } // namespace den

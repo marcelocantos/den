@@ -16,7 +16,7 @@ enum class Severity {
 };
 
 struct Finding {
-    Severity    severity;
+    Severity severity;
     std::string message;
 };
 

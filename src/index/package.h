@@ -15,7 +15,7 @@ namespace den {
 // A package in den's index. Unified model — no formula/cask distinction.
 // The artifact_type field controls install behaviour internally.
 struct Package {
-    std::string name;        // "ffmpeg" or "marcelocantos/jevon"
+    std::string name; // "ffmpeg" or "marcelocantos/jevon"
     std::string version;
     std::string description;
     std::string homepage;

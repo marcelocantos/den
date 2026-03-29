@@ -7,13 +7,11 @@
 
 namespace den {
 
-fs::path package_path(const fs::path& store, const std::string& name,
-                      const std::string& version) {
+fs::path package_path(const fs::path& store, const std::string& name, const std::string& version) {
     return store / name / version;
 }
 
-bool is_installed(const fs::path& store, const std::string& name,
-                  const std::string& version) {
+bool is_installed(const fs::path& store, const std::string& name, const std::string& version) {
     auto p = package_path(store, name, version);
     return fs::exists(p) && fs::is_directory(p);
 }

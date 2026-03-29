@@ -38,8 +38,8 @@ Config Config::detect() {
 
     // Homebrew paths (read-only, for migration).
 #ifdef __APPLE__
-    c.homebrew_prefix = env_or("HOMEBREW_PREFIX",
-        c.arch == Arch::Arm64 ? "/opt/homebrew" : "/usr/local");
+    c.homebrew_prefix =
+        env_or("HOMEBREW_PREFIX", c.arch == Arch::Arm64 ? "/opt/homebrew" : "/usr/local");
 #else
     c.homebrew_prefix = env_or("HOMEBREW_PREFIX", "/home/linuxbrew/.linuxbrew");
 #endif

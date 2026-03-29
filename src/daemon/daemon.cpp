@@ -54,12 +54,24 @@ std::string xml_escape(const std::string& s) {
     out.reserve(s.size());
     for (char c : s) {
         switch (c) {
-        case '&':  out += "&amp;";  break;
-        case '<':  out += "&lt;";   break;
-        case '>':  out += "&gt;";   break;
-        case '"':  out += "&quot;"; break;
-        case '\'': out += "&apos;"; break;
-        default:   out += c;        break;
+        case '&':
+            out += "&amp;";
+            break;
+        case '<':
+            out += "&lt;";
+            break;
+        case '>':
+            out += "&gt;";
+            break;
+        case '"':
+            out += "&quot;";
+            break;
+        case '\'':
+            out += "&apos;";
+            break;
+        default:
+            out += c;
+            break;
         }
     }
     return out;
@@ -67,10 +79,10 @@ std::string xml_escape(const std::string& s) {
 
 // Read daemon settings from den_home/config.json (falls back to defaults).
 struct DaemonSettings {
-    bool        auto_download  = true;
-    bool        auto_upgrade   = false;
-    std::string upgrade_window;          // "HH:MM-HH:MM" or empty
-    uint64_t    interval_secs  = DEFAULT_INTERVAL_SECS;
+    bool auto_download = true;
+    bool auto_upgrade = false;
+    std::string upgrade_window; // "HH:MM-HH:MM" or empty
+    uint64_t interval_secs = DEFAULT_INTERVAL_SECS;
 };
 
 DaemonSettings read_daemon_settings(const fs::path& den_home) {
@@ -78,7 +90,8 @@ DaemonSettings read_daemon_settings(const fs::path& den_home) {
     fs::path cfg = den_home / "config.json";
     try {
         std::ifstream f(cfg);
-        if (!f.is_open()) return s;
+        if (!f.is_open())
+            return s;
         nlohmann::json j;
         f >> j;
         if (j.contains("daemon")) {
@@ -107,7 +120,8 @@ uint64_t now_secs() {
 }
 
 bool in_maintenance_window(const std::string& window) {
-    if (window.empty()) return true;
+    if (window.empty())
+        return true;
 
     // Parse "HH:MM-HH:MM".
     int start_h = -1, start_m = -1, end_h = -1, end_m = -1;
@@ -118,19 +132,21 @@ bool in_maintenance_window(const std::string& window) {
         SPDLOG_WARN("daemon: invalid maintenance window '{}', treating as always-open", window);
         return true;
     }
-    if (start_h < 0 || start_h > 23 || start_m < 0 || start_m > 59 ||
-        end_h   < 0 || end_h   > 23 || end_m   < 0 || end_m   > 59) {
-        SPDLOG_WARN("daemon: out-of-range maintenance window '{}', treating as always-open", window);
+    if (start_h < 0 || start_h > 23 || start_m < 0 || start_m > 59 || end_h < 0 || end_h > 23 ||
+        end_m < 0 || end_m > 59) {
+        SPDLOG_WARN("daemon: out-of-range maintenance window '{}', treating as always-open",
+                    window);
         return true;
     }
 
     std::time_t t = std::time(nullptr);
-    std::tm*    lt = std::localtime(&t);
-    if (!lt) return true;
+    std::tm* lt = std::localtime(&t);
+    if (!lt)
+        return true;
 
-    int now_mins   = lt->tm_hour * 60 + lt->tm_min;
+    int now_mins = lt->tm_hour * 60 + lt->tm_min;
     int start_mins = start_h * 60 + start_m;
-    int end_mins   = end_h   * 60 + end_m;
+    int end_mins = end_h * 60 + end_m;
 
     if (start_mins <= end_mins) {
         return now_mins >= start_mins && now_mins < end_mins;
@@ -141,7 +157,7 @@ bool in_maintenance_window(const std::string& window) {
 }
 
 std::string launchd_plist(const fs::path& den_binary, const fs::path& den_home) {
-    std::string bin  = xml_escape(den_binary.string());
+    std::string bin = xml_escape(den_binary.string());
     std::string home = xml_escape(den_home.string());
 
     std::ostringstream o;
@@ -155,11 +171,13 @@ std::string launchd_plist(const fs::path& den_binary, const fs::path& den_home) 
 
     <key>ProgramArguments</key>
     <array>
-        <string>)" << bin << R"(</string>
+        <string>)"
+      << bin << R"(</string>
         <string>daemon</string>
         <string>--run</string>
         <string>--den-home</string>
-        <string>)" << home << R"(</string>
+        <string>)"
+      << home << R"(</string>
     </array>
 
     <key>RunAtLoad</key>
@@ -169,10 +187,12 @@ std::string launchd_plist(const fs::path& den_binary, const fs::path& den_home) 
     <true/>
 
     <key>StandardOutPath</key>
-    <string>)" << home << R"(/daemon.log</string>
+    <string>)"
+      << home << R"(/daemon.log</string>
 
     <key>StandardErrorPath</key>
-    <string>)" << home << R"(/daemon.log</string>
+    <string>)"
+      << home << R"(/daemon.log</string>
 </dict>
 </plist>
 )";
@@ -180,10 +200,11 @@ std::string launchd_plist(const fs::path& den_binary, const fs::path& den_home) 
 }
 
 void log_daemon(const fs::path& den_home, const std::string& msg) {
-    std::time_t t  = std::time(nullptr);
-    std::tm*    lt = std::localtime(&t);
-    char        buf[32] = {};
-    if (lt) std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", lt);
+    std::time_t t = std::time(nullptr);
+    std::tm* lt = std::localtime(&t);
+    char buf[32] = {};
+    if (lt)
+        std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", lt);
 
     std::ofstream f(log_path(den_home), std::ios::app);
     if (f) {
@@ -195,11 +216,12 @@ void log_daemon(const fs::path& den_home, const std::string& msg) {
 
 DaemonState read_daemon_state(const fs::path& den_home) {
     DaemonState state;
-    fs::path    path = state_path(den_home);
+    fs::path path = state_path(den_home);
 
     try {
         std::ifstream f(path);
-        if (!f.is_open()) return state;
+        if (!f.is_open())
+            return state;
         nlohmann::json j;
         f >> j;
 
@@ -211,16 +233,18 @@ DaemonState read_daemon_state(const fs::path& den_home) {
 
         if (j.contains("errors") && j["errors"].is_array()) {
             for (const auto& e : j["errors"]) {
-                if (e.is_string()) state.errors.push_back(e.get<std::string>());
+                if (e.is_string())
+                    state.errors.push_back(e.get<std::string>());
             }
         }
 
         if (j.contains("pending") && j["pending"].is_array()) {
             for (const auto& p : j["pending"]) {
-                if (!p.is_object()) continue;
+                if (!p.is_object())
+                    continue;
                 PendingUpgrade pu;
-                if (p.contains("name")      && p["name"].is_string())
-                    pu.name      = p["name"].get<std::string>();
+                if (p.contains("name") && p["name"].is_string())
+                    pu.name = p["name"].get<std::string>();
                 if (p.contains("installed") && p["installed"].is_string())
                     pu.installed = p["installed"].get<std::string>();
                 if (p.contains("available") && p["available"].is_string())
@@ -236,16 +260,17 @@ DaemonState read_daemon_state(const fs::path& den_home) {
 
 void write_daemon_state(const fs::path& den_home, const DaemonState& state) {
     nlohmann::json j;
-    if (state.last_check)   j["last_check"]   = *state.last_check;
-    if (state.last_upgrade) j["last_upgrade"]  = *state.last_upgrade;
+    if (state.last_check)
+        j["last_check"] = *state.last_check;
+    if (state.last_upgrade)
+        j["last_upgrade"] = *state.last_upgrade;
 
-    j["errors"]  = state.errors;
+    j["errors"] = state.errors;
 
     nlohmann::json pending = nlohmann::json::array();
     for (const auto& p : state.pending) {
-        pending.push_back({{"name", p.name},
-                           {"installed", p.installed},
-                           {"available", p.available}});
+        pending.push_back(
+            {{"name", p.name}, {"installed", p.installed}, {"available", p.available}});
     }
     j["pending"] = pending;
 
@@ -255,7 +280,8 @@ void write_daemon_state(const fs::path& den_home, const DaemonState& state) {
         fs::create_directories(den_home);
         {
             std::ofstream f(tmp);
-            if (!f) throw UserError("daemon: cannot open " + tmp.string() + " for writing");
+            if (!f)
+                throw UserError("daemon: cannot open " + tmp.string() + " for writing");
             f << j.dump(2) << '\n';
         }
         fs::rename(tmp, state_path(den_home));
@@ -301,9 +327,8 @@ void run_daemon(const Config& config) {
     // ---- Main loop ---------------------------------------------------------
     while (!g_terminate) {
         DaemonSettings settings = read_daemon_settings(den_home);
-        uint64_t interval = settings.interval_secs > 0
-                            ? settings.interval_secs
-                            : DEFAULT_INTERVAL_SECS;
+        uint64_t interval =
+            settings.interval_secs > 0 ? settings.interval_secs : DEFAULT_INTERVAL_SECS;
 
         SPDLOG_DEBUG("daemon: sleeping {}s", interval);
 
@@ -311,7 +336,8 @@ void run_daemon(const Config& config) {
         for (uint64_t i = 0; i < interval && !g_terminate; ++i) {
             ::sleep(1);
         }
-        if (g_terminate) break;
+        if (g_terminate)
+            break;
 
         // Re-read settings after the sleep (they may have changed).
         settings = read_daemon_settings(den_home);
@@ -333,20 +359,20 @@ void run_daemon(const Config& config) {
         // Pre-download bottles for pending upgrades.
         if (settings.auto_download && !state.pending.empty()) {
             SPDLOG_INFO("daemon: pre-downloading {} pending upgrade(s)", state.pending.size());
-            log_daemon(den_home, "pre-downloading " +
-                       std::to_string(state.pending.size()) + " upgrade(s)");
+            log_daemon(den_home,
+                       "pre-downloading " + std::to_string(state.pending.size()) + " upgrade(s)");
             // TODO: trigger bottle download for each pending upgrade.
         }
 
         // Apply upgrades if auto_upgrade is enabled and we are in the window.
         if (settings.auto_upgrade && !state.pending.empty()) {
             bool in_window = settings.upgrade_window.empty()
-                             ? true
-                             : in_maintenance_window(settings.upgrade_window);
+                                 ? true
+                                 : in_maintenance_window(settings.upgrade_window);
             if (in_window) {
                 SPDLOG_INFO("daemon: auto-upgrading {} package(s)", state.pending.size());
-                log_daemon(den_home, "auto-upgrading " +
-                           std::to_string(state.pending.size()) + " package(s)");
+                log_daemon(den_home, "auto-upgrading " + std::to_string(state.pending.size()) +
+                                         " package(s)");
                 // TODO: apply upgrades, clear state.pending on success.
                 state.last_upgrade = now_secs();
             } else {
@@ -394,11 +420,13 @@ bool is_daemon_running(const Config& config) {
     fs::path pid_file = pid_path(config.den_home);
 
     int fd = ::open(pid_file.c_str(), O_WRONLY);
-    if (fd < 0) return false; // No PID file → not running.
+    if (fd < 0)
+        return false; // No PID file → not running.
 
     // If we can acquire an exclusive lock, the daemon is not holding one.
     bool locked = (::flock(fd, LOCK_EX | LOCK_NB) == 0);
-    if (locked) ::flock(fd, LOCK_UN);
+    if (locked)
+        ::flock(fd, LOCK_UN);
     ::close(fd);
 
     return !locked; // Daemon is running iff we could NOT get the lock.

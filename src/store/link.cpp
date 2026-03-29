@@ -44,8 +44,7 @@ uint32_t link_tree(const fs::path& src_dir, const fs::path& dst_dir) {
             }
             fs::create_symlink(entry.path(), dest, ec);
             if (ec) {
-                SPDLOG_WARN("failed to symlink {} -> {}: {}",
-                            entry.path().string(), dest.string(),
+                SPDLOG_WARN("failed to symlink {} -> {}: {}", entry.path().string(), dest.string(),
                             ec.message());
             } else {
                 ++count;
@@ -104,13 +103,11 @@ bool is_valid_package_name(const std::string& name) {
     if (name.find("..") != std::string::npos) {
         return false;
     }
-    static const std::regex pattern(
-        R"([a-zA-Z0-9_][a-zA-Z0-9_.+\-]*(@[a-zA-Z0-9]+)?)");
+    static const std::regex pattern(R"([a-zA-Z0-9_][a-zA-Z0-9_.+\-]*(@[a-zA-Z0-9]+)?)");
     return std::regex_match(name, pattern);
 }
 
-uint32_t link_package(const fs::path& pkg_path, const fs::path& env_dir,
-                      const std::string& name) {
+uint32_t link_package(const fs::path& pkg_path, const fs::path& env_dir, const std::string& name) {
     if (!is_valid_package_name(name)) {
         throw UserError("invalid package name: " + name);
     }
@@ -197,8 +194,7 @@ void record_linked_version(const fs::path& env_dir, const std::string& name,
     out << version << '\n';
 }
 
-std::optional<std::string> linked_version(const fs::path& env_dir,
-                                          const std::string& name) {
+std::optional<std::string> linked_version(const fs::path& env_dir, const std::string& name) {
     auto path = env_dir / ".den" / "linked" / name;
     std::ifstream in(path);
     if (!in) {

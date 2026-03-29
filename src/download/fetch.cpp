@@ -35,11 +35,9 @@ void write_file_atomic(const fs::path& path, const std::string& data) {
     {
         std::ofstream out(tmp, std::ios::binary);
         if (!out) {
-            throw DownloadError("cannot create cache file: " +
-                                tmp.string());
+            throw DownloadError("cannot create cache file: " + tmp.string());
         }
-        out.write(data.data(),
-                  static_cast<std::streamsize>(data.size()));
+        out.write(data.data(), static_cast<std::streamsize>(data.size()));
         if (!out) {
             throw DownloadError("write failed for: " + tmp.string());
         }
@@ -79,8 +77,7 @@ fs::path fetch_archive(const std::string& url, const std::string& sha256,
             return cached;
         }
         // Hash mismatch — stale/corrupt cache entry. Remove and re-fetch.
-        SPDLOG_WARN("cache file hash mismatch, re-downloading: {}",
-                    cached.string());
+        SPDLOG_WARN("cache file hash mismatch, re-downloading: {}", cached.string());
         fs::remove(cached);
     }
 
@@ -90,8 +87,8 @@ fs::path fetch_archive(const std::string& url, const std::string& sha256,
     // Verify hash before writing to cache.
     std::string actual = hash_string(data);
     if (actual != sha256) {
-        throw DownloadError("SHA256 mismatch for " + url +
-                            ": expected " + sha256 + ", got " + actual);
+        throw DownloadError("SHA256 mismatch for " + url + ": expected " + sha256 + ", got " +
+                            actual);
     }
 
     write_file_atomic(cached, data);
@@ -100,8 +97,7 @@ fs::path fetch_archive(const std::string& url, const std::string& sha256,
     return cached;
 }
 
-fs::path fetch_ghcr_blob(const std::string& repo_path,
-                         const std::string& sha256,
+fs::path fetch_ghcr_blob(const std::string& repo_path, const std::string& sha256,
                          const fs::path& cache_dir) {
     fs::create_directories(cache_dir);
 
@@ -119,23 +115,20 @@ fs::path fetch_ghcr_blob(const std::string& repo_path,
 
     // Step 1: Get anonymous bearer token from ghcr.io.
     std::string token_url =
-        "https://ghcr.io/token?scope=repository:" + repo_path +
-        ":pull&service=ghcr.io";
+        "https://ghcr.io/token?scope=repository:" + repo_path + ":pull&service=ghcr.io";
 
     SPDLOG_INFO("requesting GHCR token for {}", repo_path);
     std::string token_response = fetch_url(token_url);
 
     auto token_json = nlohmann::json::parse(token_response);
     if (!token_json.contains("token")) {
-        throw DownloadError(
-            "GHCR token response missing 'token' field");
+        throw DownloadError("GHCR token response missing 'token' field");
     }
     std::string token = token_json["token"].get<std::string>();
 
     // Step 2: Fetch the blob using the OCI distribution API.
     // The blob URL uses the sha256 digest.
-    std::string blob_url = "https://ghcr.io/v2/" + repo_path +
-                           "/blobs/sha256:" + sha256;
+    std::string blob_url = "https://ghcr.io/v2/" + repo_path + "/blobs/sha256:" + sha256;
 
     SPDLOG_INFO("fetching GHCR blob sha256:{}", sha256);
 
@@ -161,8 +154,7 @@ fs::path fetch_ghcr_blob(const std::string& repo_path,
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 120L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
-    curl_easy_setopt(curl, CURLOPT_MAXFILESIZE_LARGE,
-                     static_cast<curl_off_t>(500 * 1024 * 1024));
+    curl_easy_setopt(curl, CURLOPT_MAXFILESIZE_LARGE, static_cast<curl_off_t>(500 * 1024 * 1024));
 
     // Set the Authorization header.
     struct curl_slist* headers = nullptr;
@@ -191,15 +183,13 @@ fs::path fetch_ghcr_blob(const std::string& repo_path,
     // Verify hash.
     std::string actual = hash_string(response);
     if (actual != sha256) {
-        throw DownloadError(
-            "SHA256 mismatch for GHCR blob: expected " + sha256 +
-            ", got " + actual);
+        throw DownloadError("SHA256 mismatch for GHCR blob: expected " + sha256 + ", got " +
+                            actual);
     }
 
     write_file_atomic(cached, response);
 
-    SPDLOG_INFO("cached GHCR blob {} ({} bytes)", sha256,
-                response.size());
+    SPDLOG_INFO("cached GHCR blob {} ({} bytes)", sha256, response.size());
     return cached;
 }
 

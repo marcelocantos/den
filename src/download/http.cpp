@@ -40,8 +40,7 @@ std::string fetch_url(const std::string& url) {
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
     // Limit download size to 500 MB.
-    curl_easy_setopt(curl, CURLOPT_MAXFILESIZE_LARGE,
-                     static_cast<curl_off_t>(500 * 1024 * 1024));
+    curl_easy_setopt(curl, CURLOPT_MAXFILESIZE_LARGE, static_cast<curl_off_t>(500 * 1024 * 1024));
 
     CURLcode res = curl_easy_perform(curl);
 
@@ -56,8 +55,7 @@ std::string fetch_url(const std::string& url) {
     curl_easy_cleanup(curl);
 
     if (http_code < 200 || http_code >= 300) {
-        throw DownloadError("HTTP " + std::to_string(http_code) +
-                            " fetching " + url);
+        throw DownloadError("HTTP " + std::to_string(http_code) + " fetching " + url);
     }
 
     return response;

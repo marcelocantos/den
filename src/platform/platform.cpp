@@ -25,7 +25,7 @@ Arch detect_arch() {
 
 std::optional<MacOsVersion> detect_macos_version() {
 #ifdef __APPLE__
-    struct utsname uts {};
+    struct utsname uts{};
     if (uname(&uts) == 0) {
         // Darwin kernel version is offset by 9 relative to macOS version.
         // Darwin 24.x = macOS 15.x (Sequoia), Darwin 25.x = macOS 16.x, etc.
@@ -41,12 +41,18 @@ std::optional<MacOsVersion> detect_macos_version() {
 
 std::optional<std::string> macos_codename(int major) {
     switch (major) {
-    case 26: return "tahoe";
-    case 15: return "sequoia";
-    case 14: return "sonoma";
-    case 13: return "ventura";
-    case 12: return "monterey";
-    default: return std::nullopt;
+    case 26:
+        return "tahoe";
+    case 15:
+        return "sequoia";
+    case 14:
+        return "sonoma";
+    case 13:
+        return "ventura";
+    case 12:
+        return "monterey";
+    default:
+        return std::nullopt;
     }
 }
 
@@ -64,17 +70,11 @@ std::optional<std::string> bottle_tag(Arch arch, const MacOsVersion& macos) {
     return std::nullopt;
 }
 
-std::vector<std::string> bottle_tag_candidates(
-    Arch arch,
-    const std::optional<MacOsVersion>& macos)
-{
+std::vector<std::string> bottle_tag_candidates(Arch arch,
+                                               const std::optional<MacOsVersion>& macos) {
     // Ordered from newest to oldest — first match wins.
     static const std::pair<int, const char*> kCodenames[] = {
-        {26, "tahoe"},
-        {15, "sequoia"},
-        {14, "sonoma"},
-        {13, "ventura"},
-        {12, "monterey"},
+        {26, "tahoe"}, {15, "sequoia"}, {14, "sonoma"}, {13, "ventura"}, {12, "monterey"},
     };
 
     if (!macos) {
@@ -101,15 +101,12 @@ std::vector<std::string> bottle_tag_candidates(
     return candidates;
 }
 
-std::optional<std::string> best_archive_tag(
-    Arch arch,
-    const std::optional<MacOsVersion>& macos,
-    const std::vector<std::string>& available_tags)
-{
+std::optional<std::string> best_archive_tag(Arch arch, const std::optional<MacOsVersion>& macos,
+                                            const std::vector<std::string>& available_tags) {
     const auto candidates = bottle_tag_candidates(arch, macos);
     for (const auto& candidate : candidates) {
-        if (std::find(available_tags.begin(), available_tags.end(), candidate)
-            != available_tags.end()) {
+        if (std::find(available_tags.begin(), available_tags.end(), candidate) !=
+            available_tags.end()) {
             return candidate;
         }
     }

@@ -18,8 +18,7 @@ fs::path env_dir(const fs::path& den_home, const std::string& env_path);
 /// Materialise an environment by resolving its manifest (walking the
 /// parent chain) and linking all resolved packages from the store.
 /// Returns the total number of symlinks created.
-uint32_t materialise(const fs::path& den_home, const fs::path& store,
-                     const std::string& env_path);
+uint32_t materialise(const fs::path& den_home, const fs::path& store, const std::string& env_path);
 
 /// Read the active environment path from den_home/active_env.
 /// Returns "/" if no active environment is set.

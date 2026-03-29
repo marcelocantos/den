@@ -32,8 +32,7 @@ namespace den {
 
 namespace {
 
-const char* agent_guide =
-    "See agents-guide.md for the full agent guide.\n";
+const char* agent_guide = "See agents-guide.md for the full agent guide.\n";
 
 void stub(const std::string& command) {
     SPDLOG_INFO("{}: not yet implemented", command);
@@ -93,28 +92,23 @@ void Cli::M::setup() {
     app.set_version_flag("--version", std::string(DEN_VERSION));
     app.require_subcommand(0, 1);
 
-    app.add_flag("--help-agent", help_agent,
-                 "Print help text and agent guide");
+    app.add_flag("--help-agent", help_agent, "Print help text and agent guide");
 
     // --- install ---
     auto* install = app.add_subcommand("install", "Install packages");
-    install->add_option("names", install_names, "Package names to install")
-        ->required();
+    install->add_option("names", install_names, "Package names to install")->required();
     install->add_flag("-s,--build-from-source", build_from_source,
                       "Build from source instead of pouring a bottle");
     install->callback([this] { stub("install"); });
 
     // --- uninstall ---
     auto* uninstall = app.add_subcommand("uninstall", "Uninstall packages");
-    uninstall->add_option("names", uninstall_names, "Package names to uninstall")
-        ->required();
+    uninstall->add_option("names", uninstall_names, "Package names to uninstall")->required();
     uninstall->callback([this] { stub("uninstall"); });
 
     // --- upgrade ---
-    auto* upgrade = app.add_subcommand("upgrade",
-                                       "Upgrade installed packages");
-    upgrade->add_option("names", upgrade_names,
-                        "Package names to upgrade (all if empty)");
+    auto* upgrade = app.add_subcommand("upgrade", "Upgrade installed packages");
+    upgrade->add_option("names", upgrade_names, "Package names to upgrade (all if empty)");
     upgrade->callback([this] { stub("upgrade"); });
 
     // --- update ---
@@ -124,8 +118,7 @@ void Cli::M::setup() {
         auto idx = fetch_and_transform(cfg);
         auto cache_path = cfg.cache / "index.json";
         save_index(idx, cache_path);
-        std::cout << "Updated index: " << idx.packages.size()
-                  << " packages loaded.\n";
+        std::cout << "Updated index: " << idx.packages.size() << " packages loaded.\n";
     });
 
     // --- list ---
@@ -143,8 +136,8 @@ void Cli::M::setup() {
             max_name = std::max(max_name, pkg.name.size());
         }
         for (const auto& pkg : installed) {
-            std::cout << std::left << std::setw(static_cast<int>(max_name + 2))
-                      << pkg.name << pkg.version << "\n";
+            std::cout << std::left << std::setw(static_cast<int>(max_name + 2)) << pkg.name
+                      << pkg.version << "\n";
         }
     });
 
@@ -166,12 +159,12 @@ void Cli::M::setup() {
                   << "Homepage:     " << pkg->homepage << "\n"
                   << "License:      " << pkg->license << "\n"
                   << "Type:         "
-                  << (pkg->artifact_type == ArtifactType::App ? "app" : "binary")
-                  << "\n";
+                  << (pkg->artifact_type == ArtifactType::App ? "app" : "binary") << "\n";
         if (!pkg->dependencies.empty()) {
             std::cout << "Dependencies: ";
             for (size_t i = 0; i < pkg->dependencies.size(); ++i) {
-                if (i > 0) std::cout << ", ";
+                if (i > 0)
+                    std::cout << ", ";
                 std::cout << pkg->dependencies[i];
             }
             std::cout << "\n";
@@ -209,16 +202,13 @@ void Cli::M::setup() {
         }
         // Case-insensitive substring match.
         std::string query_lower = search_query;
-        std::transform(query_lower.begin(), query_lower.end(),
-                       query_lower.begin(), ::tolower);
+        std::transform(query_lower.begin(), query_lower.end(), query_lower.begin(), ::tolower);
         std::vector<const Package*> matches;
         for (const auto& [name, pkg] : idx.packages) {
             std::string name_lower = name;
-            std::transform(name_lower.begin(), name_lower.end(),
-                           name_lower.begin(), ::tolower);
+            std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(), ::tolower);
             std::string desc_lower = pkg.description;
-            std::transform(desc_lower.begin(), desc_lower.end(),
-                           desc_lower.begin(), ::tolower);
+            std::transform(desc_lower.begin(), desc_lower.end(), desc_lower.begin(), ::tolower);
             if (name_lower.find(query_lower) != std::string::npos ||
                 desc_lower.find(query_lower) != std::string::npos) {
                 matches.push_back(&pkg);
@@ -241,10 +231,8 @@ void Cli::M::setup() {
             if (desc.size() > kMaxDesc) {
                 desc = desc.substr(0, kMaxDesc - 3) + "...";
             }
-            std::cout << std::left
-                      << std::setw(static_cast<int>(max_name + 2)) << pkg->name
-                      << std::setw(static_cast<int>(max_ver + 2)) << pkg->version
-                      << desc << "\n";
+            std::cout << std::left << std::setw(static_cast<int>(max_name + 2)) << pkg->name
+                      << std::setw(static_cast<int>(max_ver + 2)) << pkg->version << desc << "\n";
         }
         std::cout << matches.size() << " packages found.\n";
     });
@@ -277,7 +265,8 @@ void Cli::M::setup() {
             const PackageIndex& idx;
             std::set<std::string>& visited;
             void print(const std::string& name, int depth) {
-                for (int i = 0; i < depth; ++i) std::cout << "  ";
+                for (int i = 0; i < depth; ++i)
+                    std::cout << "  ";
                 std::cout << name;
                 if (visited.count(name)) {
                     std::cout << " (circular)\n";
@@ -301,18 +290,15 @@ void Cli::M::setup() {
     });
 
     // --- cleanup ---
-    auto* cleanup = app.add_subcommand("cleanup",
-                                       "Remove old versions and cache files");
+    auto* cleanup = app.add_subcommand("cleanup", "Remove old versions and cache files");
     cleanup->callback([this] { stub("cleanup"); });
 
     // --- autoremove ---
-    auto* autoremove = app.add_subcommand("autoremove",
-                                          "Remove unused dependencies");
+    auto* autoremove = app.add_subcommand("autoremove", "Remove unused dependencies");
     autoremove->callback([this] { stub("autoremove"); });
 
     // --- doctor ---
-    auto* doctor_cmd = app.add_subcommand("doctor",
-                                          "Check system for potential problems");
+    auto* doctor_cmd = app.add_subcommand("doctor", "Check system for potential problems");
     doctor_cmd->callback([] {
         auto cfg = Config::detect();
         auto findings = doctor(cfg);
@@ -322,8 +308,7 @@ void Cli::M::setup() {
     });
 
     // --- config ---
-    auto* config = app.add_subcommand("config",
-                                      "Show detected configuration");
+    auto* config = app.add_subcommand("config", "Show detected configuration");
     config->callback([] {
         auto cfg = Config::detect();
         std::cout << "den_home:          " << cfg.den_home.string() << "\n"
@@ -333,9 +318,7 @@ void Cli::M::setup() {
                   << "homebrew_cellar:   " << cfg.homebrew_cellar.string() << "\n"
                   << "arch:              " << to_string(cfg.arch) << "\n"
                   << "macos_version:     "
-                  << (cfg.macos_version ? cfg.macos_version->to_string()
-                                        : "n/a")
-                  << "\n";
+                  << (cfg.macos_version ? cfg.macos_version->to_string() : "n/a") << "\n";
     });
 
     // --- env ---
@@ -343,8 +326,7 @@ void Cli::M::setup() {
     env->require_subcommand(1);
 
     auto* env_create = env->add_subcommand("create", "Create an environment");
-    env_create->add_option("name", env_create_name, "Environment name")
-        ->required();
+    env_create->add_option("name", env_create_name, "Environment name")->required();
     env_create->callback([this] {
         auto cfg = Config::detect();
         write_manifest(cfg.den_home, env_create_name, Manifest{});
@@ -364,8 +346,7 @@ void Cli::M::setup() {
     });
 
     auto* env_remove = env->add_subcommand("remove", "Remove an environment");
-    env_remove->add_option("name", env_remove_name, "Environment name")
-        ->required();
+    env_remove->add_option("name", env_remove_name, "Environment name")->required();
     env_remove->callback([this] {
         if (env_remove_name == "/") {
             SPDLOG_ERROR("cannot remove the root environment");
@@ -403,21 +384,18 @@ void Cli::M::setup() {
         }
     });
 
-    auto* env_freeze = env->add_subcommand("freeze",
-                                           "Export environment as lockfile");
+    auto* env_freeze = env->add_subcommand("freeze", "Export environment as lockfile");
     env_freeze->callback([this] { stub("env freeze"); });
 
     // --- use ---
-    auto* use = app.add_subcommand("use",
-                                   "Switch active version of a package");
+    auto* use = app.add_subcommand("use", "Switch active version of a package");
     use->add_option("name", use_name, "Package name")->required();
     use->add_option("version", use_version, "Version to activate")->required();
     use->callback([this] { stub("use"); });
 
     // --- init ---
     auto* init = app.add_subcommand("init", "Print shell init script");
-    init->add_option("--shell", init_shell,
-                     "Shell type (bash, zsh, fish)");
+    init->add_option("--shell", init_shell, "Shell type (bash, zsh, fish)");
     init->callback([this] {
         auto cfg = Config::detect();
         std::string shell = init_shell;
@@ -450,16 +428,14 @@ void Cli::M::setup() {
     });
 
     // --- settings ---
-    auto* settings_cmd = app.add_subcommand("settings",
-                                            "Show all configuration settings");
+    auto* settings_cmd = app.add_subcommand("settings", "Show all configuration settings");
     settings_cmd->callback([] {
         auto cfg = Config::detect();
         std::cout << display_all_settings(cfg.den_home) << "\n";
     });
 
     // --- migrate ---
-    auto* migrate = app.add_subcommand("migrate",
-                                       "Migrate from Homebrew Cellar");
+    auto* migrate = app.add_subcommand("migrate", "Migrate from Homebrew Cellar");
     migrate->callback([] {
         auto cfg = Config::detect();
         migrate_from_homebrew(cfg, {});
@@ -481,8 +457,7 @@ void Cli::M::setup() {
         stop_daemon(cfg);
     });
 
-    auto* daemon_status = daemon->add_subcommand("status",
-                                                 "Show daemon status");
+    auto* daemon_status = daemon->add_subcommand("status", "Show daemon status");
     daemon_status->callback([] {
         auto cfg = Config::detect();
         if (is_daemon_running(cfg))
@@ -513,8 +488,7 @@ void Cli::M::setup() {
             std::cout << "Upgrade window: " << *s.daemon.upgrade_window << "\n";
     });
 
-    auto* daemon_install = daemon->add_subcommand("install",
-                                                  "Install daemon service");
+    auto* daemon_install = daemon->add_subcommand("install", "Install daemon service");
     daemon_install->callback([] {
 #ifdef __APPLE__
         auto cfg = Config::detect();
@@ -538,8 +512,7 @@ void Cli::M::setup() {
 #endif
     });
 
-    auto* daemon_uninstall = daemon->add_subcommand("uninstall",
-                                                    "Uninstall daemon service");
+    auto* daemon_uninstall = daemon->add_subcommand("uninstall", "Uninstall daemon service");
     daemon_uninstall->callback([] {
 #ifdef __APPLE__
         auto home = fs::path(std::getenv("HOME") ? std::getenv("HOME") : "/tmp");
@@ -557,8 +530,7 @@ void Cli::M::setup() {
     });
 
     // --- outdated ---
-    auto* outdated = app.add_subcommand("outdated",
-                                        "List packages with updates available");
+    auto* outdated = app.add_subcommand("outdated", "List packages with updates available");
     outdated->callback([] {
         auto cfg = Config::detect();
         auto idx = load_index(cfg.cache / "index.json");
@@ -580,10 +552,8 @@ void Cli::M::setup() {
         for (const auto& pkg : installed) {
             const auto* index_pkg = idx.find(pkg.name);
             if (index_pkg && index_pkg->version != pkg.version) {
-                std::cout << std::left
-                          << std::setw(static_cast<int>(max_name + 2))
-                          << pkg.name << pkg.version << " -> "
-                          << index_pkg->version << "\n";
+                std::cout << std::left << std::setw(static_cast<int>(max_name + 2)) << pkg.name
+                          << pkg.version << " -> " << index_pkg->version << "\n";
                 ++count;
             }
         }
@@ -596,8 +566,7 @@ void Cli::M::setup() {
     auto* services = app.add_subcommand("services", "Manage package services");
     services->require_subcommand(1);
 
-    auto* svc_list = services->add_subcommand("list",
-                                              "List running services");
+    auto* svc_list = services->add_subcommand("list", "List running services");
     svc_list->callback([this] { stub("services list"); });
 
     auto* svc_start = services->add_subcommand("start", "Start services");
@@ -608,13 +577,14 @@ void Cli::M::setup() {
     svc_stop->add_option("names", service_names, "Service names");
     svc_stop->callback([this] { stub("services stop"); });
 
-    auto* svc_restart = services->add_subcommand("restart",
-                                                 "Restart services");
+    auto* svc_restart = services->add_subcommand("restart", "Restart services");
     svc_restart->add_option("names", service_names, "Service names");
     svc_restart->callback([this] { stub("services restart"); });
 }
 
-Cli::Cli() : m(std::make_unique<M>()) { m->setup(); }
+Cli::Cli() : m(std::make_unique<M>()) {
+    m->setup();
+}
 
 Cli::~Cli() = default;
 

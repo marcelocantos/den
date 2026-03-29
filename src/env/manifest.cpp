@@ -31,9 +31,12 @@ std::string percent_encode(char c) {
 /// Percent-decode a two-character hex sequence.
 char percent_decode(char hi, char lo) {
     auto hex_val = [](char c) -> int {
-        if (c >= '0' && c <= '9') return c - '0';
-        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= '0' && c <= '9')
+            return c - '0';
+        if (c >= 'A' && c <= 'F')
+            return c - 'A' + 10;
+        if (c >= 'a' && c <= 'f')
+            return c - 'a' + 10;
         return -1;
     };
     int h = hex_val(hi);
@@ -136,15 +139,13 @@ Manifest read_manifest(const fs::path& den_home, const std::string& env_path) {
             m.origin = j["origin"].get<std::string>();
         }
     } catch (const json::exception& e) {
-        SPDLOG_WARN("failed to parse manifest {}: {}", path.string(),
-                    e.what());
+        SPDLOG_WARN("failed to parse manifest {}: {}", path.string(), e.what());
     }
 
     return m;
 }
 
-void write_manifest(const fs::path& den_home, const std::string& env_path,
-                    const Manifest& m) {
+void write_manifest(const fs::path& den_home, const std::string& env_path, const Manifest& m) {
     auto path = manifest_file(den_home, env_path);
     fs::create_directories(path.parent_path());
 
@@ -170,13 +171,11 @@ void write_manifest(const fs::path& den_home, const std::string& env_path,
     }
 
     if (std::rename(tmp_path.c_str(), path.c_str()) != 0) {
-        throw InternalError("failed to rename manifest: " +
-                            std::string(std::strerror(errno)));
+        throw InternalError("failed to rename manifest: " + std::string(std::strerror(errno)));
     }
 }
 
-std::map<std::string, std::string> resolve(const fs::path& den_home,
-                                           const std::string& env_path) {
+std::map<std::string, std::string> resolve(const fs::path& den_home, const std::string& env_path) {
     std::map<std::string, std::string> result;
     std::set<std::string> visited;
 

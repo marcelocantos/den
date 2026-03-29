@@ -23,8 +23,7 @@ fs::path fetch_archive(const std::string& url, const std::string& sha256,
 ///
 /// repo_path: e.g. "homebrew/core/ffmpeg" (without ghcr.io prefix).
 /// sha256: the expected sha256 digest of the blob.
-fs::path fetch_ghcr_blob(const std::string& repo_path,
-                         const std::string& sha256,
+fs::path fetch_ghcr_blob(const std::string& repo_path, const std::string& sha256,
                          const fs::path& cache_dir);
 
 } // namespace den
