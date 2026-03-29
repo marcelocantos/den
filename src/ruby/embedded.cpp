@@ -85,95 +85,107 @@ end
 )RUBY";
 
 // Ruby source for the formula extraction helper.
+// Uses a simple approach: call class methods that the DSL defined,
+// reading class-level instance variables set by desc/homepage/etc.
 constexpr const char* FORMULA_EXTRACTOR = R"RUBY(
 module DenFormulaExtractor
   def self.extract(klass)
-    f = klass.new(klass.name.downcase)
+    # klass.name can segfault in embedded Ruby 4.0 — use empty string
+    # and let the C++ caller supply the name from the index.
+    name = ""
 
-    result = {
-      name: f.name,
-      version: f.respond_to?(:version) ? f.version.to_s : "",
-      description: klass.respond_to?(:desc) ? (klass.desc || "") : "",
-      homepage: klass.respond_to?(:homepage) ? (klass.homepage || "") : "",
-      license: klass.respond_to?(:license) ? (klass.license.to_s rescue "") : "",
-      keg_only: klass.respond_to?(:keg_only?) ? klass.keg_only? : false,
-      dependencies: [],
-      build_dependencies: [],
-    }
+    # Read DSL-set values via the class methods.
+    description = (klass.desc rescue nil) || ""
+    home = (klass.homepage rescue nil) || ""
+    lic = (klass.license.to_s rescue nil) || ""
+    is_keg_only = (klass.keg_only? rescue false)
 
-    if klass.respond_to?(:stable) && klass.stable
-      spec = klass.stable
-      result[:url] = spec.url.to_s rescue ""
-      result[:sha256] = spec.checksum.to_s rescue ""
-    end
-
+    # Dependencies — if the class tracks them.
+    deps = []
+    build_deps = []
     if klass.respond_to?(:deps)
-      klass.deps.each do |dep|
-        if dep.build?
-          result[:build_dependencies] << dep.name
-        else
-          result[:dependencies] << dep.name
+      (klass.deps || []).each do |d|
+        if d.is_a?(String)
+          deps << d
+        elsif d.respond_to?(:name)
+          if d.respond_to?(:build?) && d.build?
+            build_deps << d.name
+          else
+            deps << d.name
+          end
         end
       end
     end
 
-    result
+    # Return as a simple delimited string to avoid needing JSON gem.
+    # Format: key=value lines, arrays as comma-separated.
+    lines = []
+    lines << "name=#{name}"
+    lines << "version="
+    lines << "description=#{description}"
+    lines << "homepage=#{home}"
+    lines << "license=#{lic}"
+    lines << "keg_only=#{is_keg_only}"
+    lines << "dependencies=#{deps.join(',')}"
+    lines << "build_dependencies=#{build_deps.join(',')}"
+    lines.join("\n")
   rescue => e
-    { error: e.message, backtrace: e.backtrace&.first(5)&.join("\n") }
+    "error=#{e.message}\nbacktrace=#{(e.backtrace || []).first(5).join(';')}"
   end
 end
 )RUBY";
 
-// Convert a Ruby hash VALUE to a C++ FormulaRecipe.
-FormulaRecipe value_to_recipe(VALUE hash) {
+// Parse the line-based key=value format from the Ruby extractor.
+FormulaRecipe parse_extractor_output(const std::string& output) {
     FormulaRecipe recipe;
+    std::istringstream ss(output);
+    std::string line;
 
-    auto get_string = [&](const char* key) -> std::string {
-        VALUE sym = rb_id2sym(rb_intern(key));
-        VALUE val = rb_hash_aref(hash, sym);
-        if (NIL_P(val)) return "";
-        return StringValueCStr(val);
-    };
-
-    auto get_bool = [&](const char* key) -> bool {
-        VALUE sym = rb_id2sym(rb_intern(key));
-        VALUE val = rb_hash_aref(hash, sym);
-        return RTEST(val);
-    };
-
-    auto get_string_array = [&](const char* key) -> std::vector<std::string> {
-        VALUE sym = rb_id2sym(rb_intern(key));
-        VALUE arr = rb_hash_aref(hash, sym);
+    auto split_csv = [](const std::string& s) -> std::vector<std::string> {
         std::vector<std::string> result;
-        if (!NIL_P(arr) && RB_TYPE_P(arr, RUBY_T_ARRAY)) {
-            long len = RARRAY_LEN(arr);
-            for (long i = 0; i < len; ++i) {
-                VALUE elem = rb_ary_entry(arr, i);
-                result.push_back(StringValueCStr(elem));
-            }
+        std::istringstream cs(s);
+        std::string item;
+        while (std::getline(cs, item, ',')) {
+            if (!item.empty())
+                result.push_back(item);
         }
         return result;
     };
 
-    // Check for error.
-    VALUE error_sym = rb_id2sym(rb_intern("error"));
-    VALUE error_val = rb_hash_aref(hash, error_sym);
-    if (!NIL_P(error_val)) {
-        SPDLOG_ERROR("formula evaluation error: {}", StringValueCStr(error_val));
-        return recipe;
+    while (std::getline(ss, line)) {
+        auto eq = line.find('=');
+        if (eq == std::string::npos)
+            continue;
+        auto key = line.substr(0, eq);
+        auto val = line.substr(eq + 1);
+
+        if (key == "error") {
+            SPDLOG_ERROR("formula extraction error: {}", val);
+            return recipe;
+        } else if (key == "backtrace") {
+            SPDLOG_ERROR("  backtrace: {}", val);
+        } else if (key == "name") {
+            recipe.name = val;
+        } else if (key == "version") {
+            recipe.version = val;
+        } else if (key == "description") {
+            recipe.description = val;
+        } else if (key == "homepage") {
+            recipe.homepage = val;
+        } else if (key == "license") {
+            recipe.license = val;
+        } else if (key == "url") {
+            recipe.url = val;
+        } else if (key == "sha256") {
+            recipe.sha256 = val;
+        } else if (key == "keg_only") {
+            recipe.keg_only = (val == "true");
+        } else if (key == "dependencies") {
+            recipe.dependencies = split_csv(val);
+        } else if (key == "build_dependencies") {
+            recipe.build_dependencies = split_csv(val);
+        }
     }
-
-    recipe.name = get_string("name");
-    recipe.version = get_string("version");
-    recipe.description = get_string("description");
-    recipe.homepage = get_string("homepage");
-    recipe.license = get_string("license");
-    recipe.url = get_string("url");
-    recipe.sha256 = get_string("sha256");
-    recipe.keg_only = get_bool("keg_only");
-    recipe.dependencies = get_string_array("dependencies");
-    recipe.build_dependencies = get_string_array("build_dependencies");
-
     return recipe;
 }
 
@@ -319,12 +331,14 @@ std::optional<FormulaRecipe> RubyRuntime::evaluate_formula(const std::string& so
     VALUE extractor = rb_const_get(rb_cObject, rb_intern("DenFormulaExtractor"));
     VALUE result = rb_funcall(extractor, rb_intern("extract"), 1, klass);
 
-    if (!RB_TYPE_P(result, RUBY_T_HASH)) {
-        SPDLOG_ERROR("formula extractor returned non-hash for {}", filename);
+    if (!RB_TYPE_P(result, RUBY_T_STRING)) {
+        SPDLOG_ERROR("formula extractor returned non-string for {}", filename);
         return std::nullopt;
     }
 
-    return value_to_recipe(result);
+    std::string output(RSTRING_PTR(result), RSTRING_LEN(result));
+    SPDLOG_DEBUG("extractor output:\n{}", output);
+    return parse_extractor_output(output);
 }
 
 bool RubyRuntime::is_initialized() const { return m->initialized; }
