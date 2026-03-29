@@ -124,7 +124,9 @@ bool install_one(const Config& config, const Package& pkg) {
     // to the store. Homebrew bottles have a <name>/<version>/ prefix
     // inside the archive that we need to strip.
     auto dest = package_path(config.store, pkg.name, pkg.version);
-    auto tmp_dir = config.cache / "tmp-extract";
+    auto tmp_dir = config.cache / ("tmp-extract-" + pkg.name + "-" + pkg.version);
+    std::error_code rm_ec;
+    fs::remove_all(tmp_dir, rm_ec); // Clean any leftover from previous failed install.
     fs::create_directories(tmp_dir);
 
     std::cout << "==> Extracting " << pkg.name << " " << pkg.version << "\n";

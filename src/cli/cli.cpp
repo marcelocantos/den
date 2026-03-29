@@ -8,6 +8,7 @@
 #include "../core/config.h"
 #include "../core/error.h"
 #include "../daemon/daemon.h"
+#include "../smoke/runner.h"
 #include "../doctor/doctor.h"
 #include "../env/environment.h"
 #include "../env/manifest.h"
@@ -82,6 +83,10 @@ struct Cli::M {
 
     // services
     std::vector<std::string> service_names;
+
+    // smoke
+    std::string smoke_defs;
+    int smoke_max = 0;
 
     void setup();
 };
@@ -824,6 +829,38 @@ void Cli::M::setup() {
             }
         }
 #endif
+    });
+
+    // --- smoke ---
+    auto* smoke = app.add_subcommand("smoke", "Run smoke tests against installed packages");
+    smoke->add_option("--defs", smoke_defs, "Path to test definitions JSON")
+        ->default_val("tests/smoke/tier1.json");
+    smoke->add_option("--max,-n", smoke_max, "Max packages to test (0 = all)");
+    smoke->callback([this] {
+        // Use a fresh isolated DEN_HOME for smoke tests.
+        auto cfg = Config::detect();
+        auto smoke_home = fs::temp_directory_path() / "den-smoke-test";
+        fs::create_directories(smoke_home);
+        cfg.den_home = smoke_home;
+        cfg.store = smoke_home / "store";
+        cfg.cache = smoke_home / "cache";
+
+        // Copy the index cache so we don't re-fetch.
+        auto real_cfg = Config::detect();
+        auto src_index = real_cfg.cache / "index.json";
+        if (fs::exists(src_index)) {
+            fs::create_directories(cfg.cache);
+            fs::copy_file(src_index, cfg.cache / "index.json",
+                          fs::copy_options::overwrite_existing);
+        }
+
+        auto results = run_smoke_tests(smoke_defs, cfg, smoke_max);
+        int failed = 0;
+        for (const auto& r : results)
+            if (!r.all_passed()) ++failed;
+        if (failed > 0) {
+            std::exit(1);
+        }
     });
 }
 

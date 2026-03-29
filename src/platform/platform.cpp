@@ -110,6 +110,10 @@ std::optional<std::string> best_archive_tag(Arch arch, const std::optional<MacOs
             return candidate;
         }
     }
+    // Fallback: "all" tag (platform-independent packages like ca-certificates).
+    if (std::find(available_tags.begin(), available_tags.end(), "all") != available_tags.end()) {
+        return "all";
+    }
     return std::nullopt;
 }
 
