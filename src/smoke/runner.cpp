@@ -3,8 +3,10 @@
 
 #include "runner.h"
 
+#include "../build/source_build.h"
 #include "../cli/install.h"
 #include "../env/environment.h"
+#include "../env/manifest.h"
 #include "../index/index.h"
 
 #include <nlohmann/json.hpp>
@@ -174,8 +176,19 @@ std::vector<SmokeResult> run_smoke_tests(const fs::path& test_defs_json,
             continue;
         }
 
+        bool from_source = test.value("source", false);
         try {
-            install_packages(config, idx, {name});
+            if (from_source) {
+                std::string version = pkg ? pkg->version : "unknown";
+                build_from_source(config, name, version);
+                // Update manifest so materialise works.
+                with_manifest(config.den_home, "/", [&](Manifest& m) {
+                    m.packages[name] = version;
+                });
+                materialise(config.den_home, config.store, "/");
+            } else {
+                install_packages(config, idx, {name});
+            }
             result.installed = true;
         } catch (const std::exception& e) {
             SPDLOG_ERROR("{}: install failed: {}", name, e.what());
