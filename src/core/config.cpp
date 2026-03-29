@@ -1,0 +1,51 @@
+// Copyright 2026 Marcelo Cantos
+// SPDX-License-Identifier: Apache-2.0
+
+#include "config.h"
+
+#include "../platform/platform.h"
+
+#include <cstdlib>
+
+namespace den {
+
+namespace {
+
+fs::path home_dir() {
+    if (const char* home = std::getenv("HOME")) {
+        return fs::path(home);
+    }
+    return fs::path("/tmp");
+}
+
+fs::path env_or(const char* var, fs::path fallback) {
+    if (const char* val = std::getenv(var)) {
+        return fs::path(val);
+    }
+    return fallback;
+}
+
+} // namespace
+
+Config Config::detect() {
+    Config c;
+    c.arch = detect_arch();
+    c.macos_version = detect_macos_version();
+
+    c.den_home = env_or("DEN_HOME", home_dir() / ".den");
+    c.store = c.den_home / "store";
+    c.cache = c.den_home / "cache";
+
+    // Homebrew paths (read-only, for migration).
+#ifdef __APPLE__
+    c.homebrew_prefix =
+        env_or("HOMEBREW_PREFIX", c.arch == Arch::Arm64 ? "/opt/homebrew" : "/usr/local");
+#else
+    c.homebrew_prefix = env_or("HOMEBREW_PREFIX", "/home/linuxbrew/.linuxbrew");
+#endif
+    c.homebrew_cellar = env_or("HOMEBREW_CELLAR", c.homebrew_prefix / "Cellar");
+
+    return c;
+}
+
+} // namespace den

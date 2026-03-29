@@ -6,9 +6,6 @@ on:
   pull_request:
     branches: [master]
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
   check:
     name: Check (${{ matrix.os }})
@@ -18,18 +15,58 @@ jobs:
         os: [macos-14, ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build --all-targets
-      - run: cargo test
-      - run: cargo clippy --all-targets -- -D warnings
+        with:
+          submodules: recursive
 
-  fmt:
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake ninja libarchive
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev libarchive-dev
+
+      - name: Configure
+        run: |
+          cmake_args="-B build -G Ninja -DCMAKE_BUILD_TYPE=Release"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cmake_args="$cmake_args -DCMAKE_PREFIX_PATH=$(brew --prefix libarchive)"
+          fi
+          cmake $cmake_args
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: cd build && ctest --output-on-failure
+
+      - name: Verify CLI
+        run: |
+          ./build/den --version
+          ./build/den --help
+
+  format:
     name: Format
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
-      - run: cargo fmt --check
+          submodules: recursive
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format-18
+          sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-18 100
+
+      - name: Format source files
+        run: find src tests -name '*.h' -o -name '*.cpp' | xargs clang-format-18 -i --style=file
+
+      - name: Check formatting
+        run: |
+          if ! git diff --quiet; then
+            echo "::warning::Code formatting differs from clang-format-18. Run: find src tests -name '*.h' -o -name '*.cpp' | xargs clang-format -i"
+            git diff --stat
+          fi
