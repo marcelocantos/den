@@ -1,0 +1,51 @@
+{
+  "_comment": "Source build smoke tests — verify packages compile correctly with den's prefix. These are slower than bottle tests (they compile from source) so the list is intentionally short.",
+  "tests": [
+    {
+      "name": "tree",
+      "source": true,
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/tree --version", "expect_exit": 0},
+        {"cmd": "bin/tree .", "expect_exit": 0}
+      ]
+    },
+    {
+      "name": "jq",
+      "source": true,
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/jq --version", "expect_exit": 0},
+        {"cmd": "bin/jq -n '{a: 1}'", "expect_stdout": "\"a\": 1"}
+      ]
+    },
+    {
+      "name": "lz4",
+      "source": true,
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/lz4 --version", "expect_exit": 0},
+        {"file_exists": "lib/liblz4.dylib"},
+        {"file_exists": "include/lz4.h"}
+      ]
+    },
+    {
+      "name": "xz",
+      "source": true,
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/xz --version", "expect_exit": 0},
+        {"file_exists": "lib/liblzma.dylib"}
+      ]
+    },
+    {
+      "name": "zstd",
+      "source": true,
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/zstd --version", "expect_exit": 0},
+        {"file_exists": "lib/libzstd.dylib"}
+      ]
+    }
+  ]
+}
