@@ -3,40 +3,13 @@
 
 #include "config.h"
 
-#include <cstdlib>
+#include "../platform/platform.h"
 
-#ifdef __APPLE__
-#include <sys/sysctl.h>
-#include <sys/utsname.h>
-#endif
+#include <cstdlib>
 
 namespace den {
 
 namespace {
-
-Arch detect_arch() {
-#if defined(__aarch64__) || defined(__arm64__)
-    return Arch::Arm64;
-#elif defined(__x86_64__) || defined(__amd64__)
-    return Arch::X86_64;
-#else
-    #error "Unsupported architecture"
-#endif
-}
-
-std::optional<MacOsVersion> detect_macos_version() {
-#ifdef __APPLE__
-    struct utsname uts;
-    if (uname(&uts) == 0) {
-        // Darwin kernel version maps: Darwin 24.x = macOS 15.x, etc.
-        int darwin_major = 0;
-        if (sscanf(uts.release, "%d", &darwin_major) == 1 && darwin_major >= 20) {
-            return MacOsVersion{darwin_major - 9, 0};
-        }
-    }
-#endif
-    return std::nullopt;
-}
 
 fs::path home_dir() {
     if (const char* home = std::getenv("HOME")) {
