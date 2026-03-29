@@ -7,9 +7,6 @@ on:
 permissions:
   contents: write
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
   build:
     name: Build (${{ matrix.target }})
@@ -18,54 +15,58 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: aarch64-apple-darwin
+          - target: darwin-aarch64
             os: macos-14
-            archive_os: darwin
-            archive_arch: aarch64
-          - target: x86_64-unknown-linux-gnu
+          - target: linux-x86_64
             os: ubuntu-latest
-            archive_os: linux
-            archive_arch: x86_64
-          - target: aarch64-unknown-linux-gnu
+          - target: linux-aarch64
             os: ubuntu-latest
-            archive_os: linux
-            archive_arch: aarch64
 
     steps:
       - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          submodules: recursive
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake ninja libarchive
 
-      - name: Install cross-compilation tools (aarch64-linux)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
-          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev libarchive-dev
 
-      - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }}
+      - name: Install cross-compilation tools (aarch64-linux)
+        if: matrix.target == 'linux-aarch64'
+        run: |
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          sudo dpkg --add-architecture arm64
+          sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list.d/*.list 2>/dev/null || true
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ $(lsb_release -cs) main restricted universe" | sudo tee /etc/apt/sources.list.d/arm64.list
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev:arm64 libarchive-dev:arm64
 
-      - name: Run tests
-        if: matrix.target != 'aarch64-unknown-linux-gnu'
-        run: cargo test --release --target ${{ matrix.target }}
+      - name: Configure
+        run: |
+          cmake_args="-B build -G Ninja -DCMAKE_BUILD_TYPE=Release"
+          if [ "${{ matrix.target }}" = "linux-aarch64" ]; then
+            cmake_args="$cmake_args -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64"
+          fi
+          cmake $cmake_args
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        if: matrix.target != 'linux-aarch64'
+        run: cd build && ctest --output-on-failure
 
       - name: Package binary
-        shell: bash
         run: |
           version="${GITHUB_REF_NAME#v}"
-          bin="den"
-          src="target/${{ matrix.target }}/release/${bin}"
-
-          archive="den-${version}-${{ matrix.archive_os }}-${{ matrix.archive_arch }}.tar.gz"
-          tar czf "${archive}" -C "target/${{ matrix.target }}/release" "${bin}"
+          archive="den-${version}-${{ matrix.target }}.tar.gz"
+          tar czf "${archive}" -C build den
           shasum -a 256 "${archive}" > "${archive}.sha256"
 
       - name: Upload to release
@@ -73,7 +74,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${GITHUB_REF_NAME#v}"
-          archive="den-${version}-${{ matrix.archive_os }}-${{ matrix.archive_arch }}.tar.gz"
+          archive="den-${version}-${{ matrix.target }}.tar.gz"
           gh release upload "$GITHUB_REF_NAME" "${archive}" "${archive}.sha256" --clobber
 
   checksums:
@@ -89,12 +90,8 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           checksums="den-${version}-checksums.txt"
-
-          # Download individual .sha256 files from the release.
           for asset in $(gh release view "$GITHUB_REF_NAME" --json assets -q '.assets[].name' | grep '\.sha256$'); do
             gh release download "$GITHUB_REF_NAME" -p "$asset" -D /tmp/checksums
           done
-
-          # Consolidate into one file.
           cat /tmp/checksums/*.sha256 > "${checksums}"
           gh release upload "$GITHUB_REF_NAME" "${checksums}" --clobber
