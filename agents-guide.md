@@ -6,9 +6,10 @@ binary.
 
 ## Key concepts
 
-- **Cellar**: Storage for all installed package versions (shared
-  with Homebrew at `/opt/homebrew/Cellar`).
-- **Environment**: A named set of symlinks into the Cellar.
+- **Store**: Package storage at `~/.den/store/<name>/<version>/`.
+  Each version is a self-contained directory. Independent of
+  Homebrew's Cellar.
+- **Environment**: A named set of symlinks into the store.
   Environments use path-based naming (`/` is root, `/ml`,
   `/work/legacy`) with manifest-level inheritance.
 - **Manifest**: JSON file declaring which packages an environment
@@ -16,50 +17,65 @@ binary.
   specific versions.
 - **Materialisation**: Resolving a manifest hierarchy into a flat
   symlink directory.
+- **Unified package model**: No formula/cask distinction. All
+  packages are installed with `den install <name>`.
 
 ## Common operations
 
 ```bash
-den install <formula>        # install with dependency resolution
-den install --cask <app>     # install GUI application
-den uninstall <formula>      # remove from active environment
-den use <pkg>=<version>      # switch active version
+den install <name>           # install with dependency resolution
+den uninstall <name>         # remove from active environment
+den use <pkg> <version>      # switch active version
 den upgrade                  # upgrade all outdated packages
 den env create <path>        # create child environment
 den env use <path>           # switch environment
 den env show [path]          # show resolved packages
-den search <text>            # search 8000+ formulae
-den info <formula>           # package details
-den deps <formula> --tree    # dependency tree
+den env freeze               # export environment as JSON lockfile
+den search <text>            # search 15,000+ packages
+den info <name>              # package details
+den deps <name> --tree       # dependency tree
 den list                     # list installed packages
 den outdated                 # list packages with available upgrades
-den update                   # fetch latest formula index
-den cleanup [formula...]     # remove old versions and cache files
+den update                   # fetch latest package index
+den cleanup                  # remove old versions and cache files
 den autoremove               # remove unneeded dependencies
-den migrate                  # import from Homebrew
+den migrate                  # scan Homebrew Cellar for migration
 den daemon status            # background maintenance status
 den config                   # show den configuration
 den set <key> <value>        # configure settings
 den settings                 # show all settings
+den doctor                   # system health checks
+den smoke                    # run smoke tests
 ```
 
 ## Environment variables
 
 - `DEN_HOME`: den's home directory (default: `~/.den`)
 - `DEN_ENV`: currently active environment path
-- `HOMEBREW_PREFIX`: Homebrew installation prefix
-- `HOMEBREW_CELLAR`: Cellar location
 
 ## File layout
 
 ```
 ~/.den/
 ├── bin/den              # binary
+├── store/               # installed packages
+│   └── <name>/<ver>/    # each version self-contained
 ├── config.json          # settings
 ├── manifests/           # environment manifests
 ├── envs/                # materialised environments
-├── cache/bottles/       # content-addressed bottle cache
+├── cache/archives/      # content-addressed archive cache
 ├── daemon.pid           # daemon process ID
 ├── daemon.log           # daemon log
 └── daemon_state.json    # pending upgrades
 ```
+
+## Build
+
+```bash
+cmake -B build -G Ninja
+cmake --build build
+cd build && ctest --output-on-failure
+```
+
+Requires: cmake, ninja, libcurl, libarchive.
+Optional: Portable Ruby (for formula evaluation / source builds).
