@@ -1,0 +1,262 @@
+{
+  "_comment": "Tier 1 smoke tests for the top 50 most-installed Homebrew packages. Each test runs in an isolated DEN_HOME. No system-level side effects.",
+  "tests": [
+    {
+      "name": "openssl@3",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/openssl version", "expect_exit": 0},
+        {"cmd": "bin/openssl s_client -help", "expect_exit": 0},
+        {"file_exists": "lib/libssl.dylib"},
+        {"file_exists": "lib/libcrypto.dylib"},
+        {"file_exists": "include/openssl/ssl.h"}
+      ]
+    },
+    {
+      "name": "ca-certificates",
+      "type": "data",
+      "checks": [
+        {"file_exists": "share/ca-certificates/cacert.pem"}
+      ]
+    },
+    {
+      "name": "sqlite",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/sqlite3 :memory: 'SELECT 1+1;'", "expect_stdout": "2"},
+        {"file_exists": "lib/libsqlite3.dylib"},
+        {"file_exists": "include/sqlite3.h"}
+      ]
+    },
+    {
+      "name": "node",
+      "type": "runtime",
+      "checks": [
+        {"cmd": "bin/node --version", "expect_exit": 0},
+        {"cmd": "bin/node -e \"console.log(1+1)\"", "expect_stdout": "2"},
+        {"cmd": "bin/npm --version", "expect_exit": 0},
+        {"cmd_in_tmpdir": "bin/npm init -y && bin/npm install is-odd && bin/node -e \"console.log(require('is-odd')(3))\"", "expect_stdout": "true"}
+      ]
+    },
+    {
+      "name": "python@3.13",
+      "type": "runtime",
+      "checks": [
+        {"cmd": "bin/python3.13 --version", "expect_exit": 0},
+        {"cmd": "bin/python3.13 -c \"print(2+2)\"", "expect_stdout": "4"},
+        {"cmd": "bin/python3.13 -c \"import ssl; print(ssl.OPENSSL_VERSION)\"", "expect_exit": 0},
+        {"cmd": "bin/python3.13 -c \"import sqlite3; c=sqlite3.connect(':memory:'); print('ok')\"", "expect_stdout": "ok"},
+        {"cmd_in_tmpdir": "bin/python3.13 -m venv venv && venv/bin/pip install requests && venv/bin/python -c \"import requests; print(requests.__version__)\"", "expect_exit": 0}
+      ]
+    },
+    {
+      "name": "git",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/git --version", "expect_exit": 0},
+        {"cmd_in_tmpdir": "bin/git init . && bin/git status", "expect_exit": 0}
+      ]
+    },
+    {
+      "name": "go",
+      "type": "runtime",
+      "checks": [
+        {"cmd": "bin/go version", "expect_exit": 0},
+        {"cmd_in_tmpdir": "echo 'package main; import \"fmt\"; func main() { fmt.Println(\"ok\") }' > main.go && bin/go run main.go", "expect_stdout": "ok"}
+      ]
+    },
+    {
+      "name": "cmake",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/cmake --version", "expect_exit": 0},
+        {"cmd": "bin/cmake --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "name": "ffmpeg",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/ffmpeg -version", "expect_exit": 0},
+        {"cmd": "bin/ffprobe -version", "expect_exit": 0},
+        {"file_exists": "lib/libavcodec.dylib"},
+        {"file_exists": "include/libavcodec/avcodec.h"}
+      ]
+    },
+    {
+      "name": "gh",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/gh version", "expect_exit": 0},
+        {"cmd": "bin/gh --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "name": "awscli",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/aws --version", "expect_exit": 0},
+        {"cmd": "bin/aws help", "expect_exit": 0}
+      ]
+    },
+    {
+      "name": "readline",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libreadline.dylib"},
+        {"file_exists": "include/readline/readline.h"}
+      ]
+    },
+    {
+      "name": "glib",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libglib-2.0.dylib"},
+        {"file_exists": "include/glib-2.0/glib.h"}
+      ]
+    },
+    {
+      "name": "pcre2",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/pcre2test --version", "expect_exit": 0},
+        {"file_exists": "lib/libpcre2-8.dylib"},
+        {"file_exists": "include/pcre2.h"}
+      ]
+    },
+    {
+      "name": "uv",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/uv --version", "expect_exit": 0},
+        {"cmd_in_tmpdir": "bin/uv init . && bin/uv add requests && bin/uv run python -c \"import requests; print('ok')\"", "expect_stdout": "ok"}
+      ]
+    },
+    {
+      "name": "pyenv",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/pyenv --version", "expect_exit": 0},
+        {"cmd": "bin/pyenv versions", "expect_exit": 0}
+      ]
+    },
+    {
+      "name": "gcc",
+      "type": "tool",
+      "checks": [
+        {"cmd_in_tmpdir": "echo '#include <stdio.h>\\nint main() { printf(\"ok\\n\"); return 0; }' > t.c && gcc-* t.c -o t && ./t", "expect_stdout": "ok"}
+      ]
+    },
+    {
+      "name": "freetype",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libfreetype.dylib"},
+        {"file_exists": "include/freetype2/ft2build.h"}
+      ]
+    },
+    {
+      "name": "libpng",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libpng.dylib"},
+        {"file_exists": "include/png.h"}
+      ]
+    },
+    {
+      "name": "ncurses",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libncurses.dylib"},
+        {"file_exists": "include/ncurses.h"}
+      ]
+    },
+    {
+      "name": "zstd",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/zstd --version", "expect_exit": 0},
+        {"file_exists": "lib/libzstd.dylib"}
+      ]
+    },
+    {
+      "name": "xz",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/xz --version", "expect_exit": 0},
+        {"file_exists": "lib/liblzma.dylib"}
+      ]
+    },
+    {
+      "name": "gettext",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/gettext --version", "expect_exit": 0},
+        {"file_exists": "lib/libintl.dylib"}
+      ]
+    },
+    {
+      "name": "cairo",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libcairo.dylib"},
+        {"file_exists": "include/cairo/cairo.h"}
+      ]
+    },
+    {
+      "name": "pango",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libpango-1.0.dylib"}
+      ]
+    },
+    {
+      "name": "harfbuzz",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libharfbuzz.dylib"},
+        {"file_exists": "include/harfbuzz/hb.h"}
+      ]
+    },
+    {
+      "name": "gnutls",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libgnutls.dylib"},
+        {"cmd": "bin/gnutls-cli --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "name": "fontconfig",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/fc-list --version", "expect_exit": 0},
+        {"file_exists": "lib/libfontconfig.dylib"}
+      ]
+    },
+    {
+      "name": "gmp",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libgmp.dylib"},
+        {"file_exists": "include/gmp.h"}
+      ]
+    },
+    {
+      "name": "lz4",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/lz4 --version", "expect_exit": 0},
+        {"file_exists": "lib/liblz4.dylib"}
+      ]
+    },
+    {
+      "name": "brotli",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libbrotlidec.dylib"},
+        {"file_exists": "lib/libbrotlienc.dylib"}
+      ]
+    }
+  ]
+}

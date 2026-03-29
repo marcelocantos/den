@@ -14,6 +14,7 @@
 
 #include <cerrno>
 #include <cstring>
+#include <type_traits>
 
 namespace den {
 
@@ -64,9 +65,14 @@ auto with_manifest(const fs::path& den_home, const std::string& env_path, F&& fn
     detail::FileLock lock(lock_path);
 
     auto manifest = read_manifest(den_home, env_path);
-    auto result = fn(manifest);
-    write_manifest(den_home, env_path, manifest);
-    return result;
+    if constexpr (std::is_void_v<decltype(fn(manifest))>) {
+        fn(manifest);
+        write_manifest(den_home, env_path, manifest);
+    } else {
+        auto result = fn(manifest);
+        write_manifest(den_home, env_path, manifest);
+        return result;
+    }
 }
 
 } // namespace den

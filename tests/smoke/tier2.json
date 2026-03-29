@@ -1,0 +1,1521 @@
+{
+  "_comment": "Tier 2 smoke tests — top 51-500 packages by install count (top 200 of that range). Skips packages already covered in tier1.json. For tools: checks binary --version or --help exits 0. For libraries: checks lib/include files exist.",
+  "tests": [
+    {
+      "rank": 51,
+      "name": "xorgproto",
+      "type": "headers",
+      "checks": [
+        {"file_exists": "include/X11/X.h"},
+        {"file_exists": "include/X11/Xproto.h"}
+      ]
+    },
+    {
+      "rank": 52,
+      "name": "libuv",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libuv.dylib"},
+        {"file_exists": "include/uv.h"}
+      ]
+    },
+    {
+      "rank": 53,
+      "name": "webp",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/cwebp -version", "expect_exit": 0},
+        {"cmd": "bin/dwebp -version", "expect_exit": 0},
+        {"file_exists": "lib/libwebp.dylib"},
+        {"file_exists": "include/webp/encode.h"}
+      ]
+    },
+    {
+      "rank": 54,
+      "name": "m4",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/m4 --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 55,
+      "name": "coreutils",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/gls --version", "expect_exit": 0},
+        {"cmd": "bin/gcat --version", "expect_exit": 0},
+        {"cmd": "bin/gdate --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 56,
+      "name": "aom",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/aomdec --help", "expect_exit": 0},
+        {"cmd": "bin/aomenc --help", "expect_exit": 0},
+        {"file_exists": "lib/libaom.dylib"},
+        {"file_exists": "include/aom/aom.h"}
+      ]
+    },
+    {
+      "rank": 57,
+      "name": "python@3.12",
+      "type": "runtime",
+      "checks": [
+        {"cmd": "bin/python3.12 --version", "expect_exit": 0},
+        {"cmd": "bin/python3.12 -c \"print(2+2)\"", "expect_stdout": "4"}
+      ]
+    },
+    {
+      "rank": 58,
+      "name": "zlib",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libz.dylib"},
+        {"file_exists": "include/zlib.h"}
+      ]
+    },
+    {
+      "rank": 59,
+      "name": "libxext",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libXext.dylib"},
+        {"file_exists": "include/X11/extensions/Xext.h"}
+      ]
+    },
+    {
+      "rank": 60,
+      "name": "curl",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/curl --version", "expect_exit": 0},
+        {"file_exists": "lib/libcurl.dylib"},
+        {"file_exists": "include/curl/curl.h"}
+      ]
+    },
+    {
+      "rank": 61,
+      "name": "libxcb",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libxcb.dylib"},
+        {"file_exists": "include/xcb/xcb.h"}
+      ]
+    },
+    {
+      "rank": 62,
+      "name": "gnupg",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/gpg --version", "expect_exit": 0},
+        {"cmd": "bin/gpg2 --version", "expect_exit": 0},
+        {"cmd": "bin/gpgconf --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 63,
+      "name": "llvm",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/clang --version", "expect_exit": 0},
+        {"cmd": "bin/clang++ --version", "expect_exit": 0},
+        {"cmd": "bin/llvm-config --version", "expect_exit": 0},
+        {"file_exists": "lib/libLLVM.dylib"}
+      ]
+    },
+    {
+      "rank": 64,
+      "name": "krb5",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/kinit --help", "expect_exit": 0},
+        {"file_exists": "lib/libkrb5.dylib"},
+        {"file_exists": "include/krb5/krb5.h"}
+      ]
+    },
+    {
+      "rank": 65,
+      "name": "imagemagick",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/magick --version", "expect_exit": 0},
+        {"cmd": "bin/convert --version", "expect_exit": 0},
+        {"cmd": "bin/identify --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 66,
+      "name": "p11-kit",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/p11-kit --version", "expect_exit": 0},
+        {"file_exists": "lib/libp11-kit.dylib"},
+        {"file_exists": "include/p11-kit-1/p11-kit/p11-kit.h"}
+      ]
+    },
+    {
+      "rank": 67,
+      "name": "simdjson",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libsimdjson.dylib"},
+        {"file_exists": "include/simdjson.h"}
+      ]
+    },
+    {
+      "rank": 68,
+      "name": "libxau",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libXau.dylib"},
+        {"file_exists": "include/X11/Xauth.h"}
+      ]
+    },
+    {
+      "rank": 69,
+      "name": "libidn2",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/idn2 --version", "expect_exit": 0},
+        {"file_exists": "lib/libidn2.dylib"},
+        {"file_exists": "include/idn2.h"}
+      ]
+    },
+    {
+      "rank": 70,
+      "name": "tesseract",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/tesseract --version", "expect_exit": 0},
+        {"file_exists": "lib/libtesseract.dylib"},
+        {"file_exists": "include/tesseract/baseapi.h"}
+      ]
+    },
+    {
+      "rank": 71,
+      "name": "openjdk",
+      "type": "runtime",
+      "checks": [
+        {"cmd": "bin/java -version", "expect_exit": 0},
+        {"cmd": "bin/javac -version", "expect_exit": 0},
+        {"cmd": "bin/jar --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 72,
+      "name": "protobuf",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/protoc --version", "expect_exit": 0},
+        {"file_exists": "lib/libprotobuf.dylib"},
+        {"file_exists": "include/google/protobuf/descriptor.h"}
+      ]
+    },
+    {
+      "rank": 73,
+      "name": "libarchive",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/bsdtar --version", "expect_exit": 0},
+        {"file_exists": "lib/libarchive.dylib"},
+        {"file_exists": "include/archive.h"}
+      ]
+    },
+    {
+      "rank": 74,
+      "name": "bzip2",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/bzip2 --version", "expect_exit": 0},
+        {"file_exists": "lib/libbz2.dylib"},
+        {"file_exists": "include/bzlib.h"}
+      ]
+    },
+    {
+      "rank": 75,
+      "name": "giflib",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libgif.dylib"},
+        {"file_exists": "include/gif_lib.h"}
+      ]
+    },
+    {
+      "rank": 76,
+      "name": "libxrender",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libXrender.dylib"},
+        {"file_exists": "include/X11/extensions/Xrender.h"}
+      ]
+    },
+    {
+      "rank": 77,
+      "name": "mkcert",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/mkcert --version", "expect_exit": 0},
+        {"cmd": "bin/mkcert -help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 78,
+      "name": "certifi",
+      "type": "data",
+      "checks": [
+        {"file_exists": "lib/python3/site-packages/certifi/cacert.pem"}
+      ]
+    },
+    {
+      "rank": 79,
+      "name": "nettle",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libnettle.dylib"},
+        {"file_exists": "include/nettle/nettle-meta.h"}
+      ]
+    },
+    {
+      "rank": 80,
+      "name": "libxdmcp",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libXdmcp.dylib"},
+        {"file_exists": "include/X11/Xdmcp.h"}
+      ]
+    },
+    {
+      "rank": 81,
+      "name": "libdeflate",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libdeflate.dylib"},
+        {"file_exists": "include/libdeflate.h"}
+      ]
+    },
+    {
+      "rank": 82,
+      "name": "abseil",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libabsl_base.dylib"},
+        {"file_exists": "include/absl/base/config.h"}
+      ]
+    },
+    {
+      "rank": 83,
+      "name": "xcbeautify",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/xcbeautify --version", "expect_exit": 0},
+        {"cmd": "bin/xcbeautify --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 84,
+      "name": "libffi",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libffi.dylib"},
+        {"file_exists": "include/ffi/ffi.h"}
+      ]
+    },
+    {
+      "rank": 85,
+      "name": "libtasn1",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/asn1Parser --version", "expect_exit": 0},
+        {"file_exists": "lib/libtasn1.dylib"},
+        {"file_exists": "include/libtasn1.h"}
+      ]
+    },
+    {
+      "rank": 86,
+      "name": "libevent",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libevent.dylib"},
+        {"file_exists": "include/event2/event.h"}
+      ]
+    },
+    {
+      "rank": 87,
+      "name": "python@3.11",
+      "type": "runtime",
+      "checks": [
+        {"cmd": "bin/python3.11 --version", "expect_exit": 0},
+        {"cmd": "bin/python3.11 -c \"print(2+2)\"", "expect_stdout": "4"}
+      ]
+    },
+    {
+      "rank": 88,
+      "name": "libgpg-error",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/gpg-error --version", "expect_exit": 0},
+        {"file_exists": "lib/libgpg-error.dylib"},
+        {"file_exists": "include/gpg-error.h"}
+      ]
+    },
+    {
+      "rank": 89,
+      "name": "docker",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/docker --version", "expect_exit": 0},
+        {"cmd": "bin/docker --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 91,
+      "name": "jq",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/jq --version", "expect_exit": 0},
+        {"cmd_with_stdin": "echo '{\"a\":1}' | bin/jq '.a'", "expect_stdout": "1"}
+      ]
+    },
+    {
+      "rank": 92,
+      "name": "ruby",
+      "type": "runtime",
+      "checks": [
+        {"cmd": "bin/ruby --version", "expect_exit": 0},
+        {"cmd": "bin/gem --version", "expect_exit": 0},
+        {"cmd": "bin/ruby -e \"puts 1+1\"", "expect_stdout": "2"}
+      ]
+    },
+    {
+      "rank": 93,
+      "name": "yt-dlp",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/yt-dlp --version", "expect_exit": 0},
+        {"cmd": "bin/yt-dlp --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 94,
+      "name": "graphite2",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libgraphite2.dylib"},
+        {"file_exists": "include/graphite2/Font.h"}
+      ]
+    },
+    {
+      "rank": 95,
+      "name": "dav1d",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/dav1d --version", "expect_exit": 0},
+        {"file_exists": "lib/libdav1d.dylib"},
+        {"file_exists": "include/dav1d/dav1d.h"}
+      ]
+    },
+    {
+      "rank": 96,
+      "name": "libomp",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libomp.dylib"},
+        {"file_exists": "include/omp.h"}
+      ]
+    },
+    {
+      "rank": 98,
+      "name": "sdl2",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/sdl2-config --version", "expect_exit": 0},
+        {"file_exists": "lib/libSDL2.dylib"},
+        {"file_exists": "include/SDL2/SDL.h"}
+      ]
+    },
+    {
+      "rank": 99,
+      "name": "imath",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libImath.dylib"},
+        {"file_exists": "include/Imath/ImathVec.h"}
+      ]
+    },
+    {
+      "rank": 100,
+      "name": "libtool",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/libtool --version", "expect_exit": 0},
+        {"cmd": "bin/libtoolize --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 101,
+      "name": "gemini-cli",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/gemini --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 102,
+      "name": "openjpeg",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libopenjp2.dylib"},
+        {"file_exists": "include/openjpeg-2.5/openjpeg.h"}
+      ]
+    },
+    {
+      "rank": 103,
+      "name": "oniguruma",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libonig.dylib"},
+        {"file_exists": "include/oniguruma.h"}
+      ]
+    },
+    {
+      "rank": 104,
+      "name": "lzo",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/liblzo2.dylib"},
+        {"file_exists": "include/lzo/lzo1.h"}
+      ]
+    },
+    {
+      "rank": 106,
+      "name": "mise",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/mise --version", "expect_exit": 0},
+        {"cmd": "bin/mise --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 107,
+      "name": "kubernetes-cli",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/kubectl version --client", "expect_exit": 0},
+        {"cmd": "bin/kubectl --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 108,
+      "name": "libedit",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libedit.dylib"},
+        {"file_exists": "include/editline/readline.h"}
+      ]
+    },
+    {
+      "rank": 109,
+      "name": "libssh2",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libssh2.dylib"},
+        {"file_exists": "include/libssh2.h"}
+      ]
+    },
+    {
+      "rank": 110,
+      "name": "highway",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libhwy.dylib"},
+        {"file_exists": "include/hwy/highway.h"}
+      ]
+    },
+    {
+      "rank": 111,
+      "name": "unzip",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/unzip --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 112,
+      "name": "libgcrypt",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/libgcrypt-config --version", "expect_exit": 0},
+        {"file_exists": "lib/libgcrypt.dylib"},
+        {"file_exists": "include/gcrypt.h"}
+      ]
+    },
+    {
+      "rank": 113,
+      "name": "librsvg",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/rsvg-convert --version", "expect_exit": 0},
+        {"file_exists": "lib/librsvg-2.dylib"}
+      ]
+    },
+    {
+      "rank": 114,
+      "name": "gdk-pixbuf",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/gdk-pixbuf-query-loaders --help", "expect_exit": 0},
+        {"file_exists": "lib/libgdk_pixbuf-2.0.dylib"}
+      ]
+    },
+    {
+      "rank": 116,
+      "name": "libxml2",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/xmllint --version", "expect_exit": 0},
+        {"file_exists": "lib/libxml2.dylib"},
+        {"file_exists": "include/libxml2/libxml/tree.h"}
+      ]
+    },
+    {
+      "rank": 117,
+      "name": "libpq",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/psql --version", "expect_exit": 0},
+        {"file_exists": "lib/libpq.dylib"},
+        {"file_exists": "include/libpq-fe.h"}
+      ]
+    },
+    {
+      "rank": 118,
+      "name": "z3",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/z3 --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 119,
+      "name": "dbus",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/dbus-uuidgen --help", "expect_exit": 0},
+        {"file_exists": "lib/libdbus-1.dylib"},
+        {"file_exists": "include/dbus-1.0/dbus/dbus.h"}
+      ]
+    },
+    {
+      "rank": 120,
+      "name": "yq",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/yq --version", "expect_exit": 0},
+        {"cmd": "bin/yq --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 121,
+      "name": "helm",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/helm version", "expect_exit": 0},
+        {"cmd": "bin/helm --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 124,
+      "name": "libsodium",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libsodium.dylib"},
+        {"file_exists": "include/sodium.h"}
+      ]
+    },
+    {
+      "rank": 125,
+      "name": "mpfr",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libmpfr.dylib"},
+        {"file_exists": "include/mpfr.h"}
+      ]
+    },
+    {
+      "rank": 126,
+      "name": "libusb",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libusb-1.0.dylib"},
+        {"file_exists": "include/libusb-1.0/libusb.h"}
+      ]
+    },
+    {
+      "rank": 127,
+      "name": "openldap",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/ldapsearch --help", "expect_exit": 0},
+        {"file_exists": "lib/libldap.dylib"},
+        {"file_exists": "include/ldap.h"}
+      ]
+    },
+    {
+      "rank": 128,
+      "name": "libvpx",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libvpx.dylib"},
+        {"file_exists": "include/vpx/vpx_codec.h"}
+      ]
+    },
+    {
+      "rank": 129,
+      "name": "fzf",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/fzf --version", "expect_exit": 0},
+        {"cmd": "bin/fzf --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 130,
+      "name": "neovim",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/nvim --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 131,
+      "name": "fribidi",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libfribidi.dylib"},
+        {"file_exists": "include/fribidi/fribidi.h"}
+      ]
+    },
+    {
+      "rank": 133,
+      "name": "libyaml",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libyaml.dylib"},
+        {"file_exists": "include/yaml.h"}
+      ]
+    },
+    {
+      "rank": 134,
+      "name": "ninja",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/ninja --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 135,
+      "name": "x265",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/x265 --version", "expect_exit": 0},
+        {"file_exists": "lib/libx265.dylib"},
+        {"file_exists": "include/x265.h"}
+      ]
+    },
+    {
+      "rank": 136,
+      "name": "poppler",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/pdfinfo -v", "expect_exit": 0},
+        {"cmd": "bin/pdftoppm -v", "expect_exit": 0},
+        {"file_exists": "lib/libpoppler.dylib"}
+      ]
+    },
+    {
+      "rank": 137,
+      "name": "graphviz",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/dot -V", "expect_exit": 0},
+        {"cmd": "bin/neato -V", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 138,
+      "name": "libheif",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/heif-info --version", "expect_exit": 0},
+        {"file_exists": "lib/libheif.dylib"},
+        {"file_exists": "include/libheif/heif.h"}
+      ]
+    },
+    {
+      "rank": 139,
+      "name": "boost",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libboost_system.dylib"},
+        {"file_exists": "include/boost/version.hpp"}
+      ]
+    },
+    {
+      "rank": 141,
+      "name": "nvm",
+      "type": "tool",
+      "checks": [
+        {"file_exists": "opt/nvm/nvm.sh"}
+      ]
+    },
+    {
+      "rank": 142,
+      "name": "libavif",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/avifenc --version", "expect_exit": 0},
+        {"file_exists": "lib/libavif.dylib"},
+        {"file_exists": "include/avif/avif.h"}
+      ]
+    },
+    {
+      "rank": 144,
+      "name": "gdbm",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/gdbm_dump --version", "expect_exit": 0},
+        {"file_exists": "lib/libgdbm.dylib"},
+        {"file_exists": "include/gdbm.h"}
+      ]
+    },
+    {
+      "rank": 146,
+      "name": "fmt",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libfmt.dylib"},
+        {"file_exists": "include/fmt/core.h"}
+      ]
+    },
+    {
+      "rank": 147,
+      "name": "wget",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/wget --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 148,
+      "name": "python@3.10",
+      "type": "runtime",
+      "checks": [
+        {"cmd": "bin/python3.10 --version", "expect_exit": 0},
+        {"cmd": "bin/python3.10 -c \"print(2+2)\"", "expect_stdout": "4"}
+      ]
+    },
+    {
+      "rank": 149,
+      "name": "opus",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libopus.dylib"},
+        {"file_exists": "include/opus/opus.h"}
+      ]
+    },
+    {
+      "rank": 150,
+      "name": "php",
+      "type": "runtime",
+      "checks": [
+        {"cmd": "bin/php --version", "expect_exit": 0},
+        {"cmd": "bin/php -r \"echo 1+1;\"", "expect_stdout": "2"}
+      ]
+    },
+    {
+      "rank": 152,
+      "name": "libxcrypt",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libcrypt.dylib"},
+        {"file_exists": "include/crypt.h"}
+      ]
+    },
+    {
+      "rank": 153,
+      "name": "mbedtls",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libmbedtls.dylib"},
+        {"file_exists": "include/mbedtls/ssl.h"}
+      ]
+    },
+    {
+      "rank": 156,
+      "name": "rust",
+      "type": "runtime",
+      "checks": [
+        {"cmd": "bin/rustc --version", "expect_exit": 0},
+        {"cmd": "bin/cargo --version", "expect_exit": 0},
+        {"cmd": "bin/rustup --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 158,
+      "name": "swiftlint",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/swiftlint --version", "expect_exit": 0},
+        {"cmd": "bin/swiftlint --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 159,
+      "name": "azure-cli",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/az --version", "expect_exit": 0},
+        {"cmd": "bin/az --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 160,
+      "name": "snappy",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libsnappy.dylib"},
+        {"file_exists": "include/snappy.h"}
+      ]
+    },
+    {
+      "rank": 161,
+      "name": "postgresql@14",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/psql --version", "expect_exit": 0},
+        {"cmd": "bin/pg_dump --version", "expect_exit": 0},
+        {"file_exists": "lib/libpq.dylib"}
+      ]
+    },
+    {
+      "rank": 163,
+      "name": "libssh",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libssh.dylib"},
+        {"file_exists": "include/libssh/libssh.h"}
+      ]
+    },
+    {
+      "rank": 164,
+      "name": "ollama",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/ollama --version", "expect_exit": 0},
+        {"cmd": "bin/ollama --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 165,
+      "name": "autoconf",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/autoconf --version", "expect_exit": 0},
+        {"cmd": "bin/autoheader --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 166,
+      "name": "pnpm",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/pnpm --version", "expect_exit": 0},
+        {"cmd": "bin/pnpm --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 168,
+      "name": "x264",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/x264 --version", "expect_exit": 0},
+        {"file_exists": "lib/libx264.dylib"}
+      ]
+    },
+    {
+      "rank": 173,
+      "name": "tmux",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/tmux -V", "expect_exit": 0},
+        {"cmd": "bin/tmux --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 174,
+      "name": "ripgrep",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/rg --version", "expect_exit": 0},
+        {"cmd": "bin/rg --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 175,
+      "name": "redis",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/redis-server --version", "expect_exit": 0},
+        {"cmd": "bin/redis-cli --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 177,
+      "name": "tree",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/tree --version", "expect_exit": 0},
+        {"cmd": "bin/tree --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 180,
+      "name": "pipx",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/pipx --version", "expect_exit": 0},
+        {"cmd": "bin/pipx --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 181,
+      "name": "pinentry",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/pinentry --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 182,
+      "name": "bash",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/bash --version", "expect_exit": 0},
+        {"cmd": "bin/bash -c \"echo ok\"", "expect_stdout": "ok"}
+      ]
+    },
+    {
+      "rank": 183,
+      "name": "libsndfile",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/sndfile-info --version", "expect_exit": 0},
+        {"file_exists": "lib/libsndfile.dylib"},
+        {"file_exists": "include/sndfile.h"}
+      ]
+    },
+    {
+      "rank": 185,
+      "name": "cocoapods",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/pod --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 186,
+      "name": "lame",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/lame --version", "expect_exit": 0},
+        {"file_exists": "lib/libmp3lame.dylib"},
+        {"file_exists": "include/lame/lame.h"}
+      ]
+    },
+    {
+      "rank": 187,
+      "name": "libgit2",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libgit2.dylib"},
+        {"file_exists": "include/git2.h"}
+      ]
+    },
+    {
+      "rank": 189,
+      "name": "mysql",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/mysql --version", "expect_exit": 0},
+        {"cmd": "bin/mysqldump --version", "expect_exit": 0},
+        {"file_exists": "lib/libmysqlclient.dylib"}
+      ]
+    },
+    {
+      "rank": 190,
+      "name": "git-lfs",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/git-lfs version", "expect_exit": 0},
+        {"cmd": "bin/git-lfs --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 192,
+      "name": "automake",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/automake --version", "expect_exit": 0},
+        {"cmd": "bin/aclocal --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 193,
+      "name": "flac",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/flac --version", "expect_exit": 0},
+        {"file_exists": "lib/libFLAC.dylib"},
+        {"file_exists": "include/FLAC/stream_encoder.h"}
+      ]
+    },
+    {
+      "rank": 194,
+      "name": "libogg",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libogg.dylib"},
+        {"file_exists": "include/ogg/ogg.h"}
+      ]
+    },
+    {
+      "rank": 195,
+      "name": "deno",
+      "type": "runtime",
+      "checks": [
+        {"cmd": "bin/deno --version", "expect_exit": 0},
+        {"cmd": "bin/deno eval \"console.log(1+1)\"", "expect_stdout": "2"}
+      ]
+    },
+    {
+      "rank": 197,
+      "name": "pandoc",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/pandoc --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 199,
+      "name": "ghostscript",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/gs --version", "expect_exit": 0},
+        {"cmd": "bin/ghostscript --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 201,
+      "name": "maven",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/mvn --version", "expect_exit": 0},
+        {"cmd": "bin/mvn --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 203,
+      "name": "rbenv",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/rbenv --version", "expect_exit": 0},
+        {"cmd": "bin/rbenv versions", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 204,
+      "name": "ccache",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/ccache --version", "expect_exit": 0},
+        {"cmd": "bin/ccache --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 208,
+      "name": "tree-sitter",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/tree-sitter --version", "expect_exit": 0},
+        {"file_exists": "lib/libtree-sitter.dylib"},
+        {"file_exists": "include/tree_sitter/api.h"}
+      ]
+    },
+    {
+      "rank": 211,
+      "name": "zeromq",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libzmq.dylib"},
+        {"file_exists": "include/zmq.h"}
+      ]
+    },
+    {
+      "rank": 212,
+      "name": "gnu-tar",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/gtar --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 213,
+      "name": "qemu",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/qemu-system-x86_64 --version", "expect_exit": 0},
+        {"cmd": "bin/qemu-img --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 214,
+      "name": "gpgme",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/gpgme-config --version", "expect_exit": 0},
+        {"file_exists": "lib/libgpgme.dylib"},
+        {"file_exists": "include/gpgme.h"}
+      ]
+    },
+    {
+      "rank": 219,
+      "name": "openblas",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libopenblas.dylib"},
+        {"file_exists": "include/cblas.h"}
+      ]
+    },
+    {
+      "rank": 223,
+      "name": "lua",
+      "type": "runtime",
+      "checks": [
+        {"cmd": "bin/lua -v", "expect_exit": 0},
+        {"cmd": "bin/lua -e \"print(1+1)\"", "expect_stdout": "2"}
+      ]
+    },
+    {
+      "rank": 226,
+      "name": "libzip",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/zipcmp -h", "expect_exit": 0},
+        {"file_exists": "lib/libzip.dylib"},
+        {"file_exists": "include/zip.h"}
+      ]
+    },
+    {
+      "rank": 227,
+      "name": "nmap",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/nmap --version", "expect_exit": 0},
+        {"cmd": "bin/nmap --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 232,
+      "name": "vim",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/vim --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 239,
+      "name": "ansible",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/ansible --version", "expect_exit": 0},
+        {"cmd": "bin/ansible-playbook --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 243,
+      "name": "fastfetch",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/fastfetch --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 245,
+      "name": "podman",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/podman --version", "expect_exit": 0},
+        {"cmd": "bin/podman --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 247,
+      "name": "lazygit",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/lazygit --version", "expect_exit": 0},
+        {"cmd": "bin/lazygit --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 249,
+      "name": "gradle",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/gradle --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 252,
+      "name": "k9s",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/k9s version", "expect_exit": 0},
+        {"cmd": "bin/k9s --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 253,
+      "name": "eza",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/eza --version", "expect_exit": 0},
+        {"cmd": "bin/eza --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 255,
+      "name": "gobject-introspection",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/g-ir-scanner --version", "expect_exit": 0},
+        {"file_exists": "lib/libgirepository-1.0.dylib"}
+      ]
+    },
+    {
+      "rank": 257,
+      "name": "rubberband",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/rubberband --version", "expect_exit": 0},
+        {"file_exists": "lib/librubberband.dylib"}
+      ]
+    },
+    {
+      "rank": 259,
+      "name": "xxhash",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/xxhsum --version", "expect_exit": 0},
+        {"file_exists": "lib/libxxhash.dylib"},
+        {"file_exists": "include/xxhash.h"}
+      ]
+    },
+    {
+      "rank": 261,
+      "name": "gd",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libgd.dylib"},
+        {"file_exists": "include/gd.h"}
+      ]
+    },
+    {
+      "rank": 267,
+      "name": "mongosh",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/mongosh --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 268,
+      "name": "glab",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/glab --version", "expect_exit": 0},
+        {"cmd": "bin/glab --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 269,
+      "name": "just",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/just --version", "expect_exit": 0},
+        {"cmd": "bin/just --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 271,
+      "name": "perl",
+      "type": "runtime",
+      "checks": [
+        {"cmd": "bin/perl --version", "expect_exit": 0},
+        {"cmd": "bin/perl -e \"print 1+1\"", "expect_stdout": "2"}
+      ]
+    },
+    {
+      "rank": 273,
+      "name": "at-spi2-core",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libatspi.dylib"},
+        {"file_exists": "include/at-spi-2.0/atspi/atspi.h"}
+      ]
+    },
+    {
+      "rank": 274,
+      "name": "meson",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/meson --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 275,
+      "name": "cloudflared",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/cloudflared --version", "expect_exit": 0},
+        {"cmd": "bin/cloudflared --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 278,
+      "name": "htop",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/htop --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 280,
+      "name": "bat",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/bat --version", "expect_exit": 0},
+        {"cmd": "bin/bat --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 282,
+      "name": "sops",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/sops --version", "expect_exit": 0},
+        {"cmd": "bin/sops --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 285,
+      "name": "composer",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/composer --version", "expect_exit": 0},
+        {"cmd": "bin/composer --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 288,
+      "name": "libiconv",
+      "type": "library",
+      "checks": [
+        {"file_exists": "lib/libiconv.dylib"},
+        {"file_exists": "include/iconv.h"}
+      ]
+    },
+    {
+      "rank": 289,
+      "name": "qt",
+      "type": "library",
+      "checks": [
+        {"cmd": "bin/qmake --version", "expect_exit": 0},
+        {"file_exists": "lib/QtCore.framework/QtCore"}
+      ]
+    },
+    {
+      "rank": 290,
+      "name": "hugo",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/hugo version", "expect_exit": 0},
+        {"cmd": "bin/hugo --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 291,
+      "name": "kustomize",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/kustomize version", "expect_exit": 0},
+        {"cmd": "bin/kustomize --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 292,
+      "name": "llama.cpp",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/llama-cli --version", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 294,
+      "name": "kubeconform",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/kubeconform -v", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 295,
+      "name": "shellcheck",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/shellcheck --version", "expect_exit": 0},
+        {"cmd": "bin/shellcheck --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 296,
+      "name": "colima",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/colima version", "expect_exit": 0},
+        {"cmd": "bin/colima --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 297,
+      "name": "argocd",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/argocd version --client", "expect_exit": 0},
+        {"cmd": "bin/argocd --help", "expect_exit": 0}
+      ]
+    },
+    {
+      "rank": 300,
+      "name": "fd",
+      "type": "tool",
+      "checks": [
+        {"cmd": "bin/fd --version", "expect_exit": 0},
+        {"cmd": "bin/fd --help", "expect_exit": 0}
+      ]
+    }
+  ]
+}

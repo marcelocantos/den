@@ -1,3 +1,4 @@
+<!-- last-evaluated: a0e9822 -->
 # Convergence Targets
 
 ## Achieved
@@ -128,7 +129,7 @@ else is supervised directly by den.
 ### 🎯T2 — Configuration and environment detection
 Xcode/CLT version detection, full Homebrew config parity.
 - **Weight**: 1.5 (value 3 / cost 2)
-- **Status**: partially achieved
+- **Status**: significant
 
 ### 🎯T4 — Cellar inspection improvements
 Show disk usage, which envs reference a keg, all-Cellar listing.
@@ -380,8 +381,7 @@ arbitrary Ruby as the installing user. In den, you can pour a
 bottle with zero trust in the build system — just verify the hash.
 
 - **Weight**: 2.5 (value 5 / cost 2)
-- **Status**: partially achieved (bottles already don't run code;
-needs enforcement and documentation as a guarantee)
+- **Status**: close (bottles already don't run code; needs enforcement and documentation as a guarantee)
 
 ---
 
@@ -681,9 +681,7 @@ GitHub Actions workflow for the den project:
   `known_hashes.json`.
 
 - **Weight**: 4.3 (value 13 / cost 3)
-- **Status**: partially achieved — push/PR CI is green on macOS + Linux
-(`f8f19fb`). Release tag workflow and scheduled hash verification
-remain.
+- **Status**: close — push/PR CI is green on macOS + Linux. Release tag workflow exists but untested (no tags).
 
 ### 🎯T44 — Advanced trust model
 
@@ -767,6 +765,51 @@ prerequisite for proper download progress reporting.
 - **Weight**: 1.7 (value 5 / cost 3)
 - **Parent**: 🎯T44
 - **Status**: not started
+
+### 🎯T45 — Shim-free build toolchain
+
+Den source builds use Apple's SDK and linker directly without going
+through the `xcrun` shim layer. This eliminates the "Xcode CLT needs
+updating" nag and reduces fragile indirection, while still using
+Apple's proprietary tools where they're genuinely required.
+
+**What Apple provides that has no replacement:**
+- `ld` (Mach-O linker) — LLVM's `lld` doesn't fully support macOS
+- SDK headers and `.tbd` stubs — proprietary, framework headers
+- `codesign`, `install_name_tool` — Apple-specific binary tools
+
+**What den can replace or bypass:**
+- `clang` — use Homebrew LLVM or den-managed LLVM instead of Xcode's
+- `xcrun` — resolve tool paths and SDK location directly rather than
+  through Apple's shim, which does version checks and nags
+- `ar`, `ranlib` — LLVM equivalents (`llvm-ar`) work fine
+
+**Approach (conservative):**
+1. Detect SDK path at den init time (`/Applications/Xcode.app/.../SDKs/MacOSX.sdk`)
+2. Set `-isysroot`, `-L`, and `-F` paths explicitly in build environment
+3. Invoke `/usr/bin/ld` directly (not through xcrun)
+4. Use den-managed clang for compilation (falls back to system clang)
+5. Skip version compatibility checks — if it builds and links, it works
+
+**Approach (aggressive, deferred):**
+- Bundle LLVM/Clang as a den-managed package (like Nix does)
+- Full toolchain isolation — reproducible builds regardless of system state
+- Only Apple's `ld` and SDK remain as external dependencies
+
+**Risk:** Subtle, difficult-to-diagnose bugs from using a different
+linker or missing SDK-specific behaviour. The conservative approach
+mitigates this by keeping Apple's linker and SDK while only replacing
+the shim layer. The aggressive approach should wait until den has
+extensive smoke test coverage to catch regressions.
+
+**Decision:** Start with Homebrew's approach (use xcrun, accept the
+nag) during initial source-build development. Switch to the
+conservative shim-free approach once source builds are stable and
+well-tested. Defer the aggressive approach until there's evidence
+the conservative one is insufficient.
+
+- **Weight**: 0.4 (value 3 / cost 8)
+- **Status**: not started — deferred until source builds are stable
 
 ### 🎯T18 — Testing oracle
 Automated Homebrew-equivalence testing.
