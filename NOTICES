@@ -27,8 +27,25 @@ libcurl - MIT/X-style
 libarchive - BSD-2-Clause
   https://github.com/libarchive/libarchive
 
+Bundled (embedded in binary, unpacked on first source build):
+
+Homebrew Library - BSD-2-Clause
+  Copyright (c) 2009-present, Homebrew contributors
+  https://github.com/Homebrew/brew
+  Formula evaluation library (Library/Homebrew/) bundled as compressed
+  data. Used to evaluate Homebrew formula install methods for source
+  builds with den's prefix.
+
+Portable Ruby stdlib - BSD-2-Clause (Ruby licence)
+  https://github.com/Homebrew/homebrew-portable-ruby
+  Ruby standard library bundled alongside the Homebrew library.
+
+Sorbet Runtime - Apache-2.0
+  https://github.com/sorbet/sorbet
+  Type annotation runtime required by Homebrew's library.
+
 Optional (macOS only, statically linked):
 
-Portable Ruby 4.0 - BSD-2-Clause (Ruby licence)
+Portable Ruby 4.0 (libruby) - BSD-2-Clause (Ruby licence)
   https://github.com/Homebrew/homebrew-portable-ruby
-  Used for formula evaluation via embedded Ruby VM.
+  Static library linked into den for the embedded Ruby VM.
