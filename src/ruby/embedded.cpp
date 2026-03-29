@@ -241,6 +241,155 @@ void RubyRuntime::init() {
     SPDLOG_INFO("Ruby VM initialized");
 }
 
+void RubyRuntime::init_with_bundle(const fs::path& bundle_dir) {
+    std::lock_guard lock(m->mutex);
+    if (m->initialized)
+        return;
+
+    SPDLOG_INFO("initializing Ruby VM with bundle at {}", bundle_dir.string());
+
+    RUBY_INIT_STACK;
+    ruby_init();
+
+    // Set up load paths: Ruby stdlib, Homebrew library, Sorbet runtime.
+    auto ruby_lib = bundle_dir / "ruby" / "lib" / "4.0.0";
+    auto homebrew_lib = bundle_dir / "homebrew";
+    auto sorbet_lib = bundle_dir / "gems" / "sorbet-runtime";
+
+    // Add to $LOAD_PATH.
+    VALUE load_path = rb_gv_get("$LOAD_PATH");
+    rb_ary_unshift(load_path, rb_str_new_cstr(homebrew_lib.c_str()));
+    rb_ary_unshift(load_path, rb_str_new_cstr(sorbet_lib.c_str()));
+    rb_ary_unshift(load_path, rb_str_new_cstr(ruby_lib.c_str()));
+
+    // Also add the platform-specific stdlib dir.
+    for (const auto& entry : fs::directory_iterator(ruby_lib)) {
+        if (entry.is_directory() && entry.path().filename().string().find("darwin") != std::string::npos) {
+            rb_ary_push(load_path, rb_str_new_cstr(entry.path().c_str()));
+            break;
+        }
+    }
+
+    // Set HOMEBREW env vars that the library expects.
+    auto homebrew_prefix = std::string("/opt/homebrew"); // nominal, not actually used
+    rb_eval_string_protect(
+        ("ENV['HOMEBREW_PREFIX'] ||= '" + homebrew_prefix + "'\n"
+         "ENV['HOMEBREW_CELLAR'] ||= '" + homebrew_prefix + "/Cellar'\n"
+         "ENV['HOMEBREW_REPOSITORY'] ||= '" + homebrew_prefix + "'\n"
+         "ENV['HOMEBREW_NO_ANALYTICS'] = '1'\n"
+         "ENV['HOMEBREW_NO_AUTO_UPDATE'] = '1'\n"
+         "ENV['HOMEBREW_REQUIRED_RUBY_VERSION'] ||= '4.0'\n"
+         "ENV['HOMEBREW_BUNDLER_VERSION'] ||= '2.6.2'\n"
+         "ENV['HOMEBREW_OS_VERSION'] ||= '26.0'\n")
+            .c_str(),
+        nullptr);
+
+    // Load Homebrew's startup sequence, then the formula infrastructure.
+    int state = 0;
+    rb_eval_string_protect(
+        "require 'standalone/sorbet'\n"
+        "require 'extend/blank'\n"
+        "require 'os'\n"
+        "require 'formula'\n"
+        "require 'formulary'\n",
+        &state);
+    if (state) {
+        VALUE err = rb_errinfo();
+        VALUE msg = rb_funcall(err, rb_intern("message"), 0);
+        SPDLOG_ERROR("failed to load Homebrew library: {}", StringValueCStr(msg));
+        VALUE bt = rb_funcall(err, rb_intern("backtrace"), 0);
+        if (!NIL_P(bt)) {
+            VALUE bt_str = rb_funcall(bt, rb_intern("first"), 1, INT2FIX(5));
+            VALUE joined = rb_funcall(bt_str, rb_intern("join"), 1, rb_str_new_cstr("\n"));
+            SPDLOG_ERROR("  backtrace:\n{}", StringValueCStr(joined));
+        }
+        rb_set_errinfo(Qnil);
+        // Don't return — partial initialization may still be useful.
+        // The build_formula call will fail gracefully.
+    }
+
+    m->initialized = true;
+    SPDLOG_INFO("Ruby VM initialized with Homebrew library");
+}
+
+bool RubyRuntime::build_formula(const std::string& formula_source, const std::string& name,
+                                const std::string& version, const fs::path& prefix,
+                                const fs::path& src_dir, const fs::path& store) {
+    std::lock_guard lock(m->mutex);
+    if (!m->initialized)
+        return false;
+
+    SPDLOG_INFO("building {} {} via embedded Ruby", name, version);
+
+    // Build the Ruby script that will:
+    // 1. Eval the formula source
+    // 2. Allocate an instance with den's prefix
+    // 3. Run the install method
+    std::string script =
+        "begin\n"
+        // Eval the formula to define the class.
+        "  eval($den_formula_source, TOPLEVEL_BINDING, 'formula.rb')\n"
+        "  klass = ObjectSpace.each_object(Class).select { |c| c < Formula }.last\n"
+        "  raise 'no Formula subclass found' unless klass\n"
+        "\n"
+        "  f = klass.allocate\n"
+        "  f.instance_variable_set(:@name, $den_name)\n"
+        "  dest = Pathname.new($den_prefix)\n"
+        "  f.define_singleton_method(:prefix) { dest }\n"
+        "  f.define_singleton_method(:opt_prefix) { dest }\n"
+        "  f.define_singleton_method(:cellar) { dest }\n"
+        "  f.define_singleton_method(:bin) { dest / 'bin' }\n"
+        "  f.define_singleton_method(:sbin) { dest / 'sbin' }\n"
+        "  f.define_singleton_method(:lib) { dest / 'lib' }\n"
+        "  f.define_singleton_method(:include) { dest / 'include' }\n"
+        "  f.define_singleton_method(:share) { dest / 'share' }\n"
+        "  f.define_singleton_method(:man) { dest / 'share' / 'man' }\n"
+        "  f.define_singleton_method(:man1) { dest / 'share' / 'man' / 'man1' }\n"
+        "  f.define_singleton_method(:libexec) { dest / 'libexec' }\n"
+        "  f.define_singleton_method(:pkgshare) { dest / 'share' / $den_name }\n"
+        "  f.define_singleton_method(:etc) { dest / 'etc' }\n"
+        "  f.define_singleton_method(:var) { dest / 'var' }\n"
+        "  f.define_singleton_method(:name) { $den_name }\n"
+        "  f.define_singleton_method(:rpath) { |**opts| '@loader_path/../lib' }\n"
+        "  f.define_singleton_method(:buildpath) { Pathname.new($den_src_dir) }\n"
+        "  f.instance_variable_set(:@buildpath, Pathname.new($den_src_dir))\n"
+        "\n"
+        "  Dir.chdir($den_src_dir) { f.install }\n"
+        "  $den_result = 'ok'\n"
+        "rescue => e\n"
+        "  $den_result = \"error: #{e.message}\"\n"
+        "  $stderr.puts e.backtrace&.first(5)&.join(\"\\n\")\n"
+        "end\n";
+
+    // Set global variables for the script.
+    rb_gv_set("$den_formula_source", rb_str_new_cstr(formula_source.c_str()));
+    rb_gv_set("$den_name", rb_str_new_cstr(name.c_str()));
+    rb_gv_set("$den_prefix", rb_str_new_cstr(prefix.c_str()));
+    rb_gv_set("$den_src_dir", rb_str_new_cstr(src_dir.c_str()));
+    rb_gv_set("$den_result", rb_str_new_cstr("pending"));
+
+    int state = 0;
+    rb_eval_string_protect(script.c_str(), &state);
+    if (state) {
+        VALUE err = rb_errinfo();
+        VALUE msg = rb_funcall(err, rb_intern("message"), 0);
+        SPDLOG_ERROR("Ruby build error: {}", StringValueCStr(msg));
+        rb_set_errinfo(Qnil);
+        return false;
+    }
+
+    VALUE result = rb_gv_get("$den_result");
+    std::string result_str(RSTRING_PTR(result), RSTRING_LEN(result));
+
+    if (result_str == "ok") {
+        SPDLOG_INFO("Ruby build succeeded for {} {}", name, version);
+        return true;
+    }
+
+    SPDLOG_ERROR("Ruby build failed: {}", result_str);
+    return false;
+}
+
 void RubyRuntime::shutdown() {
     std::lock_guard lock(m->mutex);
     if (!m->initialized) return;

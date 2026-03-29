@@ -8,6 +8,10 @@
 #include "../download/archive.h"
 #include "../download/http.h"
 #include "../download/sha256.h"
+#ifdef DEN_HAVE_RUBY
+#include "../ruby/bundle.h"
+#include "../ruby/embedded.h"
+#endif
 #include "../store/store.h"
 
 #include <spdlog/spdlog.h>
@@ -117,10 +121,68 @@ fs::path build_from_source(const Config& config, const std::string& name,
 
     std::cout << "==> Building " << name << " " << version << " from source\n";
 
-    // Try the Ruby-based build first (uses Homebrew's full formula infrastructure).
-    // This handles complex formulas that the text parser can't.
+#ifdef DEN_HAVE_RUBY
+    // Path A: Embedded Ruby VM with unpacked bundle (no Homebrew needed).
     {
-        // Write the formula source to a temp file.
+        auto cat_result = run("brew cat " + name + " 2>/dev/null");
+        if (cat_result.first == 0 && !cat_result.second.empty()) {
+            auto ruby_dir = ensure_ruby_bundle(config.den_home);
+
+            // Need to download and extract source first.
+            auto recipe = extract_build_recipe(name);
+            if (!recipe.source_url.empty()) {
+                auto cache_dir = config.cache / "sources";
+                fs::create_directories(cache_dir);
+                auto tarball_path = cache_dir / (name + "-" + version + ".tar.gz");
+
+                if (!fs::exists(tarball_path)) {
+                    std::cout << "==> Downloading source\n";
+                    auto data = fetch_url(recipe.source_url);
+                    auto tmp = tarball_path.string() + ".tmp";
+                    {
+                        std::ofstream f(tmp, std::ios::binary);
+                        f.write(data.c_str(), static_cast<std::streamsize>(data.size()));
+                    }
+                    fs::rename(tmp, tarball_path);
+                }
+
+                auto build_dir = config.cache / "build" / (name + "-" + version);
+                std::error_code ec;
+                fs::remove_all(build_dir, ec);
+                fs::create_directories(build_dir);
+
+                std::cout << "==> Extracting source\n";
+                auto extracted = extract_archive(tarball_path, build_dir);
+                auto src_dir = build_dir;
+                if (!extracted.root.empty())
+                    src_dir = build_dir / extracted.root;
+
+                fs::create_directories(dest);
+
+                // Initialize the Ruby VM with the bundle.
+                static RubyRuntime ruby;
+                if (!ruby.is_initialized()) {
+                    ruby.init_with_bundle(ruby_dir);
+                }
+
+                if (ruby.is_initialized()) {
+                    std::cout << "==> Building via embedded Ruby\n";
+                    if (ruby.build_formula(cat_result.second, name, version, dest, src_dir,
+                                           config.store)) {
+                        fs::remove_all(build_dir, ec);
+                        std::cout << "==> Built " << name << " " << version << "\n";
+                        return dest;
+                    }
+                    SPDLOG_WARN("embedded Ruby build failed, falling back");
+                    fs::remove_all(dest, ec);
+                }
+            }
+        }
+    }
+#endif
+
+    // Path B: brew ruby subprocess (needs Homebrew installed).
+    {
         auto cat_result = run("brew cat " + name + " 2>/dev/null");
         if (cat_result.first == 0 && !cat_result.second.empty()) {
             auto formula_file = config.cache / "formulas" / (name + ".rb");

@@ -55,6 +55,18 @@ class RubyRuntime {
     /// Initialize the Ruby VM and install the virtual FS layer.
     void init();
 
+    /// Initialize the Ruby VM with load paths from the unpacked bundle,
+    /// then load Homebrew's startup sequence. This gives full formula
+    /// evaluation capability without Homebrew installed.
+    void init_with_bundle(const fs::path& ruby_bundle_dir);
+
+    /// Build a package from source using the embedded Ruby VM.
+    /// Evaluates the formula's install method with den's prefix.
+    /// Returns true on success.
+    bool build_formula(const std::string& formula_source, const std::string& name,
+                       const std::string& version, const fs::path& prefix,
+                       const fs::path& src_dir, const fs::path& store);
+
     /// Shut down the Ruby VM.
     void shutdown();
 
