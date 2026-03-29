@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "cli.h"
+#include "install.h"
 #include "shell.h"
 
 #include "../core/config.h"
@@ -99,17 +100,36 @@ void Cli::M::setup() {
     install->add_option("names", install_names, "Package names to install")->required();
     install->add_flag("-s,--build-from-source", build_from_source,
                       "Build from source instead of pouring a bottle");
-    install->callback([this] { stub("install"); });
+    install->callback([this] {
+        auto cfg = Config::detect();
+        auto idx = load_index(cfg.cache / "index.json");
+        if (idx.packages.empty()) {
+            SPDLOG_ERROR("package index is empty — run `den update` first");
+            return;
+        }
+        install_packages(cfg, idx, install_names);
+    });
 
     // --- uninstall ---
     auto* uninstall = app.add_subcommand("uninstall", "Uninstall packages");
     uninstall->add_option("names", uninstall_names, "Package names to uninstall")->required();
-    uninstall->callback([this] { stub("uninstall"); });
+    uninstall->callback([this] {
+        auto cfg = Config::detect();
+        uninstall_packages(cfg, uninstall_names);
+    });
 
     // --- upgrade ---
     auto* upgrade = app.add_subcommand("upgrade", "Upgrade installed packages");
     upgrade->add_option("names", upgrade_names, "Package names to upgrade (all if empty)");
-    upgrade->callback([this] { stub("upgrade"); });
+    upgrade->callback([this] {
+        auto cfg = Config::detect();
+        auto idx = load_index(cfg.cache / "index.json");
+        if (idx.packages.empty()) {
+            SPDLOG_ERROR("package index is empty — run `den update` first");
+            return;
+        }
+        upgrade_packages(cfg, idx, upgrade_names);
+    });
 
     // --- update ---
     auto* update = app.add_subcommand("update", "Refresh the package index");

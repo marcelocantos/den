@@ -56,16 +56,26 @@ RelocationType relocation_from_string(const std::string& s) {
     return RelocationType::Portable;
 }
 
+/// Safely extract a string from a JSON value, returning fallback for null/missing/wrong type.
+std::string json_string(const json& j, const char* key, const std::string& fallback = "") {
+    if (j.contains(key) && j[key].is_string()) {
+        return j[key].get<std::string>();
+    }
+    return fallback;
+}
+
 /// Transform a single Homebrew formula JSON object into a Package.
 Package transform_formula(const json& f) {
     Package pkg;
-    pkg.name = f.value("name", "");
-    pkg.description = f.value("desc", "");
-    pkg.homepage = f.value("homepage", "");
-    pkg.license = f.value("license", "");
+    pkg.name = json_string(f, "name");
+    pkg.description = json_string(f, "desc");
+    pkg.homepage = json_string(f, "homepage");
+    pkg.license = json_string(f, "license");
     pkg.artifact_type = ArtifactType::Binary;
-    pkg.deprecated = f.value("deprecated", false);
-    pkg.disabled = f.value("disabled", false);
+    pkg.deprecated = f.contains("deprecated") && f["deprecated"].is_boolean() &&
+                     f["deprecated"].get<bool>();
+    pkg.disabled =
+        f.contains("disabled") && f["disabled"].is_boolean() && f["disabled"].get<bool>();
 
     // Version: prefer versions.stable.
     if (f.contains("versions") && f["versions"].contains("stable")) {
@@ -129,14 +139,17 @@ Package transform_formula(const json& f) {
 }
 
 /// Transform a single Homebrew cask JSON object into a Package.
+/// Transform a single Homebrew cask JSON object into a Package.
 Package transform_cask(const json& c) {
     Package pkg;
-    pkg.name = c.value("token", "");
-    pkg.description = c.value("desc", "");
-    pkg.homepage = c.value("homepage", "");
+    pkg.name = json_string(c, "token");
+    pkg.description = json_string(c, "desc");
+    pkg.homepage = json_string(c, "homepage");
     pkg.artifact_type = ArtifactType::App;
-    pkg.deprecated = c.value("deprecated", false);
-    pkg.disabled = c.value("disabled", false);
+    pkg.deprecated = c.contains("deprecated") && c["deprecated"].is_boolean() &&
+                     c["deprecated"].get<bool>();
+    pkg.disabled =
+        c.contains("disabled") && c["disabled"].is_boolean() && c["disabled"].get<bool>();
 
     if (c.contains("version") && c["version"].is_string()) {
         pkg.version = c["version"].get<std::string>();
