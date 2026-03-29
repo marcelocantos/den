@@ -40,16 +40,26 @@ jobs:
       - name: Install cross-compilation tools (aarch64-linux)
         if: matrix.target == 'linux-aarch64'
         run: |
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
           sudo dpkg --add-architecture arm64
-          sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list.d/*.list 2>/dev/null || true
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ $(lsb_release -cs) main restricted universe" | sudo tee /etc/apt/sources.list.d/arm64.list
-          sudo apt-get update
-          sudo apt-get install -y libcurl4-openssl-dev:arm64 libarchive-dev:arm64
+          # Add arm64 sources — Ubuntu 24.04+ uses deb822 format
+          codename=$(lsb_release -cs)
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ ${codename} main restricted universe" | sudo tee /etc/apt/sources.list.d/arm64-ports.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ ${codename}-updates main restricted universe" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
+          # Pin existing sources to amd64 only
+          for f in /etc/apt/sources.list.d/*.list; do
+            [ "$f" = "/etc/apt/sources.list.d/arm64-ports.list" ] && continue
+            sudo sed -i 's/^deb \[/deb [arch=amd64,/' "$f" 2>/dev/null || true
+            sudo sed -i 's/^deb http/deb [arch=amd64] http/' "$f" 2>/dev/null || true
+          done
+          sudo apt-get update || true
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libcurl4-openssl-dev:arm64 libarchive-dev:arm64
 
       - name: Configure
         run: |
           cmake_args="-B build -G Ninja -DCMAKE_BUILD_TYPE=Release"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cmake_args="$cmake_args -DCMAKE_PREFIX_PATH=$(brew --prefix libarchive)"
+          fi
           if [ "${{ matrix.target }}" = "linux-aarch64" ]; then
             cmake_args="$cmake_args -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64"
           fi
