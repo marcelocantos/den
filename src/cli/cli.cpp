@@ -18,6 +18,7 @@
 #include "../store/store.h"
 
 #include <CLI11.hpp>
+#include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
@@ -34,10 +35,6 @@ namespace den {
 namespace {
 
 const char* agent_guide = "See agents-guide.md for the full agent guide.\n";
-
-void stub(const std::string& command) {
-    SPDLOG_INFO("{}: not yet implemented", command);
-}
 
 } // namespace
 
@@ -311,11 +308,86 @@ void Cli::M::setup() {
 
     // --- cleanup ---
     auto* cleanup = app.add_subcommand("cleanup", "Remove old versions and cache files");
-    cleanup->callback([this] { stub("cleanup"); });
+    cleanup->callback([] {
+        auto cfg = Config::detect();
+        // Remove old versions from the store: keep only versions referenced in manifests.
+        auto all_envs = list_all(cfg.den_home);
+        std::set<std::string> referenced; // "name/version" keys
+        for (const auto& ep : all_envs) {
+            auto resolved = resolve(cfg.den_home, ep);
+            for (const auto& [name, version] : resolved) {
+                referenced.insert(name + "/" + version);
+            }
+        }
+
+        auto installed = list_installed(cfg.store);
+        uint32_t removed = 0;
+        for (const auto& pkg : installed) {
+            if (!referenced.count(pkg.name + "/" + pkg.version)) {
+                std::cout << "Removing " << pkg.name << " " << pkg.version << "\n";
+                std::error_code ec;
+                fs::remove_all(pkg.path, ec);
+                if (!ec)
+                    ++removed;
+            }
+        }
+
+        // Clean archive cache.
+        auto cache_dir = cfg.cache / "archives";
+        if (fs::is_directory(cache_dir)) {
+            std::error_code ec;
+            fs::remove_all(cache_dir, ec);
+            std::cout << "Cleared archive cache.\n";
+        }
+
+        std::cout << "Cleaned up " << removed << " old package version(s).\n";
+    });
 
     // --- autoremove ---
     auto* autoremove = app.add_subcommand("autoremove", "Remove unused dependencies");
-    autoremove->callback([this] { stub("autoremove"); });
+    autoremove->callback([] {
+        auto cfg = Config::detect();
+        auto active = active_env_path(cfg.den_home);
+        auto manifest = read_manifest(cfg.den_home, active);
+
+        // Find packages that are auto_deps and not depended on by any explicit package.
+        auto idx = load_index(cfg.cache / "index.json");
+        std::set<std::string> needed;
+        for (const auto& [name, _] : manifest.packages) {
+            if (manifest.auto_deps.count(name))
+                continue;
+            // This is an explicit package — mark all its deps as needed.
+            auto* pkg = idx.find(name);
+            if (pkg) {
+                for (const auto& dep : pkg->dependencies)
+                    needed.insert(dep);
+            }
+        }
+
+        std::vector<std::string> to_remove;
+        for (const auto& name : manifest.auto_deps) {
+            if (!needed.count(name)) {
+                to_remove.push_back(name);
+            }
+        }
+
+        if (to_remove.empty()) {
+            std::cout << "No unused dependencies to remove.\n";
+            return;
+        }
+
+        with_manifest(cfg.den_home, active, [&](Manifest& m) {
+            for (const auto& name : to_remove) {
+                m.packages.erase(name);
+                m.auto_deps.erase(name);
+                std::cout << "Removing unused dependency: " << name << "\n";
+            }
+        });
+
+        auto links = materialise(cfg.den_home, cfg.store, active);
+        std::cout << "Removed " << to_remove.size() << " unused dep(s). " << links
+                  << " symlinks.\n";
+    });
 
     // --- doctor ---
     auto* doctor_cmd = app.add_subcommand("doctor", "Check system for potential problems");
@@ -405,13 +477,51 @@ void Cli::M::setup() {
     });
 
     auto* env_freeze = env->add_subcommand("freeze", "Export environment as lockfile");
-    env_freeze->callback([this] { stub("env freeze"); });
+    env_freeze->callback([] {
+        auto cfg = Config::detect();
+        auto active = active_env_path(cfg.den_home);
+        auto resolved = resolve(cfg.den_home, active);
+        // Output as JSON lockfile.
+        nlohmann::json j;
+        j["environment"] = active;
+        j["packages"] = nlohmann::json::object();
+        for (const auto& [name, version] : resolved) {
+            j["packages"][name] = version;
+        }
+        std::cout << j.dump(2) << "\n";
+    });
 
     // --- use ---
     auto* use = app.add_subcommand("use", "Switch active version of a package");
     use->add_option("name", use_name, "Package name")->required();
     use->add_option("version", use_version, "Version to activate")->required();
-    use->callback([this] { stub("use"); });
+    use->callback([this] {
+        auto cfg = Config::detect();
+        auto active = active_env_path(cfg.den_home);
+
+        // Check the requested version exists in the store.
+        if (!is_installed(cfg.store, use_name, use_version)) {
+            // Try to install it.
+            auto idx = load_index(cfg.cache / "index.json");
+            auto* pkg = idx.find(use_name);
+            if (pkg && pkg->version == use_version) {
+                install_packages(cfg, idx, {use_name});
+            } else {
+                SPDLOG_ERROR("version {} of {} is not installed and not available in the index",
+                             use_version, use_name);
+                return;
+            }
+        }
+
+        // Update manifest to the requested version.
+        with_manifest(cfg.den_home, active, [&](Manifest& m) {
+            m.packages[use_name] = use_version;
+        });
+
+        auto links = materialise(cfg.den_home, cfg.store, active);
+        std::cout << "Switched " << use_name << " to " << use_version << " (" << links
+                  << " symlinks).\n";
+    });
 
     // --- init ---
     auto* init = app.add_subcommand("init", "Print shell init script");
@@ -435,7 +545,29 @@ void Cli::M::setup() {
 
     // --- status ---
     auto* status = app.add_subcommand("status", "Show environment status");
-    status->callback([this] { stub("status"); });
+    status->callback([] {
+        auto cfg = Config::detect();
+        auto active = active_env_path(cfg.den_home);
+        auto resolved = resolve(cfg.den_home, active);
+
+        std::cout << "Active environment: " << active << "\n";
+        std::cout << "Packages: " << resolved.size() << "\n";
+
+        // Check daemon state.
+        auto state = read_daemon_state(cfg.den_home);
+        if (!state.pending.empty()) {
+            std::cout << "Pending upgrades: " << state.pending.size() << "\n";
+            for (const auto& p : state.pending) {
+                std::cout << "  " << p.name << " " << p.installed << " -> " << p.available << "\n";
+            }
+        }
+
+        if (is_daemon_running(cfg)) {
+            std::cout << "Daemon: running\n";
+        } else {
+            std::cout << "Daemon: not running\n";
+        }
+    });
 
     // --- set ---
     auto* set = app.add_subcommand("set", "Set a configuration value");
@@ -587,19 +719,112 @@ void Cli::M::setup() {
     services->require_subcommand(1);
 
     auto* svc_list = services->add_subcommand("list", "List running services");
-    svc_list->callback([this] { stub("services list"); });
+    svc_list->callback([] {
+#ifndef __APPLE__
+        SPDLOG_ERROR("services are only supported on macOS (launchd)");
+        return;
+#else
+        auto cfg = Config::detect();
+        auto installed = list_installed(cfg.store);
+        bool found = false;
+        for (const auto& pkg : installed) {
+            // Scan for .plist files in the package.
+            // Check for plist files in standard locations.
+            for (const auto& candidate :
+                 {pkg.path / (std::string("homebrew.mxcl.") + pkg.name + ".plist"),
+                  pkg.path / "share" / (pkg.name + ".plist")}) {
+                if (fs::exists(candidate)) {
+                    // Check if loaded.
+                    auto label = "homebrew.mxcl." + pkg.name;
+                    auto rc = std::system(
+                        ("launchctl list " + label + " >/dev/null 2>&1").c_str());
+                    std::string status_str = (rc == 0) ? "running" : "stopped";
+                    std::cout << std::left << std::setw(30) << pkg.name << " " << status_str
+                              << "\n";
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if (!found) {
+            std::cout << "No services found.\n";
+        }
+#endif
+    });
 
     auto* svc_start = services->add_subcommand("start", "Start services");
     svc_start->add_option("names", service_names, "Service names");
-    svc_start->callback([this] { stub("services start"); });
+    svc_start->callback([this] {
+#ifndef __APPLE__
+        SPDLOG_ERROR("services are only supported on macOS (launchd)");
+#else
+        for (const auto& name : service_names) {
+            auto label = "homebrew.mxcl." + name;
+            auto cfg = Config::detect();
+            // Find the plist in the store.
+            auto installed = list_installed(cfg.store);
+            bool found = false;
+            for (const auto& pkg : installed) {
+                if (pkg.name != name)
+                    continue;
+                auto plist = pkg.path / std::string(label + ".plist");
+                if (fs::exists(plist)) {
+                    auto home = fs::path(std::getenv("HOME"));
+                    auto dest = home / "Library" / "LaunchAgents" / (label + ".plist");
+                    fs::copy_file(plist, dest, fs::copy_options::overwrite_existing);
+                    std::system(("launchctl load -w " + dest.string()).c_str());
+                    std::cout << "Started " << name << "\n";
+                    found = true;
+                }
+                break;
+            }
+            if (!found) {
+                SPDLOG_ERROR("no service plist found for '{}'", name);
+            }
+        }
+#endif
+    });
 
     auto* svc_stop = services->add_subcommand("stop", "Stop services");
     svc_stop->add_option("names", service_names, "Service names");
-    svc_stop->callback([this] { stub("services stop"); });
+    svc_stop->callback([this] {
+#ifndef __APPLE__
+        SPDLOG_ERROR("services are only supported on macOS (launchd)");
+#else
+        for (const auto& name : service_names) {
+            auto label = "homebrew.mxcl." + name;
+            auto home = fs::path(std::getenv("HOME"));
+            auto plist = home / "Library" / "LaunchAgents" / (label + ".plist");
+            if (fs::exists(plist)) {
+                std::system(("launchctl unload -w " + plist.string()).c_str());
+                std::cout << "Stopped " << name << "\n";
+            } else {
+                SPDLOG_ERROR("service '{}' is not loaded", name);
+            }
+        }
+#endif
+    });
 
     auto* svc_restart = services->add_subcommand("restart", "Restart services");
     svc_restart->add_option("names", service_names, "Service names");
-    svc_restart->callback([this] { stub("services restart"); });
+    svc_restart->callback([this] {
+#ifndef __APPLE__
+        SPDLOG_ERROR("services are only supported on macOS (launchd)");
+#else
+        for (const auto& name : service_names) {
+            auto label = "homebrew.mxcl." + name;
+            auto home = fs::path(std::getenv("HOME"));
+            auto plist = home / "Library" / "LaunchAgents" / (label + ".plist");
+            if (fs::exists(plist)) {
+                std::system(("launchctl unload -w " + plist.string()).c_str());
+                std::system(("launchctl load -w " + plist.string()).c_str());
+                std::cout << "Restarted " << name << "\n";
+            } else {
+                SPDLOG_ERROR("service '{}' is not loaded", name);
+            }
+        }
+#endif
+    });
 }
 
 Cli::Cli() : m(std::make_unique<M>()) {
