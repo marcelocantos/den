@@ -3,13 +3,31 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Build a Homebrew formula into den's store.
-# Run via: brew ruby src/ruby/den_build.rb <formula_file> <store_path> <den_home>
+# Works in two modes:
+#   1. Via `brew ruby` (Homebrew already loaded)
+#   2. Standalone with bundled Portable Ruby (den's embedded bundle)
 #
 # The formula Ruby source is passed as a file (from `brew cat`).
-# Homebrew's full library is loaded by `brew ruby`.
 
-require "formula"
-require "formulary"
+# Bootstrap: if Homebrew's library isn't loaded yet, load it.
+unless defined?(Formula)
+  # Load Sorbet runtime first (Homebrew's code uses sig{} everywhere).
+  require "standalone/sorbet"
+  require "extend/blank"
+
+  # Set Homebrew env vars.
+  ENV["HOMEBREW_PREFIX"] ||= "/opt/homebrew"
+  ENV["HOMEBREW_CELLAR"] ||= "/opt/homebrew/Cellar"
+  ENV["HOMEBREW_REPOSITORY"] ||= "/opt/homebrew"
+  ENV["HOMEBREW_NO_ANALYTICS"] = "1"
+  ENV["HOMEBREW_NO_AUTO_UPDATE"] = "1"
+  ENV["HOMEBREW_OS_VERSION"] ||= `sw_vers -productVersion 2>/dev/null`.strip rescue "26.0"
+
+  # Load OS detection and formula infrastructure.
+  require "os"
+  require "formula"
+  require "formulary"
+end
 
 formula_file = ARGV[0] or abort "usage: den_build.rb <formula_file> <store_path> <den_home>"
 store_path = Pathname.new(ARGV[1])

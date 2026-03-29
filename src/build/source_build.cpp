@@ -8,10 +8,8 @@
 #include "../download/archive.h"
 #include "../download/http.h"
 #include "../download/sha256.h"
-#ifdef DEN_HAVE_RUBY
 #include "../ruby/bundle.h"
-#include "../ruby/embedded.h"
-#endif
+// No embedded Ruby VM — den shells out to the bundled Ruby binary.
 #include "../store/store.h"
 
 #include <spdlog/spdlog.h>
@@ -121,67 +119,48 @@ fs::path build_from_source(const Config& config, const std::string& name,
 
     std::cout << "==> Building " << name << " " << version << " from source\n";
 
-#ifdef DEN_HAVE_RUBY
-    // Path A: Embedded Ruby VM with unpacked bundle (no Homebrew needed).
+    // Path A: Bundled Ruby subprocess (no Homebrew needed).
+    // Unpacks the Ruby binary + Homebrew library from den's embedded bundle,
+    // then runs den_build.rb as a subprocess.
     {
+        auto ruby_dir = ensure_ruby_bundle(config.den_home);
+        auto ruby_bin = ruby_dir / "ruby" / "bin" / "ruby";
+        auto script_path = ruby_dir / "den_build.rb"; // Included in the bundle.
+
         auto cat_result = run("brew cat " + name + " 2>/dev/null");
-        if (cat_result.first == 0 && !cat_result.second.empty()) {
-            auto ruby_dir = ensure_ruby_bundle(config.den_home);
-
-            // Need to download and extract source first.
-            auto recipe = extract_build_recipe(name);
-            if (!recipe.source_url.empty()) {
-                auto cache_dir = config.cache / "sources";
-                fs::create_directories(cache_dir);
-                auto tarball_path = cache_dir / (name + "-" + version + ".tar.gz");
-
-                if (!fs::exists(tarball_path)) {
-                    std::cout << "==> Downloading source\n";
-                    auto data = fetch_url(recipe.source_url);
-                    auto tmp = tarball_path.string() + ".tmp";
-                    {
-                        std::ofstream f(tmp, std::ios::binary);
-                        f.write(data.c_str(), static_cast<std::streamsize>(data.size()));
-                    }
-                    fs::rename(tmp, tarball_path);
-                }
-
-                auto build_dir = config.cache / "build" / (name + "-" + version);
-                std::error_code ec;
-                fs::remove_all(build_dir, ec);
-                fs::create_directories(build_dir);
-
-                std::cout << "==> Extracting source\n";
-                auto extracted = extract_archive(tarball_path, build_dir);
-                auto src_dir = build_dir;
-                if (!extracted.root.empty())
-                    src_dir = build_dir / extracted.root;
-
-                fs::create_directories(dest);
-
-                // Initialize the Ruby VM with the bundle.
-                static RubyRuntime ruby;
-                if (!ruby.is_initialized()) {
-                    ruby.init_with_bundle(ruby_dir);
-                }
-
-                if (ruby.is_initialized()) {
-                    std::cout << "==> Building via embedded Ruby\n";
-                    if (ruby.build_formula(cat_result.second, name, version, dest, src_dir,
-                                           config.store)) {
-                        fs::remove_all(build_dir, ec);
-                        std::cout << "==> Built " << name << " " << version << "\n";
-                        return dest;
-                    }
-                    SPDLOG_WARN("embedded Ruby build failed, falling back");
-                    fs::remove_all(dest, ec);
-                }
+        if (cat_result.first == 0 && !cat_result.second.empty() && fs::exists(ruby_bin) &&
+            fs::exists(script_path)) {
+            auto formula_file = config.cache / "formulas" / (name + ".rb");
+            fs::create_directories(formula_file.parent_path());
+            {
+                std::ofstream f(formula_file);
+                f << cat_result.second;
             }
+
+            auto homebrew_lib = ruby_dir / "homebrew";
+            auto sorbet_lib = ruby_dir / "gems" / "sorbet-runtime";
+            auto ruby_lib = ruby_dir / "ruby" / "lib" / "4.0.0";
+
+            auto cmd = ruby_bin.string() + " -I" + homebrew_lib.string() + " -I" +
+                       sorbet_lib.string() + " -I" + ruby_lib.string() + " " +
+                       script_path.string() + " " + formula_file.string() + " " +
+                       config.store.string() + " " + config.den_home.string();
+
+            SPDLOG_INFO("bundled ruby build: {}", cmd);
+            auto [ruby_rc, ruby_output] = run(cmd);
+
+            if (ruby_rc == 0 && ruby_output.find("status=ok") != std::string::npos) {
+                std::cout << "==> Built " << name << " " << version << "\n";
+                return dest;
+            }
+            SPDLOG_WARN("bundled ruby build failed (rc={}), falling back", ruby_rc);
+            SPDLOG_DEBUG("output: {}", ruby_output.substr(0, 500));
+            std::error_code ec;
+            fs::remove_all(dest, ec);
         }
     }
-#endif
 
-    // Path B: brew ruby subprocess (needs Homebrew installed).
+    // Path B: brew ruby subprocess (Homebrew fallback).
     {
         auto cat_result = run("brew cat " + name + " 2>/dev/null");
         if (cat_result.first == 0 && !cat_result.second.empty()) {
