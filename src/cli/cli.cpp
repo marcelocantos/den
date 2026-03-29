@@ -5,6 +5,7 @@
 #include "install.h"
 #include "shell.h"
 
+#include "../build/source_build.h"
 #include "../core/config.h"
 #include "../core/error.h"
 #include "../daemon/daemon.h"
@@ -109,7 +110,21 @@ void Cli::M::setup() {
             SPDLOG_ERROR("package index is empty — run `den update` first");
             return;
         }
-        install_packages(cfg, idx, install_names);
+        if (this->build_from_source) {
+            auto active = active_env_path(cfg.den_home);
+            for (const auto& name : install_names) {
+                auto* pkg = idx.find(name);
+                std::string version = pkg ? pkg->version : "unknown";
+                auto dest = den::build_from_source(cfg, name, version);
+                with_manifest(cfg.den_home, active, [&](Manifest& m) {
+                    m.packages[name] = version;
+                });
+            }
+            auto links = materialise(cfg.den_home, cfg.store, active);
+            std::cout << "Materialised: " << links << " symlinks.\n";
+        } else {
+            install_packages(cfg, idx, install_names);
+        }
     });
 
     // --- uninstall ---
