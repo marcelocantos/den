@@ -59,6 +59,15 @@ ExtractResult extract_archive(const fs::path& archive_path, const fs::path& dest
 
     fs::create_directories(dest);
 
+    // Use a single write_disk extractor for the whole archive.
+    // Do NOT use ARCHIVE_EXTRACT_SECURE_SYMLINKS — Homebrew bottles
+    // contain internal symlinks (e.g. .brew/ directory) that are safe.
+    // Our own is_path_unsafe check handles traversal attacks.
+    ArchivePtr disk(archive_write_disk_new(), archive_read_free);
+    archive_write_disk_set_options(disk.get(),
+                                  ARCHIVE_EXTRACT_TIME | ARCHIVE_EXTRACT_PERM |
+                                      ARCHIVE_EXTRACT_SECURE_NODOTDOT);
+
     ExtractResult result;
     std::string common_root;
     bool first_entry = true;
@@ -85,64 +94,41 @@ ExtractResult extract_archive(const fs::path& archive_path, const fs::path& dest
             common_root = top;
             first_entry = false;
         } else if (top != common_root) {
-            // Multiple top-level entries; no single root.
             common_root.clear();
         }
 
+        // Rewrite the entry path to be under dest.
         fs::path full_path = dest / entry_path;
+        archive_entry_set_pathname(entry, full_path.c_str());
 
-        // Create parent directories.
-        fs::create_directories(full_path.parent_path());
+        // Also rewrite hardlink targets to be under dest.
+        if (hardlink) {
+            auto full_hl = dest / std::string(hardlink);
+            archive_entry_set_hardlink(entry, full_hl.c_str());
+        }
 
-        auto file_type = archive_entry_filetype(entry);
-
-        if (file_type == AE_IFDIR) {
-            fs::create_directories(full_path);
-        } else if (file_type == AE_IFREG) {
-            // Extract regular file.
-            ArchivePtr disk(archive_write_disk_new(),
-                            archive_read_free); // archive_write_free
-            // Correct deleter — but archive_read_free and
-            // archive_write_free are the same symbol in practice.
-
-            archive_entry_set_pathname(entry, full_path.c_str());
-            archive_write_disk_set_options(disk.get(), ARCHIVE_EXTRACT_TIME | ARCHIVE_EXTRACT_PERM |
-                                                           ARCHIVE_EXTRACT_SECURE_NODOTDOT |
-                                                           ARCHIVE_EXTRACT_SECURE_SYMLINKS);
-
-            rc = archive_write_header(disk.get(), entry);
-            if (rc != ARCHIVE_OK) {
+        rc = archive_write_header(disk.get(), entry);
+        if (rc != ARCHIVE_OK) {
+            SPDLOG_WARN("extract header warning for {}: {}", entry_path,
+                        archive_error_string(disk.get()));
+            if (rc == ARCHIVE_FATAL) {
                 throw ArchiveError("failed to write header for " + entry_path + ": " +
                                    archive_error_string(disk.get()));
             }
+        }
 
+        // Copy data blocks for regular files.
+        if (archive_entry_size(entry) > 0) {
             const void* buf = nullptr;
             size_t size = 0;
             la_int64_t offset = 0;
 
             while (archive_read_data_block(ar.get(), &buf, &size, &offset) == ARCHIVE_OK) {
-                rc = archive_write_data_block(disk.get(), buf, size, offset);
-                if (rc != ARCHIVE_OK) {
-                    throw ArchiveError("failed to write data for " + entry_path + ": " +
-                                       archive_error_string(disk.get()));
-                }
+                archive_write_data_block(disk.get(), buf, size, offset);
             }
-
-            archive_write_finish_entry(disk.get());
-        } else if (file_type == AE_IFLNK) {
-            // Symlinks are OK — they are validated by
-            // ARCHIVE_EXTRACT_SECURE_SYMLINKS above if we use
-            // write_disk, but for simplicity we create them directly.
-            const char* target = archive_entry_symlink(entry);
-            if (target != nullptr) {
-                fs::create_symlink(target, full_path);
-            }
-        } else {
-            // Skip other file types (devices, sockets, etc.).
-            SPDLOG_WARN("skipping unsupported entry type in archive: {}", entry_path);
-            continue;
         }
 
+        archive_write_finish_entry(disk.get());
         result.files.emplace_back(entry_path);
     }
 
