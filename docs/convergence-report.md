@@ -1,7 +1,7 @@
 # Convergence Report
 
 Evaluated: 2026-03-29
-SHA: 349fed7
+SHA: a0e9822
 
 ## Standing invariants
 
@@ -86,19 +86,19 @@ Status: not started
 ### 🎯T32 — Opt-in telemetry  [weight 0.2]  (status only)
 Status: not started
 
-### Blocked targets
+## Blocked targets
 
-- 🎯T42 — Independent hash verification (blocked by 🎯T43)
+- 🎯T42 — Independent hash verification pipeline (blocked by 🎯T43)
 - 🎯T34 — Daemon socket API (blocked by 🎯T33)
-- 🎯T38 — Python provider (blocked by 🎯T23)
+- 🎯T38 — Python provider (subsume virtualenv) (blocked by 🎯T23)
 - 🎯T39 — Node.js/npm provider (blocked by 🎯T23)
 - 🎯T40 — Go provider (blocked by 🎯T23)
 - 🎯T41 — Cargo provider (blocked by 🎯T23)
 - 🎯T11 — Source builds (blocked by 🎯T31)
-- 🎯T17 — Formula metadata parsing (blocked by 🎯T31)
+- 🎯T17 — Formula metadata parsing (third-party taps) (blocked by 🎯T31)
 - 🎯T30 — Stability ratings (blocked by 🎯T29)
 - 🎯T25 — Search corpus CI pipeline (blocked by 🎯T24)
-- 🎯T44.1 — TUF (blocked by 🎯T42)
+- 🎯T44.1 — TUF (The Update Framework) (blocked by 🎯T42)
 - 🎯T44.2 — Binary transparency log (blocked by 🎯T42)
 
 ## Recommendation
@@ -117,7 +117,7 @@ GitHub Release creation through the proper gate flow.
 
 <!-- convergence-deps
 evaluated: 2026-03-29T00:00:00Z
-sha: 349fed7
+sha: a0e9822
 
 🎯T43:
   gap: close
@@ -130,16 +130,15 @@ sha: 349fed7
   gap: close
   assessment: "Bottle pours execute zero code. Missing formal guarantee documentation and enforcement test."
   read:
-    - src/bottle/mod.rs
-    - src/service/mod.rs
-    - src/cask/mod.rs
+    - src/download/archive.cpp
+    - src/cli/install.cpp
 
 🎯T2:
   gap: significant
   assessment: "Config detects arch, prefix, cellar, cache, macOS version. Missing Xcode/CLT detection and full Homebrew config parity."
   read:
-    - src/config/mod.rs
-    - src/platform/mod.rs
+    - src/settings/settings.cpp
+    - src/platform/platform.cpp
 
 🎯T44:
   gap: converging (1/5 sub-targets achieved)

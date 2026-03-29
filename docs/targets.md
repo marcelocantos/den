@@ -1,3 +1,4 @@
+<!-- last-evaluated: a0e9822 -->
 # Convergence Targets
 
 ## Achieved
@@ -128,7 +129,7 @@ else is supervised directly by den.
 ### 🎯T2 — Configuration and environment detection
 Xcode/CLT version detection, full Homebrew config parity.
 - **Weight**: 1.5 (value 3 / cost 2)
-- **Status**: partially achieved
+- **Status**: significant
 
 ### 🎯T4 — Cellar inspection improvements
 Show disk usage, which envs reference a keg, all-Cellar listing.
@@ -380,8 +381,7 @@ arbitrary Ruby as the installing user. In den, you can pour a
 bottle with zero trust in the build system — just verify the hash.
 
 - **Weight**: 2.5 (value 5 / cost 2)
-- **Status**: partially achieved (bottles already don't run code;
-needs enforcement and documentation as a guarantee)
+- **Status**: close (bottles already don't run code; needs enforcement and documentation as a guarantee)
 
 ---
 
@@ -681,9 +681,7 @@ GitHub Actions workflow for the den project:
   `known_hashes.json`.
 
 - **Weight**: 4.3 (value 13 / cost 3)
-- **Status**: partially achieved — push/PR CI is green on macOS + Linux
-(`f8f19fb`). Release tag workflow and scheduled hash verification
-remain.
+- **Status**: close — push/PR CI is green on macOS + Linux. Release tag workflow exists but untested (no tags).
 
 ### 🎯T44 — Advanced trust model
 
