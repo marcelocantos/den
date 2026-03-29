@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "source_build.h"
+#include "formula_parser.h"
 
 #include "../core/error.h"
 #include "../download/archive.h"
@@ -155,16 +156,12 @@ fs::path build_from_source(const Config& config, const std::string& name,
     if (!extracted.root.empty())
         src_dir = build_dir / extracted.root;
 
-    // Detect build system.
-    if (recipe.build_system.empty())
-        recipe.build_system = detect_build_system(src_dir);
-
     fs::create_directories(dest);
 
     // Build environment: point at den's installed packages.
     std::map<std::string, std::string> env;
     env["PREFIX"] = dest.string();
-    std::string pkg_config_path, cpath, library_path, cmake_prefix_path;
+    std::string pkg_config_path, cpath, library_path;
     for (const auto& pkg : list_installed(config.store)) {
         auto pc = pkg.path / "lib" / "pkgconfig";
         if (fs::is_directory(pc))
@@ -175,7 +172,6 @@ fs::path build_from_source(const Config& config, const std::string& name,
         auto lib = pkg.path / "lib";
         if (fs::is_directory(lib))
             library_path += (library_path.empty() ? "" : ":") + lib.string();
-        cmake_prefix_path += (cmake_prefix_path.empty() ? "" : ";") + pkg.path.string();
     }
     if (!pkg_config_path.empty())
         env["PKG_CONFIG_PATH"] = pkg_config_path;
@@ -184,39 +180,62 @@ fs::path build_from_source(const Config& config, const std::string& name,
     if (!library_path.empty())
         env["LIBRARY_PATH"] = library_path;
 
-    // Build.
-    std::cout << "==> Building (" << recipe.build_system << ")\n";
+    // Try formula-parsed build commands first (exact recipe from brew cat).
     int rc = 0;
+    bool used_formula = false;
+    {
+        auto cat_result = run("brew cat " + name + " 2>/dev/null");
+        if (cat_result.first == 0) {
+            auto parsed = parse_formula(cat_result.second, dest.string(), name);
 
-    if (recipe.build_system == "cmake") {
-        std::string cmake_args = "-DCMAKE_INSTALL_PREFIX=" + dest.string() +
-                                 " -DCMAKE_BUILD_TYPE=Release";
-        if (!cmake_prefix_path.empty())
-            cmake_args += " \"-DCMAKE_PREFIX_PATH=" + cmake_prefix_path + "\"";
-        rc = run_in_dir(src_dir, "cmake -B build " + cmake_args +
-                                     " && cmake --build build && cmake --install build",
-                        env);
-    } else if (recipe.build_system == "meson") {
-        rc = run_in_dir(src_dir,
-                        "meson setup build --prefix=" + dest.string() +
-                            " --buildtype=release && ninja -C build && ninja -C build install",
-                        env);
-    } else if (recipe.build_system == "autotools") {
-        rc = run_in_dir(src_dir, "./configure --prefix=" + dest.string() + " && make && make install",
-                        env);
-    } else if (recipe.build_system == "autogen") {
-        rc = run_in_dir(src_dir,
-                        "autoreconf -fi && ./configure --prefix=" + dest.string() +
-                            " && make && make install",
-                        env);
-    } else if (recipe.build_system == "make") {
-        rc = run_in_dir(src_dir,
-                        "make PREFIX=" + dest.string() + " && make install PREFIX=" + dest.string() +
-                            " MANDIR=" + (dest / "share" / "man").string(),
-                        env);
-    } else {
-        throw UserError("don't know how to build " + name + " (build system: " +
-                         recipe.build_system + ")");
+            // Apply env settings from formula.
+            for (const auto& e : parsed.env_settings) {
+                auto eq = e.find("+=");
+                if (eq != std::string::npos) {
+                    auto key = e.substr(0, eq);
+                    auto val = e.substr(eq + 2);
+                    if (env.count(key))
+                        env[key] += " " + val;
+                    else
+                        env[key] = val;
+                }
+            }
+
+            if (!parsed.build_commands.empty()) {
+                std::cout << "==> Building (formula: " << parsed.build_commands.size()
+                          << " commands)\n";
+                for (const auto& cmd : parsed.build_commands) {
+                    rc = run_in_dir(src_dir, cmd, env);
+                    if (rc != 0)
+                        break;
+                }
+                used_formula = true;
+            }
+        }
+    }
+
+    if (!used_formula) {
+        // Generic build system detection fallback.
+        auto build_sys = detect_build_system(src_dir);
+        std::cout << "==> Building (" << build_sys << ")\n";
+
+        if (build_sys == "cmake") {
+            rc = run_in_dir(src_dir,
+                            "cmake -B build -DCMAKE_INSTALL_PREFIX=" + dest.string() +
+                                " -DCMAKE_BUILD_TYPE=Release && cmake --build build"
+                                " && cmake --install build",
+                            env);
+        } else if (build_sys == "autotools") {
+            rc = run_in_dir(
+                src_dir, "./configure --prefix=" + dest.string() + " && make && make install", env);
+        } else if (build_sys == "make") {
+            rc = run_in_dir(src_dir,
+                            "make PREFIX=" + dest.string() + " && make install PREFIX=" +
+                                dest.string() + " MANDIR=" + (dest / "share" / "man").string(),
+                            env);
+        } else {
+            throw UserError("don't know how to build " + name);
+        }
     }
 
     if (rc != 0) {
