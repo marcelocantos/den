@@ -141,28 +141,33 @@ void check_broken_symlinks(const Config& config, std::vector<Finding>& findings)
     if (!fs::exists(envs_dir)) return;
 
     int broken = 0;
-    std::error_code ec;
-    for (const auto& entry :
-         fs::recursive_directory_iterator(envs_dir,
-             fs::directory_options::skip_permission_denied, ec)) {
-        if (entry.is_symlink()) {
-            std::error_code link_ec;
-            bool exists = fs::exists(entry.path(), link_ec);
-            if (!exists) {
-                ++broken;
-                SPDLOG_DEBUG("broken symlink: {}", entry.path().string());
-                if (broken <= 10) {
-                    warn(findings, "broken symlink: " + entry.path().string());
+    try {
+        std::error_code ec;
+        for (const auto& entry :
+             fs::recursive_directory_iterator(envs_dir,
+                 fs::directory_options::skip_permission_denied, ec)) {
+            std::error_code entry_ec;
+            if (entry.is_symlink(entry_ec) && !entry_ec) {
+                std::error_code link_ec;
+                auto target_status = fs::status(entry.path(), link_ec);
+                if (link_ec || target_status.type() == fs::file_type::not_found) {
+                    ++broken;
+                    SPDLOG_DEBUG("broken symlink: {}", entry.path().string());
+                    if (broken <= 10) {
+                        warn(findings, "broken symlink: " + entry.path().string());
+                    }
                 }
             }
         }
-    }
-    if (broken > 10) {
-        warn(findings, "... and " + std::to_string(broken - 10) +
-                       " more broken symlinks");
-    }
-    if (ec) {
-        warn(findings, "error scanning env symlinks: " + ec.message());
+        if (broken > 10) {
+            warn(findings, "... and " + std::to_string(broken - 10) +
+                           " more broken symlinks");
+        }
+        if (ec) {
+            warn(findings, "error scanning env symlinks: " + ec.message());
+        }
+    } catch (const fs::filesystem_error& e) {
+        warn(findings, std::string("error scanning env symlinks: ") + e.what());
     }
 }
 
@@ -216,17 +221,22 @@ void check_file_permissions(const Config& config,
     };
 
     // Also scan for private key / pem files anywhere under den_home.
-    std::error_code ec;
-    for (const auto& entry :
-         fs::recursive_directory_iterator(config.den_home,
-             fs::directory_options::skip_permission_denied, ec)) {
-        if (!entry.is_regular_file()) continue;
-        std::string fn = entry.path().filename().string();
-        if (fn.size() >= 4 &&
-            (fn.substr(fn.size() - 4) == ".key" ||
-             fn.substr(fn.size() - 4) == ".pem")) {
-            sensitive.push_back(entry.path());
+    try {
+        std::error_code ec;
+        for (const auto& entry :
+             fs::recursive_directory_iterator(config.den_home,
+                 fs::directory_options::skip_permission_denied, ec)) {
+            std::error_code entry_ec;
+            if (!entry.is_regular_file(entry_ec) || entry_ec) continue;
+            std::string fn = entry.path().filename().string();
+            if (fn.size() >= 4 &&
+                (fn.substr(fn.size() - 4) == ".key" ||
+                 fn.substr(fn.size() - 4) == ".pem")) {
+                sensitive.push_back(entry.path());
+            }
         }
+    } catch (const fs::filesystem_error&) {
+        // Ignore traversal errors (symlink loops, etc.).
     }
 
     for (const auto& p : sensitive) {
@@ -244,9 +254,6 @@ void check_file_permissions(const Config& config,
                             std::to_string(st.st_mode & 0777) + " (expected 0600): " +
                             p.string());
         }
-    }
-    if (ec) {
-        warn(findings, "error scanning for sensitive files: " + ec.message());
     }
 }
 
