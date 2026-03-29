@@ -89,11 +89,7 @@ std::string parse_system_call(const std::string& line, const std::string& prefix
 
     auto args_str = line.substr(sys_pos + 7);
 
-    // Remove trailing comments.
-    auto comment = args_str.find('#');
-    if (comment != std::string::npos && args_str[comment - 1] != '{')
-        args_str = args_str.substr(0, comment);
-
+    // Comments are already stripped during line joining.
     // Split by comma, handling quoted strings.
     std::vector<std::string> parts;
     std::string current;
@@ -230,13 +226,16 @@ ParsedFormula parse_formula(const std::string& brew_cat_output, const std::strin
             }
 
             // If accumulated line ends with comma, it continues on the next line.
-            while (!accum.empty() && (accum.back() == ' ' || accum.back() == '\t'))
-                accum.pop_back();
-            if (!accum.empty() && accum.back() == ',') {
+            auto accum_trimmed = accum;
+            while (!accum_trimmed.empty() &&
+                   (accum_trimmed.back() == ' ' || accum_trimmed.back() == '\t'))
+                accum_trimmed.pop_back();
+            if (!accum_trimmed.empty() && accum_trimmed.back() == ',') {
+                accum = accum_trimmed;
                 continue;
             }
 
-            lines.push_back(accum);
+            lines.push_back(accum_trimmed);
             accum.clear();
         }
         if (!accum.empty())
