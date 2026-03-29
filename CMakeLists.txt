@@ -74,6 +74,11 @@ if(NOT HAVE_RUBY)
     list(FILTER DEN_SOURCES EXCLUDE REGEX "ruby/")
 endif()
 
+# Add the embedded Ruby bundle data (C source).
+if(EXISTS "${CMAKE_SOURCE_DIR}/src/ruby/bundle_data.c")
+    list(APPEND DEN_SOURCES "${CMAKE_SOURCE_DIR}/src/ruby/bundle_data.c")
+endif()
+
 add_library(den_lib STATIC ${DEN_SOURCES})
 target_include_directories(den_lib PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(den_lib PUBLIC

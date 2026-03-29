@@ -117,6 +117,50 @@ fs::path build_from_source(const Config& config, const std::string& name,
 
     std::cout << "==> Building " << name << " " << version << " from source\n";
 
+    // Try the Ruby-based build first (uses Homebrew's full formula infrastructure).
+    // This handles complex formulas that the text parser can't.
+    {
+        // Write the formula source to a temp file.
+        auto cat_result = run("brew cat " + name + " 2>/dev/null");
+        if (cat_result.first == 0 && !cat_result.second.empty()) {
+            auto formula_file = config.cache / "formulas" / (name + ".rb");
+            fs::create_directories(formula_file.parent_path());
+            {
+                std::ofstream f(formula_file);
+                f << cat_result.second;
+            }
+
+            // Find den_build.rb — look relative to the den binary, or in known paths.
+            std::string build_script;
+            for (const auto& candidate :
+                 {"src/ruby/den_build.rb", "../share/den/den_build.rb",
+                  "/usr/local/share/den/den_build.rb"}) {
+                if (fs::exists(candidate)) {
+                    build_script = candidate;
+                    break;
+                }
+            }
+
+            if (!build_script.empty()) {
+                auto cmd = "brew ruby " + build_script + " " + formula_file.string() + " " +
+                           config.store.string() + " " + config.den_home.string();
+                SPDLOG_INFO("ruby build: {}", cmd);
+                auto [ruby_rc, ruby_output] = run(cmd);
+
+                if (ruby_rc == 0 && ruby_output.find("status=ok") != std::string::npos) {
+                    // Ruby build succeeded.
+                    std::cout << "==> Built " << name << " " << version << " (via formula)\n";
+                    return dest;
+                }
+                SPDLOG_WARN("ruby build failed (rc={}), falling back to parser", ruby_rc);
+                // Clean up failed attempt.
+                std::error_code ec;
+                fs::remove_all(dest, ec);
+            }
+        }
+    }
+
+    // Fallback: text-parser-based build.
     auto recipe = extract_build_recipe(name);
     if (recipe.source_url.empty())
         throw UserError("no source URL found for " + name);
