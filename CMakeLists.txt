@@ -69,6 +69,10 @@ endif()
 file(GLOB_RECURSE DEN_SOURCES src/*.cpp)
 # Exclude main.cpp from the library.
 list(FILTER DEN_SOURCES EXCLUDE REGEX "main\\.cpp$")
+# Exclude Ruby embedding module when Portable Ruby is not available.
+if(NOT HAVE_RUBY)
+    list(FILTER DEN_SOURCES EXCLUDE REGEX "ruby/")
+endif()
 
 add_library(den_lib STATIC ${DEN_SOURCES})
 target_include_directories(den_lib PUBLIC ${CMAKE_SOURCE_DIR}/src)
