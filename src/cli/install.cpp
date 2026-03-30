@@ -4,6 +4,7 @@
 #include "install.h"
 
 #include "../core/error.h"
+#include "../build/relocate.h"
 #include "../download/archive.h"
 #include "../download/fetch.h"
 #include "../env/environment.h"
@@ -146,6 +147,12 @@ bool install_one(const Config& config, const Package& pkg) {
     }
     fs::create_directories(dest.parent_path());
     fs::rename(inner, dest);
+
+    // Relocate: replace @@HOMEBREW_*@@ placeholders and fix dylib paths.
+    if (archive.relocation != RelocationType::Portable) {
+        std::cout << "==> Relocating " << pkg.name << "\n";
+        relocate_bottle(dest, pkg.name, pkg.version, config.store);
+    }
 
     // Clean up temp.
     std::error_code ec;

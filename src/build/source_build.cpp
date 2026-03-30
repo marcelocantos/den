@@ -139,7 +139,7 @@ fs::path build_from_source(const Config& config, const std::string& name,
 
             auto homebrew_lib = ruby_dir / "homebrew";
             auto sorbet_lib = ruby_dir / "gems" / "sorbet-runtime";
-            auto ruby_lib = ruby_dir / "ruby" / "lib" / "4.0.0";
+            auto ruby_lib = ruby_dir / "ruby" / "lib" / "ruby" / "4.0.0";
 
             auto cmd = ruby_bin.string() + " -I" + homebrew_lib.string() + " -I" +
                        sorbet_lib.string() + " -I" + ruby_lib.string() + " " +
