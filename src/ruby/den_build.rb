@@ -11,20 +11,33 @@
 
 # Bootstrap: if Homebrew's library isn't loaded yet, load it.
 unless defined?(Formula)
-  # Load Sorbet runtime first (Homebrew's code uses sig{} everywhere).
-  require "standalone/sorbet"
-  require "extend/blank"
+  # Load env vars from the bundled snapshot (generated from a real brew invocation).
+  env_file = File.expand_path("homebrew_env.txt", File.dirname(__FILE__))
+  if File.exist?(env_file)
+    File.readlines(env_file).each do |line|
+      line.strip!
+      next if line.empty? || line.start_with?("#")
+      key, value = line.split("=", 2)
+      ENV[key] ||= value if key && value
+    end
+  end
 
-  # Set Homebrew env vars.
-  ENV["HOMEBREW_PREFIX"] ||= "/opt/homebrew"
-  ENV["HOMEBREW_CELLAR"] ||= "/opt/homebrew/Cellar"
-  ENV["HOMEBREW_REPOSITORY"] ||= "/opt/homebrew"
+  # Override paths to point at den's locations.
+  bundle_dir = File.dirname(__FILE__)
+  ENV["HOMEBREW_LIBRARY"] = File.expand_path("homebrew", bundle_dir)
+  ENV["HOMEBREW_BREW_FILE"] ||= "/dev/null"
+  ENV["HOMEBREW_ORIGINAL_BREW_FILE"] ||= "/dev/null"
   ENV["HOMEBREW_NO_ANALYTICS"] = "1"
   ENV["HOMEBREW_NO_AUTO_UPDATE"] = "1"
-  ENV["HOMEBREW_OS_VERSION"] ||= `sw_vers -productVersion 2>/dev/null`.strip rescue "26.0"
+  ENV["HOMEBREW_NO_BOOTSNAP"] = "1" # Skip startup accelerator — not needed.
 
-  # Load OS detection and formula infrastructure.
-  require "os"
+  # Disable gem loading to avoid hardcoded gem paths.
+  ENV["GEM_HOME"] = File.expand_path("gems", bundle_dir)
+  ENV["GEM_PATH"] = ENV["GEM_HOME"]
+
+  # Load Homebrew's full library via its own entry point.
+  require "startup"
+  require "global"
   require "formula"
   require "formulary"
 end

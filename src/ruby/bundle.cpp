@@ -3,6 +3,7 @@
 
 #include "bundle.h"
 
+#include "../build/relocate.h"
 #include "../core/error.h"
 #include "../download/archive.h"
 
@@ -65,6 +66,20 @@ fs::path ensure_ruby_bundle(const fs::path& den_home) {
     // Clean up the temp archive.
     std::error_code ec;
     fs::remove(tmp_archive, ec);
+
+    // Relocate the Ruby binary from its original hardcoded prefix
+    // to the unpacked location.
+    static const std::string ORIGINAL_RUBY_PREFIX =
+        "/opt/homebrew/Library/Homebrew/vendor/portable-ruby/4.0.2";
+    relocate_ruby(ruby_dir, ORIGINAL_RUBY_PREFIX);
+
+    // Make the ruby binary executable.
+    auto ruby_bin = ruby_dir / "ruby" / "bin" / "ruby";
+    if (fs::exists(ruby_bin)) {
+        fs::permissions(ruby_bin, fs::perms::owner_exec | fs::perms::group_exec |
+                                     fs::perms::others_exec,
+                        fs::perm_options::add);
+    }
 
     // Write the marker file.
     {
