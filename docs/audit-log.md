@@ -1,5 +1,10 @@
 # Audit Log
 
+## 2026-03-30 — /release v0.3.0
+
+- **Commit**: `c5bce51`
+- **Outcome**: Released v0.3.0 (darwin-aarch64, linux-x86_64). Source builds via bundled Ruby (no Homebrew needed). Bottle relocation for :any packages. Formula parser for make/cmake/meson/autotools.
+
 ## 2026-03-29 — /release v0.2.0
 
 - **Commit**: `ce00af6`
