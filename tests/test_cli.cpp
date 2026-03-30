@@ -87,7 +87,7 @@ TEST_SUITE("cli::integration") {
     // -----------------------------------------------------------------------
     TEST_CASE("--version contains the expected version string") {
         const auto out = run_den_fresh("--version");
-        CHECK(out.find("0.2.0") != std::string::npos);
+        CHECK(out.find(DEN_VERSION) != std::string::npos);
     }
 
     // -----------------------------------------------------------------------
