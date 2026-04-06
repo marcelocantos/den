@@ -471,20 +471,21 @@ input.
 
 ---
 
-### 🎯T31 — Lazy-vendored Ruby
+### 🎯T31 — Bundled Ruby
 
-Ruby is not shipped with den and not required for bottle pours.
-On first use of a feature that needs it (source builds, third-party
-tap formula parsing), den downloads Homebrew's Portable Ruby
-bottle into `~/.den/vendor/ruby/<version>/` automatically.
+Ruby is bundled in the den binary (Portable Ruby, 6.7MB compressed,
+unpacked to `~/.den/ruby/` on first use). Originally planned as a
+lazy download (fetch on first source build), but many highly popular
+packages (openssl, python, git, gcc — the 13% with hardcoded-prefix
+bottles) require source builds, so nearly every user would trigger
+the download immediately. Bundling avoids the latency and the
+network-unavailable failure mode.
 
 Content-addressed, non-precious (re-fetchable), version-pinned.
-Extends to other vendored tools if T23 providers need them.
 
 - **Weight**: 1 (value 5 / cost 5)
-- **Status**: significant — bundled Ruby binary is downloaded and cached
-  on macOS arm64. Used successfully for source builds (`tree`). Not yet
-  lazy (bundled at build time). Linux not yet supported (see 🎯T47).
+- **Status**: significant — macOS arm64 working. Linux not yet
+  supported (see 🎯T47).
 
 ---
 
@@ -621,7 +622,7 @@ Third-party taps.
 - **Status**: not started
 
 ### 🎯T11 — Source builds
-Delegate to Ruby via lazy-vendored Portable Ruby (T31).
+Delegate to Ruby via bundled Portable Ruby (T31).
 - **Weight**: 0.6 (value 5 / cost 8)
 - **Depends on**: 🎯T31
 - **Status**: significant — basic source builds work (cmake, autotools,
