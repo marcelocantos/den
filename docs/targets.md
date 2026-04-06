@@ -87,6 +87,51 @@ with exclusive `flock`. **Achieved.**
 
 ## Active
 
+### 🎯T49 — Shared Cellar at /opt/homebrew, environments in ~/.den
+
+Den uses `/opt/homebrew/Cellar/` as the blessed package store —
+the same location Homebrew uses. Bottles pour directly into their
+expected prefix with zero relocation needed. Den and Homebrew
+coexist on the same Cellar.
+
+Environments live in `~/.den/envs/` as symlink sets pointing into
+the Cellar. `den env use /ml` switches which symlinks are on PATH.
+Multiple versions coexist in the Cellar; environments pick which
+version to link.
+
+**What this changes:**
+- `~/.den/store/` → `/opt/homebrew/Cellar/` as the package store
+- 100% of bottles pour and work immediately — no source builds
+  needed for hardcoded-prefix packages (openssl, python, git, gcc)
+- Source builds (🎯T11) become nice-to-have (taps, custom patches,
+  platforms without bottles) rather than critical path
+- Bundled Ruby (🎯T31) urgency drops — not needed for the common case
+- Bottle relocation (🎯T48) only matters for the `~/.den` metadata,
+  not for package functionality
+- 🎯T36 (prefix compatibility layer) is subsumed — no compatibility
+  layer needed when the Cellar is already at the expected prefix
+- Migration (🎯T37) becomes simpler — den reads the existing Cellar
+  in place rather than copying/importing
+
+**Coexistence with Homebrew:**
+- Den reads and writes to `/opt/homebrew/Cellar/` alongside Homebrew
+- Both tools can install packages — den tracks what it manages via
+  its own manifest in `~/.den/`
+- `den migrate` just adopts the existing Cellar contents into den's
+  manifest — zero file movement
+
+**What den adds over Homebrew:**
+- Named environments (symlink sets with PATH switching)
+- Multi-version coinstallation (both versions in Cellar, env picks one)
+- Background upgrades staged without disruption
+- Built-in process supervisor
+- Multi-provider package management (go, cargo, pip, npm)
+
+- **Weight**: 8.5 (value 13 / cost 1.5) — high value, low cost (mostly config changes)
+- **Status**: not started
+
+---
+
 ### 🎯T33 — Built-in process supervisor
 
 Replace the launchctl-based service management (T16) with a
@@ -474,16 +519,14 @@ input.
 ### 🎯T31 — Bundled Ruby
 
 Ruby is bundled in the den binary (Portable Ruby, 6.7MB compressed,
-unpacked to `~/.den/ruby/` on first use). Originally planned as a
-lazy download (fetch on first source build), but many highly popular
-packages (openssl, python, git, gcc — the 13% with hardcoded-prefix
-bottles) require source builds, so nearly every user would trigger
-the download immediately. Bundling avoids the latency and the
-network-unavailable failure mode.
+unpacked to `~/.den/ruby/` on first use). With 🎯T49 (shared Cellar),
+the urgency is reduced — bottles pour at the correct prefix without
+source builds. Ruby remains needed for third-party tap formula
+parsing (🎯T17) and source builds when opted in (🎯T11).
 
 Content-addressed, non-precious (re-fetchable), version-pinned.
 
-- **Weight**: 1 (value 5 / cost 5)
+- **Weight**: 0.6 (value 3 / cost 5)
 - **Status**: significant — macOS arm64 working. Linux not yet
   supported (see 🎯T47).
 
@@ -547,25 +590,11 @@ Sent. (204 No Content)
 
 ### 🎯T36 — Homebrew prefix compatibility layer
 
-For tools that hardcode `/opt/homebrew` paths, den can optionally
-replicate its active environment's symlinks into `/opt/homebrew/`
-(or a configurable prefix). This is a one-way sync — den owns the
-state, the prefix is a mirror.
+**Subsumed by 🎯T49.** With the Cellar at `/opt/homebrew`, no
+compatibility layer is needed — packages are already at their
+expected prefix.
 
-Modes:
-- **off** (default) — den environments are self-contained, Homebrew
-  prefix is untouched
-- **mirror** — den materialises into the Homebrew prefix alongside
-  its own environment, keeping both in sync
-- **takeover** — den replaces Homebrew's symlinks entirely, managing
-  the prefix as if it were a den environment
-
-This is the escape hatch for the small number of tools that ignore
-env vars and hardcode `/opt/homebrew`. Telemetry (T32) can track
-how often users need this to inform whether it's worth maintaining.
-
-- **Weight**: 0.6 (value 3 / cost 5)
-- **Status**: not started
+- **Status**: subsumed by 🎯T49
 
 ---
 
@@ -621,17 +650,16 @@ Third-party taps.
 - **Weight**: 1 (value 5 / cost 5)
 - **Status**: not started
 
-### 🎯T11 — Source builds
+### 🎯T11 ��� Source builds
 Delegate to Ruby via bundled Portable Ruby (T31).
-- **Weight**: 0.6 (value 5 / cost 8)
+- **Weight**: 0.4 (value 3 / cost 8)
 - **Depends on**: 🎯T31
 - **Status**: significant — basic source builds work (cmake, autotools,
   meson) and the bundled Ruby path is wired in. `tree` builds
-  successfully. Complex formulas (openssl, python, node) with resource
-  blocks, conditional platform code, and `Formula["dep"]` references
-  have not been tested end-to-end via the bundled Ruby path. These are
-  the high-value packages (the 13% with hardcoded-prefix bottles that
-  crash at runtime).
+  successfully. With 🎯T49 (shared Cellar at /opt/homebrew), source
+  builds are no longer critical path — all bottles pour at the correct
+  prefix. Source builds remain useful for third-party taps, custom
+  patches, and platforms without bottles.
 
 ### 🎯T17 — Formula metadata parsing (third-party taps)
 Ruby DSL parsing for non-API taps. Uses lazy-vendored Ruby (T31).
@@ -863,21 +891,13 @@ and arm64 to enable source builds on Linux.
 
 ### 🎯T48 — Bottle relocation at scale
 
-`:any` bottles (32% of the corpus) require text placeholder
-substitution during pour. This works for `readline` (manually
-verified). No bulk validation has been done. `:any_skip_relocation`
-bottles (55%) need no relocation. The remaining 13% have hardcoded
-prefixes and need source builds (🎯T11).
+With 🎯T49 (shared Cellar at /opt/homebrew), bottles pour at their
+expected prefix and no relocation is needed for package functionality.
+Relocation is only relevant for den-specific metadata files in
+`~/.den/`. This target's urgency is greatly reduced.
 
-**What to do:**
-- Run the smoke test suite against a representative sample of `:any`
-  bottles to verify relocation produces working installs.
-- Verify runtime functionality (not just pour success) — e.g.,
-  `pkg-config --libs` returns correct paths, shared libraries load.
-- Track which `:any` bottles fail relocation and why.
-
-- **Weight**: 2.5 (value 5 / cost 2)
-- **Status**: not started
+- **Weight**: 0.3 (value 2 / cost 2)
+- **Status**: largely obviated by 🎯T49
 
 ---
 

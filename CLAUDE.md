@@ -32,12 +32,14 @@ See `docs/targets.md` for the convergence roadmap.
 
 ### Key Design Decisions
 
-- **Homebrew compatibility**: Consumes formulae.brew.sh JSON API for
-  metadata. Pours existing Homebrew bottles. Reads existing Cellar.
-  For source builds and third-party tap parsing, delegates to Ruby.
+- **Shared Cellar at /opt/homebrew**: Den uses the same Cellar as
+  Homebrew (`/opt/homebrew/Cellar/`). Bottles pour at their expected
+  prefix with zero relocation — 100% of bottles work immediately.
+  Den and Homebrew coexist on the same Cellar. Den tracks what it
+  manages via its own manifest in `~/.den/`.
 - **Environments are symlink sets**: Each environment is a directory
-  of symlinks into the Cellar. Environments compose via PATH
-  precedence — a project env overrides the default env.
+  in `~/.den/envs/` containing symlinks into the Cellar. Environments
+  compose via PATH precedence — a project env overrides the default env.
 - **Multi-version by default**: Installing a new version never removes
   the old one. `den use` atomically switches which version is linked
   in the active environment.
