@@ -482,7 +482,9 @@ Content-addressed, non-precious (re-fetchable), version-pinned.
 Extends to other vendored tools if T23 providers need them.
 
 - **Weight**: 1 (value 5 / cost 5)
-- **Status**: not started
+- **Status**: significant — bundled Ruby binary is downloaded and cached
+  on macOS arm64. Used successfully for source builds (`tree`). Not yet
+  lazy (bundled at build time). Linux not yet supported (see 🎯T47).
 
 ---
 
@@ -622,7 +624,13 @@ Third-party taps.
 Delegate to Ruby via lazy-vendored Portable Ruby (T31).
 - **Weight**: 0.6 (value 5 / cost 8)
 - **Depends on**: 🎯T31
-- **Status**: not started
+- **Status**: significant — basic source builds work (cmake, autotools,
+  meson) and the bundled Ruby path is wired in. `tree` builds
+  successfully. Complex formulas (openssl, python, node) with resource
+  blocks, conditional platform code, and `Formula["dep"]` references
+  have not been tested end-to-end via the bundled Ruby path. These are
+  the high-value packages (the 13% with hardcoded-prefix bottles that
+  crash at runtime).
 
 ### 🎯T17 — Formula metadata parsing (third-party taps)
 Ruby DSL parsing for non-API taps. Uses lazy-vendored Ruby (T31).
@@ -810,6 +818,67 @@ the conservative one is insufficient.
 
 - **Weight**: 0.4 (value 3 / cost 8)
 - **Status**: not started — deferred until source builds are stable
+
+### 🎯T46 — Eliminate `brew cat` dependency
+
+The C++ source build code path (`source_build.cpp`) shells out to
+`brew cat` in four places to fetch formula source. This defeats the
+goal of running without Homebrew installed. The Ruby code path
+(`extract_formula.rb`) already fetches formula source from the GitHub
+API via the `ruby_source_path` field in the formulae.brew.sh JSON —
+the C++ path should do the same.
+
+**What to do:**
+- Fetch formula source from
+  `https://raw.githubusercontent.com/Homebrew/homebrew-core/master/{ruby_source_path}`
+  using the `ruby_source_path` from the JSON API (already available).
+- Remove all `brew cat` calls from `source_build.cpp`.
+- The Ruby path already works correctly — this is C++ parity.
+
+- **Weight**: 5 (value 5 / cost 1)
+- **Status**: not started
+
+---
+
+### 🎯T47 — Linux bundled Ruby
+
+The bundled Ruby binary is macOS arm64 only. On Linux, source builds
+fall back to the text parser, which can't handle complex formulas.
+Den needs to bundle (or lazy-download) Portable Ruby for Linux x86_64
+and arm64 to enable source builds on Linux.
+
+**Approach:**
+- Homebrew publishes Portable Ruby bottles for Linux x86_64. Use
+  the same download-and-cache strategy as macOS.
+- The Ruby extraction script (`extract_formula.rb`) is
+  platform-neutral — only the Ruby binary differs.
+- Consider lazy download on first use (aligned with 🎯T31) rather
+  than bundling in the den binary.
+
+- **Weight**: 1.7 (value 5 / cost 3)
+- **Status**: not started
+
+---
+
+### 🎯T48 — Bottle relocation at scale
+
+`:any` bottles (32% of the corpus) require text placeholder
+substitution during pour. This works for `readline` (manually
+verified). No bulk validation has been done. `:any_skip_relocation`
+bottles (55%) need no relocation. The remaining 13% have hardcoded
+prefixes and need source builds (🎯T11).
+
+**What to do:**
+- Run the smoke test suite against a representative sample of `:any`
+  bottles to verify relocation produces working installs.
+- Verify runtime functionality (not just pour success) — e.g.,
+  `pkg-config --libs` returns correct paths, shared libraries load.
+- Track which `:any` bottles fail relocation and why.
+
+- **Weight**: 2.5 (value 5 / cost 2)
+- **Status**: not started
+
+---
 
 ### 🎯T18 — Testing oracle
 Automated Homebrew-equivalence testing.
