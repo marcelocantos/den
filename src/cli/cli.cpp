@@ -89,6 +89,9 @@ struct Cli::M {
     std::string smoke_defs;
     int smoke_max = 0;
 
+    // which
+    std::string which_file;
+
     void setup();
 };
 
@@ -731,6 +734,78 @@ void Cli::M::setup() {
         }
         if (count == 0) {
             std::cout << "All packages are up to date.\n";
+        }
+    });
+
+    // --- whence ---
+    auto* whence = app.add_subcommand("whence", "Show which package owns a file");
+    whence->add_option("file", which_file, "File path or command name to look up")->required();
+    whence->callback([this] {
+        auto cfg = Config::detect();
+        fs::path target(which_file);
+
+        // If it's an explicit path (contains a separator), just look it up directly.
+        if (target.filename() != target) {
+            auto result = which_package(cfg.store, target);
+            if (result) {
+                std::cout << result->name << " " << result->version << "\n";
+            } else {
+                std::cerr << "No package owns " << which_file << "\n";
+                std::exit(1);
+            }
+            return;
+        }
+
+        // Bare name: scan entire PATH, report all matches.
+        const char* path_env = std::getenv("PATH");
+        if (!path_env) {
+            std::cerr << "PATH is not set\n";
+            std::exit(1);
+        }
+
+        // First pass: collect all matches.
+        struct Match {
+            std::string path;
+            std::optional<InstalledPackage> pkg;
+        };
+        std::vector<Match> matches;
+
+        std::string path_str(path_env);
+        std::string::size_type start = 0;
+        while (start <= path_str.size()) {
+            auto end = path_str.find(':', start);
+            auto dir = path_str.substr(start, end == std::string::npos ? end : end - start);
+            if (!dir.empty()) {
+                auto candidate = fs::path(dir) / which_file;
+                std::error_code ec;
+                if (fs::exists(candidate, ec)) {
+                    matches.push_back({candidate.string(),
+                                       which_package(cfg.store, candidate)});
+                }
+            }
+            if (end == std::string::npos) break;
+            start = end + 1;
+        }
+
+        if (matches.empty()) {
+            std::cerr << which_file << " not found on PATH\n";
+            std::exit(1);
+        }
+
+        // Second pass: print column-aligned.
+        size_t max_path = 0;
+        for (const auto& m : matches)
+            max_path = std::max(max_path, m.path.size());
+
+        for (const auto& m : matches) {
+            std::cout << std::left << std::setw(static_cast<int>(max_path + 2))
+                      << m.path;
+            if (m.pkg) {
+                std::cout << m.pkg->name << " " << m.pkg->version;
+            } else {
+                std::cout << "(not managed by den)";
+            }
+            std::cout << "\n";
         }
     });
 

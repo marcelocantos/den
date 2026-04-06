@@ -49,4 +49,45 @@ std::vector<InstalledPackage> list_installed(const fs::path& store) {
     return result;
 }
 
+std::optional<InstalledPackage> which_package(const fs::path& store, const fs::path& file) {
+    std::error_code ec;
+
+    // Resolve symlinks to get the real path in the store.
+    auto real = fs::canonical(file, ec);
+    if (ec) {
+        return std::nullopt;
+    }
+
+    // Check if the real path is under the store directory.
+    auto store_canonical = fs::canonical(store, ec);
+    if (ec) {
+        return std::nullopt;
+    }
+
+    auto rel = real.lexically_relative(store_canonical);
+    if (rel.empty() || *rel.begin() == "..") {
+        return std::nullopt;
+    }
+
+    // Store layout: <name>/<version>/...
+    // Extract the first two path components.
+    auto it = rel.begin();
+    if (it == rel.end()) return std::nullopt;
+    std::string name = it->string();
+    ++it;
+    if (it == rel.end()) return std::nullopt;
+    std::string version = it->string();
+
+    auto pkg_path = store_canonical / name / version;
+    if (!fs::is_directory(pkg_path, ec)) {
+        return std::nullopt;
+    }
+
+    return InstalledPackage{
+        .name = name,
+        .version = version,
+        .path = pkg_path,
+    };
+}
+
 } // namespace den

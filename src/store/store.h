@@ -4,6 +4,7 @@
 #pragma once
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -26,5 +27,10 @@ bool is_installed(const fs::path& store, const std::string& name, const std::str
 
 /// List all installed packages by scanning the store directory.
 std::vector<InstalledPackage> list_installed(const fs::path& store);
+
+/// Identify which installed package owns a given file path.
+/// Resolves symlinks, then matches the real path against the store layout.
+/// Returns nullopt if the file doesn't belong to any installed package.
+std::optional<InstalledPackage> which_package(const fs::path& store, const fs::path& file);
 
 } // namespace den
