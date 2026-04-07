@@ -10,7 +10,7 @@ locking them in.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.4.0.
+Snapshot as of v0.5.0.
 
 ### CLI commands
 
@@ -44,6 +44,7 @@ Snapshot as of v0.4.0.
 | `den outdated` | Stable | |
 | `den services list\|start\|stop\|restart` | Needs review | Will be replaced by built-in supervisor (🎯T33) |
 | `den whence <file-or-name>` | Stable | Resolves file/command to owning package |
+| `den self-update` | Stable | Downloads and replaces the den binary |
 | `den smoke [--defs] [-n]` | Fluid | Internal testing tool, may change |
 | `den --version` | Stable | |
 | `den --help` | Stable | |

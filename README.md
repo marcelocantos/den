@@ -143,6 +143,7 @@ Run `den --help` for the full list. Key commands:
 | `den env show [path]` | Show resolved packages |
 | `den env freeze` | Export environment as JSON lockfile |
 | `den whence <file-or-name>` | Show which package owns a file or command |
+| `den self-update` | Update den to the latest release |
 | `den cleanup` | Remove old versions and cache files |
 | `den autoremove` | Remove unused dependencies |
 | `den services list` | Show managed services |
