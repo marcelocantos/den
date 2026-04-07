@@ -745,9 +745,16 @@ void Cli::M::setup() {
         auto cfg = Config::detect();
         fs::path target(which_file);
 
+        // Try den store first, then Homebrew Cellar.
+        auto try_lookup = [&](const fs::path& file) -> std::optional<InstalledPackage> {
+            auto result = which_package(cfg.store, file);
+            if (result) return result;
+            return which_package(cfg.homebrew_cellar, file);
+        };
+
         // If it's an explicit path (contains a separator), just look it up directly.
         if (target.filename() != target) {
-            auto result = which_package(cfg.store, target);
+            auto result = try_lookup(target);
             if (result) {
                 std::cout << result->name << " " << result->version << "\n";
             } else {
@@ -781,7 +788,7 @@ void Cli::M::setup() {
                 std::error_code ec;
                 if (fs::exists(candidate, ec)) {
                     matches.push_back({candidate.string(),
-                                       which_package(cfg.store, candidate)});
+                                       try_lookup(candidate)});
                 }
             }
             if (end == std::string::npos) break;
