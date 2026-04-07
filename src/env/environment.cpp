@@ -10,10 +10,12 @@
 
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <map>
 
 namespace den {
 
@@ -21,12 +23,61 @@ fs::path env_dir(const fs::path& den_home, const std::string& env_path) {
     return den_home / "envs" / env_slug(env_path);
 }
 
+namespace {
+
+/// Extract the base name from a versioned formula name.
+/// "python@3.12" -> "python", "ffmpeg" -> "ffmpeg"
+std::string base_name(const std::string& name) {
+    auto at = name.find('@');
+    return at != std::string::npos ? name.substr(0, at) : name;
+}
+
+} // namespace
+
 uint32_t materialise(const fs::path& den_home, const fs::path& store,
                      const std::string& env_path, const PackageIndex* idx) {
     auto resolved = resolve(den_home, env_path);
+    auto manifest = read_manifest(den_home, env_path);
     auto dir = env_dir(den_home, env_path);
 
     fs::create_directories(dir);
+
+    // Detect versioned formula families (e.g. python@3.11 and python@3.12).
+    // For each family with multiple members, only link the one that's an
+    // explicit install (not auto-dep). If multiple are explicit, link the
+    // one with the highest version string.
+    std::set<std::string> skip_versioned;
+    {
+        std::map<std::string, std::vector<std::string>> families;
+        for (const auto& [name, _] : resolved) {
+            if (name.find('@') != std::string::npos) {
+                families[base_name(name)].push_back(name);
+            }
+        }
+        for (const auto& [base, members] : families) {
+            if (members.size() <= 1) continue;
+
+            // Prefer explicit installs over auto-deps.
+            std::vector<std::string> explicit_members;
+            for (const auto& m : members) {
+                if (!manifest.auto_deps.count(m)) {
+                    explicit_members.push_back(m);
+                }
+            }
+
+            // From the candidates, pick the highest version string.
+            const auto& candidates = explicit_members.empty() ? members : explicit_members;
+            auto winner = *std::max_element(candidates.begin(), candidates.end());
+
+            for (const auto& m : members) {
+                if (m != winner) {
+                    skip_versioned.insert(m);
+                    SPDLOG_INFO("{}  skipped (versioned family '{}', linking {} instead)",
+                                m, base, winner);
+                }
+            }
+        }
+    }
 
     uint32_t total = 0;
 
@@ -34,6 +85,21 @@ uint32_t materialise(const fs::path& den_home, const fs::path& store,
         auto pkg_path = package_path(store, name, version);
         if (!fs::exists(pkg_path)) {
             SPDLOG_WARN("package {}@{} not in store, skipping", name, version);
+            continue;
+        }
+
+        // Skip versioned family members that lost the dedup election.
+        // They stay in the store but don't get linked into the environment.
+        if (skip_versioned.count(name)) {
+            // Still create opt/ link.
+            auto opt_dir = dir / "opt";
+            fs::create_directories(opt_dir);
+            auto opt_link = opt_dir / name;
+            std::error_code ec;
+            if (fs::is_symlink(opt_link, ec)) fs::remove(opt_link, ec);
+            fs::create_symlink(pkg_path, opt_link, ec);
+            if (!ec) ++total;
+            record_linked_version(dir, name, version);
             continue;
         }
 
