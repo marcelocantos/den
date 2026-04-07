@@ -901,6 +901,70 @@ Relocation is only relevant for den-specific metadata files in
 
 ---
 
+### 🎯T50 — Self-hosting
+
+Den manages itself as a package. `den outdated` reports when a new
+den release is available. `den self-update` downloads the new binary
+from GitHub Releases, verifies the SHA256, and atomically replaces
+the running binary.
+
+**Key constraint:** Den is pinned at the globally installed version
+in every environment. `den use den <version>` is an error — the only
+way to change den's version is `den self-update`, which updates the
+binary and every manifest atomically. This prevents different
+environments from running different den versions, which would risk
+manifest format mismatches and subtle bugs.
+
+**Bootstrap:** `install.sh` for first install (can't use den before
+den exists). After that, den manages its own upgrades.
+
+**Mechanism:**
+1. Check latest release tag via GitHub Releases API
+2. Compare against `DEN_VERSION`
+3. Download platform-appropriate tarball to temp path
+4. Verify SHA256 checksum
+5. `rename(temp, target)` — atomic, no window where binary is missing
+6. Update den's version in all manifests
+
+**Future:** This is the seed of 🎯T23 (multi-provider) — den's own
+GitHub releases are the first non-Homebrew package source.
+
+- **Weight**: 2.5 (value 5 / cost 2)
+- **Status**: not started
+
+---
+
+### 🎯T51 — Safe automatic upgrades
+
+The daemon (🎯T13) should detect running processes from managed
+packages before applying automatic upgrades. If `openssl` is in use
+by a running process, don't replace its files until the process
+exits or the user explicitly requests it.
+
+**Detection:** Scan `/proc/<pid>/maps` (Linux) or `lsof` (macOS) for
+open files under the Cellar. If any file from a keg is in use, defer
+that keg's upgrade.
+
+- **Weight**: 1 (value 5 / cost 5)
+- **Depends on**: 🎯T13
+- **Status**: not started
+
+---
+
+### 🎯T52 — Restart services after upgrade
+
+When a package with a running service (🎯T33) is upgraded, the
+supervisor should automatically restart the service using the new
+version. This should be atomic: stop the old service, swap the
+version link, start the new service. If the new version fails to
+start, roll back to the old version.
+
+- **Weight**: 1 (value 5 / cost 5)
+- **Depends on**: 🎯T33
+- **Status**: not started
+
+---
+
 ### 🎯T18 — Testing oracle
 Automated Homebrew-equivalence testing.
 - **Weight**: 0.6 (value 5 / cost 8)

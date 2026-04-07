@@ -9,6 +9,7 @@
 #include "../core/config.h"
 #include "../core/error.h"
 #include "../daemon/daemon.h"
+#include "../selfupdate/selfupdate.h"
 #include "../smoke/runner.h"
 #include "../doctor/doctor.h"
 #include "../env/environment.h"
@@ -919,6 +920,18 @@ void Cli::M::setup() {
             }
         }
 #endif
+    });
+
+    // --- self-update ---
+    auto* selfupdate = app.add_subcommand("self-update", "Update den to the latest version");
+    selfupdate->callback([] {
+        auto cfg = Config::detect();
+        auto info = check_for_update(cfg);
+        if (!info) {
+            std::cout << "den " << DEN_VERSION << " is up to date.\n";
+            return;
+        }
+        apply_update(*info, cfg);
     });
 
     // --- smoke ---
