@@ -201,7 +201,7 @@ void install_packages(const Config& config, const PackageIndex& idx,
 
     // Re-materialise.
     std::cout << "==> Materialising environment...\n";
-    auto links = materialise(config.den_home, config.store, active);
+    auto links = materialise(config.den_home, config.store, active, &idx);
     std::cout << "  " << links << " symlinks\n";
 }
 
@@ -298,7 +298,7 @@ void upgrade_packages(const Config& config, const PackageIndex& idx,
 
     // Re-materialise.
     std::cout << "==> Materialising environment...\n";
-    auto links = materialise(config.den_home, config.store, active);
+    auto links = materialise(config.den_home, config.store, active, &idx);
     std::cout << "  " << links << " symlinks\n";
     std::cout << "==> " << upgrades.size() << " package(s) upgraded.\n";
 }

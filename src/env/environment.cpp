@@ -21,7 +21,8 @@ fs::path env_dir(const fs::path& den_home, const std::string& env_path) {
     return den_home / "envs" / env_slug(env_path);
 }
 
-uint32_t materialise(const fs::path& den_home, const fs::path& store, const std::string& env_path) {
+uint32_t materialise(const fs::path& den_home, const fs::path& store,
+                     const std::string& env_path, const PackageIndex* idx) {
     auto resolved = resolve(den_home, env_path);
     auto dir = env_dir(den_home, env_path);
 
@@ -30,10 +31,32 @@ uint32_t materialise(const fs::path& den_home, const fs::path& store, const std:
     uint32_t total = 0;
 
     for (const auto& [name, version] : resolved) {
-        auto pkg = package_path(store, name, version);
-        if (!fs::exists(pkg)) {
+        auto pkg_path = package_path(store, name, version);
+        if (!fs::exists(pkg_path)) {
             SPDLOG_WARN("package {}@{} not in store, skipping", name, version);
             continue;
+        }
+
+        // Skip keg-only packages (they shadow system tools).
+        // Still create opt/<name> so dependencies can find them.
+        if (idx) {
+            const auto* pkg_info = idx->find(name);
+            if (pkg_info && pkg_info->keg_only) {
+                auto opt_dir = dir / "opt";
+                fs::create_directories(opt_dir);
+                auto opt_link = opt_dir / name;
+                std::error_code ec;
+                if (fs::is_symlink(opt_link, ec)) {
+                    fs::remove(opt_link, ec);
+                }
+                fs::create_symlink(pkg_path, opt_link, ec);
+                if (!ec) {
+                    ++total;
+                    SPDLOG_INFO("{}@{} is keg-only, linked opt/ only", name, version);
+                }
+                record_linked_version(dir, name, version);
+                continue;
+            }
         }
 
         // Check if already linked at the correct version.
@@ -49,7 +72,7 @@ uint32_t materialise(const fs::path& den_home, const fs::path& store, const std:
             unlink_package(old_pkg, dir, name);
         }
 
-        total += link_package(pkg, dir, name);
+        total += link_package(pkg_path, dir, name);
         record_linked_version(dir, name, version);
     }
 

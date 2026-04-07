@@ -77,6 +77,22 @@ Package transform_formula(const json& f) {
     pkg.disabled =
         f.contains("disabled") && f["disabled"].is_boolean() && f["disabled"].get<bool>();
 
+    // Keg-only status.
+    pkg.keg_only =
+        f.contains("keg_only") && f["keg_only"].is_boolean() && f["keg_only"].get<bool>();
+    if (f.contains("keg_only_reason") && f["keg_only_reason"].is_object()) {
+        pkg.keg_only_reason = json_string(f["keg_only_reason"], "reason");
+    }
+
+    // Conflict declarations.
+    if (f.contains("conflicts_with") && f["conflicts_with"].is_array()) {
+        for (const auto& c : f["conflicts_with"]) {
+            if (c.is_string()) {
+                pkg.conflicts_with.push_back(c.get<std::string>());
+            }
+        }
+    }
+
     // Version: prefer versions.stable.
     if (f.contains("versions") && f["versions"].contains("stable")) {
         pkg.version = f["versions"]["stable"].get<std::string>();
