@@ -9,6 +9,7 @@
 #include "../core/config.h"
 #include "../core/error.h"
 #include "../daemon/daemon.h"
+#include "../selfupdate/selfupdate.h"
 #include "../smoke/runner.h"
 #include "../doctor/doctor.h"
 #include "../env/environment.h"
@@ -744,9 +745,16 @@ void Cli::M::setup() {
         auto cfg = Config::detect();
         fs::path target(which_file);
 
+        // Try den store first, then Homebrew Cellar.
+        auto try_lookup = [&](const fs::path& file) -> std::optional<InstalledPackage> {
+            auto result = which_package(cfg.store, file);
+            if (result) return result;
+            return which_package(cfg.homebrew_cellar, file);
+        };
+
         // If it's an explicit path (contains a separator), just look it up directly.
         if (target.filename() != target) {
-            auto result = which_package(cfg.store, target);
+            auto result = try_lookup(target);
             if (result) {
                 std::cout << result->name << " " << result->version << "\n";
             } else {
@@ -780,7 +788,7 @@ void Cli::M::setup() {
                 std::error_code ec;
                 if (fs::exists(candidate, ec)) {
                     matches.push_back({candidate.string(),
-                                       which_package(cfg.store, candidate)});
+                                       try_lookup(candidate)});
                 }
             }
             if (end == std::string::npos) break;
@@ -919,6 +927,18 @@ void Cli::M::setup() {
             }
         }
 #endif
+    });
+
+    // --- self-update ---
+    auto* selfupdate = app.add_subcommand("self-update", "Update den to the latest version");
+    selfupdate->callback([] {
+        auto cfg = Config::detect();
+        auto info = check_for_update(cfg);
+        if (!info) {
+            std::cout << "den " << DEN_VERSION << " is up to date.\n";
+            return;
+        }
+        apply_update(*info, cfg);
     });
 
     // --- smoke ---

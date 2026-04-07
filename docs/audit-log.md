@@ -1,5 +1,10 @@
 # Audit Log
 
+## 2026-04-07 — /release v0.5.0
+
+- **Commit**: (pending)
+- **Outcome**: Released v0.5.0 (darwin-aarch64, linux-x86_64, linux-aarch64). New `den self-update` command. Fixed `den whence` to resolve Homebrew Cellar packages.
+
 ## 2026-04-07 — /release v0.4.0
 
 - **Commit**: `41ccfe4`
