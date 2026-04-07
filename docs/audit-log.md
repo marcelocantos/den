@@ -1,5 +1,10 @@
 # Audit Log
 
+## 2026-04-07 — /release v0.4.0
+
+- **Commit**: (pending)
+- **Outcome**: Released v0.4.0 (darwin-aarch64, linux-x86_64, linux-aarch64). New `den whence` command for file/command ownership lookup. Architectural decision 🎯T49 (shared Cellar at /opt/homebrew). Homebrew formula added to marcelocantos/tap.
+
 ## 2026-03-30 — /release v0.3.0
 
 - **Commit**: `c5bce51`

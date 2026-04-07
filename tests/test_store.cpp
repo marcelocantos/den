@@ -115,6 +115,52 @@ TEST_SUITE("store::list_installed") {
 
 }
 
+TEST_SUITE("store::which_package") {
+
+    TEST_CASE("identifies package from a file inside the store") {
+        TmpDir tmp;
+        auto pkg = tmp.path / "tree" / "2.1.1";
+        fs::create_directories(pkg / "bin");
+        std::ofstream(pkg / "bin" / "tree") << "#!/bin/sh\n";
+
+        auto result = which_package(tmp.path, pkg / "bin" / "tree");
+        REQUIRE(result.has_value());
+        CHECK(result->name == "tree");
+        CHECK(result->version == "2.1.1");
+    }
+
+    TEST_CASE("resolves symlinks to find the owning package") {
+        TmpDir tmp;
+        auto pkg = tmp.path / "tree" / "2.1.1";
+        fs::create_directories(pkg / "bin");
+        std::ofstream(pkg / "bin" / "tree") << "#!/bin/sh\n";
+
+        // Create a symlink outside the store pointing into it.
+        auto link = tmp.path / "link_to_tree";
+        fs::create_symlink(pkg / "bin" / "tree", link);
+
+        auto result = which_package(tmp.path, link);
+        REQUIRE(result.has_value());
+        CHECK(result->name == "tree");
+        CHECK(result->version == "2.1.1");
+    }
+
+    TEST_CASE("returns nullopt for file outside the store") {
+        TmpDir tmp;
+        fs::create_directories(tmp.path / "tree" / "2.1.1");
+
+        auto result = which_package(tmp.path, "/usr/bin/ls");
+        CHECK_FALSE(result.has_value());
+    }
+
+    TEST_CASE("returns nullopt for nonexistent file") {
+        TmpDir tmp;
+        auto result = which_package(tmp.path, tmp.path / "no" / "such" / "file");
+        CHECK_FALSE(result.has_value());
+    }
+
+}
+
 // ---------------------------------------------------------------------------
 // link.h tests
 // ---------------------------------------------------------------------------
