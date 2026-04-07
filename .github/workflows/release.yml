@@ -1,3 +1,5 @@
+# No Homebrew tap — den replaces Homebrew, so distributing via tap is circular.
+# Binaries are distributed via install.sh and GitHub Release assets.
 name: Release
 
 on:
