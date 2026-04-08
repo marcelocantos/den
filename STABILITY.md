@@ -10,7 +10,7 @@ locking them in.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.5.0.
+Snapshot as of v0.6.0.
 
 ### CLI commands
 

@@ -1,5 +1,10 @@
 # Audit Log
 
+## 2026-04-08 — /release v0.6.0
+
+- **Commit**: (pending)
+- **Outcome**: Released v0.6.0 (darwin-aarch64, linux-x86_64, linux-aarch64). Keg-only linking fix, conflicts_with enforcement, versioned formula family dedup.
+
 ## 2026-04-07 — /release v0.5.0
 
 - **Commit**: `2fa462f`
