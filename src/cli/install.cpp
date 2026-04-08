@@ -166,11 +166,32 @@ bool install_one(const Config& config, const Package& pkg) {
 void install_packages(const Config& config, const PackageIndex& idx,
                       const std::vector<std::string>& names) {
     auto active = active_env_path(config.den_home);
+    auto manifest = read_manifest(config.den_home, active);
 
     for (const auto& name : names) {
         auto* pkg = idx.find(name);
         if (!pkg) {
             throw UserError("package '" + name + "' not found in index. Run `den update` first.");
+        }
+
+        // Check for conflicts with already-installed packages.
+        for (const auto& conflict : pkg->conflicts_with) {
+            if (manifest.packages.count(conflict)) {
+                throw UserError("cannot install '" + name + "': conflicts with '" + conflict +
+                                "' (already installed). Uninstall '" + conflict + "' first.");
+            }
+        }
+        // Reverse check: does anything installed conflict with this?
+        for (const auto& [installed_name, _] : manifest.packages) {
+            const auto* installed_pkg = idx.find(installed_name);
+            if (!installed_pkg) continue;
+            for (const auto& conflict : installed_pkg->conflicts_with) {
+                if (conflict == name) {
+                    throw UserError("cannot install '" + name + "': conflicts with '" +
+                                    installed_name + "' (already installed). Uninstall '" +
+                                    installed_name + "' first.");
+                }
+            }
         }
 
         // Resolve full dependency tree.
@@ -201,7 +222,7 @@ void install_packages(const Config& config, const PackageIndex& idx,
 
     // Re-materialise.
     std::cout << "==> Materialising environment...\n";
-    auto links = materialise(config.den_home, config.store, active);
+    auto links = materialise(config.den_home, config.store, active, &idx);
     std::cout << "  " << links << " symlinks\n";
 }
 
@@ -298,7 +319,7 @@ void upgrade_packages(const Config& config, const PackageIndex& idx,
 
     // Re-materialise.
     std::cout << "==> Materialising environment...\n";
-    auto links = materialise(config.den_home, config.store, active);
+    auto links = materialise(config.den_home, config.store, active, &idx);
     std::cout << "  " << links << " symlinks\n";
     std::cout << "==> " << upgrades.size() << " package(s) upgraded.\n";
 }

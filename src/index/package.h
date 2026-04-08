@@ -37,6 +37,11 @@ struct Package {
     std::optional<std::string> source_url;
     std::optional<std::string> source_sha256;
 
+    // Linking control.
+    bool keg_only = false;
+    std::string keg_only_reason; // e.g. ":versioned_formula", ":provided_by_macos", or custom
+    std::vector<std::string> conflicts_with;
+
     // Metadata.
     bool deprecated = false;
     bool disabled = false;

@@ -124,7 +124,7 @@ void Cli::M::setup() {
                     m.packages[name] = version;
                 });
             }
-            auto links = materialise(cfg.den_home, cfg.store, active);
+            auto links = materialise(cfg.den_home, cfg.store, active, &idx);
             std::cout << "Materialised: " << links << " symlinks.\n";
         } else {
             install_packages(cfg, idx, install_names);
