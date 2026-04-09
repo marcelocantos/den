@@ -85,10 +85,13 @@ std::string build_path_fish(const fs::path& env_bin, const fs::path& den_bin) {
 void emit_posix_init(const Config& config, const std::string& shell) {
     const std::string den_bin = dquote(config.den_home / "bin");
 
-    // The `den env use <name>` wrapper evals the output of `den shell-env`.
-    // We define it for both bash and zsh identically.
+    // Ensure den's own binary is on PATH before defining the wrapper
+    // function. shell-env will later prepend the active environment's bin/
+    // as well, but we need den itself to be findable first.
     std::cout << "# den shell integration (" << shell
               << ")\n"
+                 "export PATH=" << den_bin << ":\"$PATH\"\n"
+                 "\n"
                  "den() {\n"
                  "  if [ \"$1\" = \"env\" ] && [ \"$2\" = \"use\" ]; then\n"
                  "    eval \"$(command den shell-env \"${3:-default}\")\"\n"
@@ -109,6 +112,8 @@ void emit_posix_init(const Config& config, const std::string& shell) {
 void emit_fish_init(const Config& config) {
     std::cout
         << "# den shell integration (fish)\n"
+           "set -gx PATH " << fish_quote(config.den_home / "bin") << " $PATH\n"
+           "\n"
            "function den\n"
            "    if test (count $argv) -ge 2 -a \"$argv[1]\" = \"env\" -a \"$argv[2]\" = \"use\"\n"
            "        eval (command den shell-env (count $argv -ge 3 && echo $argv[3] || echo "

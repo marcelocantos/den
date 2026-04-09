@@ -170,10 +170,10 @@ void apply_update(const UpdateInfo& info, const Config& cfg) {
         throw UserError("extracted tarball does not contain 'den' binary");
     }
 
-    // Make executable.
-    fs::permissions(new_binary, fs::perms::owner_exec | fs::perms::owner_read |
-                                   fs::perms::group_exec | fs::perms::group_read |
-                                   fs::perms::others_exec | fs::perms::others_read,
+    // Make executable and writable (owner needs write for future updates).
+    fs::permissions(new_binary, fs::perms::owner_all |
+                                   fs::perms::group_read | fs::perms::group_exec |
+                                   fs::perms::others_read | fs::perms::others_exec,
                     fs::perm_options::replace);
 
     // Atomic replace: rename new binary over old.
