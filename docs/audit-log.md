@@ -1,5 +1,10 @@
 # Audit Log
 
+## 2026-04-09 — /release v0.7.0
+
+- **Commit**: (pending)
+- **Outcome**: Released v0.7.0 (darwin-aarch64, linux-x86_64, linux-aarch64). Fixed shell init PATH and self-update file permissions.
+
 ## 2026-04-08 — /release v0.6.0
 
 - **Commit**: `8005bef`
