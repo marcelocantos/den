@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "daemon.h"
+#include "../activity/activity.h"
 #include "../core/error.h"
 
 #include <nlohmann/json.hpp>
@@ -375,6 +376,17 @@ void run_daemon(const Config& config) {
                                          " package(s)");
                 // TODO: apply upgrades, clear state.pending on success.
                 state.last_upgrade = now_secs();
+
+                // Record upgrade activity.
+                {
+                    auto ts = now_secs();
+                    std::vector<ActivityEntry> entries;
+                    entries.reserve(state.pending.size());
+                    for (const auto& p : state.pending) {
+                        entries.push_back({ts, p.name, p.installed, p.available, "daemon"});
+                    }
+                    record_activity(den_home, entries);
+                }
             } else {
                 SPDLOG_DEBUG("daemon: outside maintenance window '{}', skipping upgrade",
                              settings.upgrade_window);

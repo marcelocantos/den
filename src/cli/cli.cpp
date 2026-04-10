@@ -5,6 +5,7 @@
 #include "install.h"
 #include "shell.h"
 
+#include "../activity/activity.h"
 #include "../build/source_build.h"
 #include "../core/config.h"
 #include "../core/error.h"
@@ -92,6 +93,10 @@ struct Cli::M {
 
     // which
     std::string which_file;
+
+    // log
+    int log_count = 20;
+    bool log_json = false;
 
     void setup();
 };
@@ -735,6 +740,44 @@ void Cli::M::setup() {
         }
         if (count == 0) {
             std::cout << "All packages are up to date.\n";
+        }
+    });
+
+    // --- log ---
+    auto* log_cmd = app.add_subcommand("log", "Show upgrade activity log");
+    log_cmd->add_option("-n,--count", log_count, "Number of entries to show (default 20)");
+    log_cmd->add_flag("--json", log_json, "Output as JSON");
+    log_cmd->callback([this] {
+        auto cfg = Config::detect();
+        auto entries = read_activity(cfg.den_home, log_count > 0 ? static_cast<size_t>(log_count) : 0);
+        if (entries.empty()) {
+            std::cout << "No upgrade activity recorded.\n";
+            return;
+        }
+        if (log_json) {
+            nlohmann::json arr = nlohmann::json::array();
+            for (const auto& e : entries) {
+                arr.push_back({
+                    {"timestamp", e.timestamp},
+                    {"package", e.package},
+                    {"from", e.from_version},
+                    {"to", e.to_version},
+                    {"trigger", e.trigger},
+                });
+            }
+            std::cout << arr.dump(2) << "\n";
+            return;
+        }
+        // Human-readable output.
+        for (const auto& e : entries) {
+            std::time_t t = static_cast<std::time_t>(e.timestamp);
+            std::tm* lt = std::localtime(&t);
+            char buf[20] = {};
+            if (lt)
+                std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", lt);
+            std::cout << buf << "  " << std::left << std::setw(24) << e.package
+                      << e.from_version << " -> " << e.to_version
+                      << "  (" << e.trigger << ")\n";
         }
     });
 

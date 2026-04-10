@@ -3,8 +3,10 @@
 
 #include "install.h"
 
+#include "../activity/activity.h"
 #include "../core/error.h"
 #include "../build/relocate.h"
+#include "../daemon/daemon.h"
 #include "../download/archive.h"
 #include "../download/fetch.h"
 #include "../env/environment.h"
@@ -316,6 +318,17 @@ void upgrade_packages(const Config& config, const PackageIndex& idx,
             m.packages[u.name] = u.available;
         }
     });
+
+    // Record upgrade activity.
+    {
+        auto ts = now_secs();
+        std::vector<ActivityEntry> entries;
+        entries.reserve(upgrades.size());
+        for (const auto& u : upgrades) {
+            entries.push_back({ts, u.name, u.installed, u.available, "manual"});
+        }
+        record_activity(config.den_home, entries);
+    }
 
     // Re-materialise.
     std::cout << "==> Materialising environment...\n";
