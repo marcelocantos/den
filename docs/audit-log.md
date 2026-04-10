@@ -1,5 +1,10 @@
 # Audit Log
 
+## 2026-04-10 — /release v0.8.0
+
+- **Commit**: `561408c`
+- **Outcome**: Released v0.8.0 (darwin-aarch64, linux-x86_64, linux-aarch64). New `den log` command for structured upgrade activity reporting.
+
 ## 2026-04-09 — /release v0.7.0
 
 - **Commit**: `560c5cd`
