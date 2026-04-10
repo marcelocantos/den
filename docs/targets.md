@@ -408,21 +408,6 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-09
 
-### 🎯T53 Upgrade activity is logged and queryable via `den log`
-- **Value**: 5
-- **Cost**: 3
-- **Acceptance**:
-  - A structured activity log records every upgrade event (package, old version, new version, timestamp, trigger: manual/auto/daemon)
-  - `den log` displays recent upgrade activity in human-readable format
-  - `den log --json` outputs machine-readable activity
-  - Both manual `den upgrade` and daemon auto-upgrades write to the log
-  - Log is stored in ~/.den/activity.json (append-only, atomic writes)
-- **Context**: Den currently has a daemon.log (unstructured text) and daemon_state.json (current state only, no history). Users need visibility into what was upgraded, when, and by what trigger — especially important when the daemon auto-upgrades in the background. Without a queryable history, users can't answer "what changed?" after something breaks.
-- **Tags**: cli, daemon
-- **Origin**: user request
-- **Status**: Identified
-- **Discovered**: 2026-04-10
-
 ### 🎯T6 Dependency resolution
 - **Value**: 1
 - **Cost**: 1
@@ -457,7 +442,22 @@
 
 ## Achieved
 
-(none)
+### 🎯T53 Upgrade activity is logged and queryable via `den log`
+- **Value**: 5
+- **Cost**: 3
+- **Acceptance**:
+  - A structured activity log records every upgrade event (package, old version, new version, timestamp, trigger: manual/auto/daemon)
+  - `den log` displays recent upgrade activity in human-readable format
+  - `den log --json` outputs machine-readable activity
+  - Both manual `den upgrade` and daemon auto-upgrades write to the log
+  - Log is stored in ~/.den/activity.json (append-only, atomic writes)
+- **Context**: Den currently has a daemon.log (unstructured text) and daemon_state.json (current state only, no history). Users need visibility into what was upgraded, when, and by what trigger — especially important when the daemon auto-upgrades in the background. Without a queryable history, users can't answer "what changed?" after something breaks.
+- **Tags**: cli, daemon
+- **Origin**: user request
+- **Status**: Achieved
+- **Discovered**: 2026-04-10
+- **Achieved**: 2026-04-10
+- **Actual-cost**: 3
 
 ## Graph
 
@@ -512,7 +512,6 @@ graph TD
     T50["Self-hosting"]
     T51["Safe automatic upgrades"]
     T52["Restart services after upgrade"]
-    T53["Upgrade activity is logged an…"]
     T6["Dependency resolution"]
     T7["Download caching"]
     T8["Bottle pouring"]

@@ -516,9 +516,10 @@ targets:
     discovered: 2026-04-09
   T53:
     name: Upgrade activity is logged and queryable via `den log`
-    status: identified
+    status: achieved
     value: 5.0
     cost: 3.0
+    actual_cost: 3.0
     acceptance:
     - 'A structured activity log records every upgrade event (package, old version, new version, timestamp, trigger: manual/auto/daemon)'
     - '`den log` displays recent upgrade activity in human-readable format'
@@ -531,6 +532,7 @@ targets:
     - daemon
     origin: user request
     discovered: 2026-04-10
+    achieved: 2026-04-10
   T6:
     name: Dependency resolution
     status: identified
