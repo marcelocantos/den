@@ -147,6 +147,7 @@ Run `den --help` for the full list. Key commands:
 | `den cleanup` | Remove old versions and cache files |
 | `den autoremove` | Remove unused dependencies |
 | `den services list` | Show managed services |
+| `den log [-n] [--json]` | Show upgrade activity log |
 | `den daemon status` | Daemon and pending upgrade status |
 | `den doctor` | Check system health and report issues |
 | `den smoke` | Run smoke tests against installed packages |

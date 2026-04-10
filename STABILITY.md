@@ -10,7 +10,7 @@ locking them in.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.7.0.
+Snapshot as of v0.8.0.
 
 ### CLI commands
 
@@ -45,6 +45,7 @@ Snapshot as of v0.7.0.
 | `den services list\|start\|stop\|restart` | Needs review | Will be replaced by built-in supervisor (🎯T33) |
 | `den whence <file-or-name>` | Stable | Resolves file/command to owning package |
 | `den self-update` | Stable | Downloads and replaces the den binary |
+| `den log [-n <count>] [--json]` | Stable | Upgrade activity log |
 | `den smoke [--defs] [-n]` | Fluid | Internal testing tool, may change |
 | `den --version` | Stable | |
 | `den --help` | Stable | |
@@ -84,6 +85,7 @@ Snapshot as of v0.7.0.
 | `daemon_state.json` | Needs review | Internal daemon state |
 | `daemon.pid` | Stable | Plain text PID |
 | `daemon.log` | Stable | Plain text log |
+| `activity.json` | Stable | Structured upgrade activity log |
 
 ### Directory layout (`~/.den/`)
 
@@ -97,6 +99,7 @@ Snapshot as of v0.7.0.
 | `config.json` | Stable | Settings |
 | `daemon.pid` | Stable | Daemon PID file |
 | `daemon.log` | Stable | Daemon log |
+| `activity.json` | Stable | Upgrade activity log |
 
 ## Gaps and prerequisites for 1.0
 
