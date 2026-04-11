@@ -263,19 +263,6 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-09
 
-### 🎯T55 Install-body extractor tracks nesting depth correctly for method-with-do forms
-- **Value**: 2
-- **Cost**: 2
-- **Acceptance**:
-  - `src/build/formula_parser.cpp::extract_install_body` recognises any line ending in ` do` or `|` as opening a new scope, not just `def`/`do`/`if`/`unless`/`case`/`begin`. In particular, `resource "name" do`, `Dir.chdir("x") do`, and `each do |x|` all increment depth so the matching `end` does not prematurely terminate the install body.
-  - Regression test: a formula whose install body contains `resource "extra" do ... end` followed by further statements (`inreplace`, `system`, etc.) is fully scanned — all trailing statements contribute complexity markers instead of being silently truncated.
-  - No existing passing test cases regress.
-- **Context**: Discovered on 2026-04-11 while implementing 🎯T18's complexity-marker scaffolding. The `extract_install_body` helper (introduced in the C++ parser) tracks nesting depth with a narrow keyword list (`def`/`do`/`if`/`unless`/`case`/`begin`). Any line of the form `<method> "arg" do` (e.g. `resource "x" do`, `Dir.chdir("x") do`, `each do |x|`) does NOT increment depth, but the matching `end` DOES decrement it — so the extractor closes the install body early. The 🎯T18 parser now flags `resource`/`do` with complexity markers as designed, but any statements *after* the nested block are never seen by the parser loop at all, because the body string was already truncated upstream. This is a silent-data-loss bug in a different layer from the one 🎯T18 closes. **How to apply:** Fix by treating any line that matches ` do` / `|` / starts with `do ` / ends with `do` as a depth-increment, mirroring the complexity detector's heuristics. Add a regression test mirroring the one that's currently working around this (see `tests/test_formula_parser.cpp` — the "collects ALL markers" case had to drop a `resource` block because of this bug). Keep changes scoped to `extract_install_body`; the complexity detector stays authoritative for marker emission.
-- **Tags**: parser, soundness, forked-from-T18
-- **Origin**: Discovered on 2026-04-11 during 🎯T18 implementation — unit test for marker collection hit early-termination in extract_install_body
-- **Status**: Identified
-- **Discovered**: 2026-04-11
-
 ## Achieved
 
 ### 🎯T1 Core infrastructure
@@ -540,6 +527,21 @@ There is no sunset. T54 should not exist. Retiring it rather than editing furthe
 - **Achieved**: 2026-04-11
 - **Actual-cost**: 1
 
+### 🎯T55 Install-body extractor tracks nesting depth correctly for method-with-do forms
+- **Value**: 2
+- **Cost**: 2
+- **Acceptance**:
+  - `src/build/formula_parser.cpp::extract_install_body` recognises any line ending in ` do` or `|` as opening a new scope, not just `def`/`do`/`if`/`unless`/`case`/`begin`. In particular, `resource "name" do`, `Dir.chdir("x") do`, and `each do |x|` all increment depth so the matching `end` does not prematurely terminate the install body.
+  - Regression test: a formula whose install body contains `resource "extra" do ... end` followed by further statements (`inreplace`, `system`, etc.) is fully scanned — all trailing statements contribute complexity markers instead of being silently truncated.
+  - No existing passing test cases regress.
+- **Context**: Discovered on 2026-04-11 while implementing 🎯T18's complexity-marker scaffolding. The `extract_install_body` helper (introduced in the C++ parser) tracks nesting depth with a narrow keyword list (`def`/`do`/`if`/`unless`/`case`/`begin`). Any line of the form `<method> "arg" do` (e.g. `resource "x" do`, `Dir.chdir("x") do`, `each do |x|`) does NOT increment depth, but the matching `end` DOES decrement it — so the extractor closes the install body early. The 🎯T18 parser now flags `resource`/`do` with complexity markers as designed, but any statements *after* the nested block are never seen by the parser loop at all, because the body string was already truncated upstream. This is a silent-data-loss bug in a different layer from the one 🎯T18 closes. **How to apply:** Fix by treating any line that matches ` do` / `|` / starts with `do ` / ends with `do` as a depth-increment, mirroring the complexity detector's heuristics. Add a regression test mirroring the one that's currently working around this (see `tests/test_formula_parser.cpp` — the "collects ALL markers" case had to drop a `resource` block because of this bug). Keep changes scoped to `extract_install_body`; the complexity detector stays authoritative for marker emission.
+- **Tags**: parser, soundness, forked-from-T18
+- **Origin**: Discovered on 2026-04-11 during 🎯T18 implementation — unit test for marker collection hit early-termination in extract_install_body
+- **Status**: Achieved
+- **Discovered**: 2026-04-11
+- **Achieved**: 2026-04-11
+- **Actual-cost**: 2
+
 ### 🎯T6 Dependency resolution
 - **Value**: 1
 - **Cost**: 1
@@ -629,7 +631,6 @@ graph TD
     T5["Tap management"]
     T51["Safe automatic upgrades"]
     T52["Restart services after upgrade"]
-    T55["Install-body extractor tracks…"]
     T25 -.->|needs| T24
     T30 -.->|needs| T29
     T34 -.->|needs| T33
