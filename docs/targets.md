@@ -350,14 +350,6 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-09
 
-### 🎯T49 Shared Cellar at /opt/homebrew, environments in ~/.den
-- **Value**: 13
-- **Cost**: 1.5
-- **Acceptance**: TODO
-- **Context**: Den uses `/opt/homebrew/Cellar/` as the blessed package store — the same location Homebrew uses. Bottles pour directly into their expected prefix with zero relocation needed. Den and Homebrew coexist on the same Cellar.  Environments live in `~/.den/envs/` as symlink sets pointing into the Cellar. `den env use /ml` switches which symlinks are on PATH. Multiple versions coexist in the Cellar; environments pick which version to link.  **What this changes:** - `~/.den/store/` → `/opt/homebrew/Cellar/` as the package store - 100% of bottles pour and work immediately — no source builds needed for hardcoded-prefix packages (openssl, python, git, gcc) - Source builds (🎯T11) become nice-to-have (taps, custom patches, platforms without bottles) rather than critical path - Bundled Ruby (🎯T31) urgency drops — not needed for the common case - Bottle relocation (🎯T48) only matters for the `~/.den` metadata, not for package functionality - 🎯T36 (prefix compatibility layer) is subsumed — no compatibility layer needed when the Cellar is already at the expected prefix - Migration (🎯T37) becomes simpler — den reads the existing Cellar in place rather than copying/importing  **Coexistence with Homebrew:** - Den reads and writes to `/opt/homebrew/Cellar/` alongside Homebrew - Both tools can install packages — den tracks what it manages via its own manifest in `~/.den/` - `den migrate` just adopts the existing Cellar contents into den's manifest — zero file movement  **What den adds over Homebrew:** - Named environments (symlink sets with PATH switching) - Multi-version coinstallation (both versions in Cellar, env picks one) - Background upgrades staged without disruption - Built-in process supervisor - Multi-provider package management (go, cargo, pip, npm)
-- **Status**: Identified
-- **Discovered**: 2026-04-09
-
 ### 🎯T5 Tap management
 - **Value**: 5
 - **Cost**: 5
@@ -448,6 +440,16 @@
 - **Discovered**: 2026-04-09
 - **Achieved**: 2026-04-11
 
+### 🎯T49 Shared Cellar at /opt/homebrew, environments in ~/.den
+- **Value**: 13
+- **Cost**: 1.5
+- **Acceptance**: TODO
+- **Context**: Den uses `/opt/homebrew/Cellar/` as the blessed package store — the same location Homebrew uses. Bottles pour directly into their expected prefix with zero relocation needed. Den and Homebrew coexist on the same Cellar.  Environments live in `~/.den/envs/` as symlink sets pointing into the Cellar. `den env use /ml` switches which symlinks are on PATH. Multiple versions coexist in the Cellar; environments pick which version to link.  **What this changes:** - `~/.den/store/` → `/opt/homebrew/Cellar/` as the package store - 100% of bottles pour and work immediately — no source builds needed for hardcoded-prefix packages (openssl, python, git, gcc) - Source builds (🎯T11) become nice-to-have (taps, custom patches, platforms without bottles) rather than critical path - Bundled Ruby (🎯T31) urgency drops — not needed for the common case - Bottle relocation (🎯T48) only matters for the `~/.den` metadata, not for package functionality - 🎯T36 (prefix compatibility layer) is subsumed — no compatibility layer needed when the Cellar is already at the expected prefix - Migration (🎯T37) becomes simpler — den reads the existing Cellar in place rather than copying/importing  **Coexistence with Homebrew:** - Den reads and writes to `/opt/homebrew/Cellar/` alongside Homebrew - Both tools can install packages — den tracks what it manages via its own manifest in `~/.den/` - `den migrate` just adopts the existing Cellar contents into den's manifest — zero file movement  **What den adds over Homebrew:** - Named environments (symlink sets with PATH switching) - Multi-version coinstallation (both versions in Cellar, env picks one) - Background upgrades staged without disruption - Built-in process supervisor - Multi-provider package management (go, cargo, pip, npm)
+- **Status**: Achieved
+- **Discovered**: 2026-04-09
+- **Achieved**: 2026-04-11
+- **Actual-cost**: 2
+
 ### 🎯T53 Upgrade activity is logged and queryable via `den log`
 - **Value**: 5
 - **Cost**: 3
@@ -511,7 +513,6 @@ graph TD
     T46["Eliminate `brew cat` dependen…"]
     T47["Linux bundled Ruby"]
     T48["Bottle relocation at scale"]
-    T49["Shared Cellar at /opt/homebre…"]
     T5["Tap management"]
     T50["Self-hosting"]
     T51["Safe automatic upgrades"]
