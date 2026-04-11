@@ -113,6 +113,66 @@ end
         CHECK(p.complexity_markers.empty());
     }
 
+    // ------------------------------------------------------------------
+    // 🎯T57: unresolvable `#{...}` interpolations must be refused, not
+    // silently passed through as literal shell tokens.
+    // ------------------------------------------------------------------
+
+    TEST_CASE("unresolvable interpolation in a system arg triggers COMPLEX") {
+        // Real-world case from wget: `Formula[...].opt_prefix` isn't in
+        // the parser's fixed substitution table, so the resulting command
+        // would contain a literal `#{...}` that shell can't interpret.
+        auto src = wrap_install(
+            R"(    system "./configure", "--with-ssl=#{Formula["openssl@3"].opt_prefix}"
+)");
+        auto p = parse_formula(src, "/opt/den/fake/1.0", "fake");
+        CHECK(p.complexity == FormulaComplexity::Complex);
+        CHECK(has_marker(p, "interpolation"));
+    }
+
+    TEST_CASE("known interpolations don't regress to COMPLEX") {
+        // `#{prefix}` is in the known substitution table; the parser
+        // must still resolve it and classify the formula as SIMPLE.
+        auto src = wrap_install(R"(    system "./configure", "--prefix=#{prefix}"
+    system "make", "install"
+)");
+        auto p = parse_formula(src, "/opt/den/fake/1.0", "fake");
+        CHECK(p.complexity == FormulaComplexity::Simple);
+        CHECK(p.complexity_markers.empty());
+        REQUIRE(p.build_commands.size() == 2);
+        CHECK(p.build_commands[0].find("--prefix=/opt/den/fake/1.0") != std::string::npos);
+    }
+
+    TEST_CASE("ENV.append with unresolvable interpolation triggers COMPLEX") {
+        // `#{Formula["foo"].include}` isn't resolvable; the ENV branch
+        // would otherwise store it verbatim in env_settings.
+        auto src = wrap_install(
+            R"(    ENV.append "CFLAGS", "-I#{Formula["foo"].include}"
+)");
+        auto p = parse_formula(src, "/opt/den/fake/1.0", "fake");
+        CHECK(p.complexity == FormulaComplexity::Complex);
+        CHECK(has_marker(p, "interpolation"));
+    }
+
+    TEST_CASE("mkdir_p with unresolvable interpolation triggers COMPLEX") {
+        // `#{buildpath}` isn't in the fixed substitution table.
+        auto src = wrap_install(R"(    mkdir_p "#{buildpath}/out"
+)");
+        auto p = parse_formula(src, "/opt/den/fake/1.0", "fake");
+        CHECK(p.complexity == FormulaComplexity::Complex);
+        CHECK(has_marker(p, "interpolation"));
+    }
+
+    TEST_CASE("mkdir_p with known `#{prefix}` interpolation stays SIMPLE") {
+        auto src = wrap_install(R"(    mkdir_p "#{prefix}/share/fake"
+)");
+        auto p = parse_formula(src, "/opt/den/fake/1.0", "fake");
+        CHECK(p.complexity == FormulaComplexity::Simple);
+        CHECK(p.complexity_markers.empty());
+        REQUIRE(p.build_commands.size() == 1);
+        CHECK(p.build_commands[0] == "mkdir -p /opt/den/fake/1.0/share/fake");
+    }
+
     TEST_CASE("on_macos block triggers COMPLEX") {
         auto src = wrap_install(R"(    on_macos do
       system "./configure", "--with-mac"
