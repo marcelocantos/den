@@ -1,5 +1,10 @@
 # Audit Log
 
+## 2026-04-11 — /release v0.9.0
+
+- **Commit**: `pending`
+- **Outcome**: Released v0.9.0 (darwin-aarch64, linux-x86_64, linux-aarch64). Shared Cellar with Homebrew (🎯T49), native formula parser soundness invariant (🎯T18), install-body extractor fix (🎯T55), brew-cat dependency eliminated (🎯T46), lazy Portable Ruby on Linux (🎯T47). Major target-graph cleanup retiring 14+ already-achieved targets.
+
 ## 2026-04-10 — /release v0.8.0
 
 - **Commit**: `561408c`

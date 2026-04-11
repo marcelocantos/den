@@ -10,7 +10,7 @@ locking them in.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.8.0.
+Snapshot as of v0.9.0.
 
 ### CLI commands
 
@@ -99,6 +99,12 @@ Snapshot as of v0.8.0.
 | `daemon.pid` | Stable | Daemon PID file |
 | `daemon.log` | Stable | Daemon log |
 | `activity.json` | Stable | Upgrade activity log |
+
+### Package store
+
+| Path | Stability | Notes |
+|---|---|---|
+| `/opt/homebrew/Cellar/<name>/<version>/` | Stable | Shared Cellar with Homebrew (🎯T49). den and brew coexist; den tracks what it manages via `~/.den/` manifests. |
 
 ## Gaps and prerequisites for 1.0
 
