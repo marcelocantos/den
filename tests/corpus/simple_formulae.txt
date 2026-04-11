@@ -8,11 +8,22 @@
 #   1. The native parser classifies it as SIMPLE (no complexity markers).
 #   2. The parser's extracted url/sha256 match the values in the Ruby
 #      source verbatim.
+#   3. The parser's build_commands and env_settings match the golden
+#      file at tests/corpus/golden/<name>.json, which is produced by
+#      a dev-time Ruby evaluation of the same install method.
 #
-# When adding a formula, run `ctest -R oracle` and confirm the test
-# still passes. When a formula in this list regresses to COMPLEX (e.g.
-# upstream adds an `inreplace` in the install body), CI fails — either
-# remove it or file a target to extend the parser.
+# When adding a formula:
+#   1. Append its name to this file.
+#   2. Run `ruby scripts/update-oracle-golden.rb` to regenerate the
+#      golden file for the new entry.
+#   3. Run `ctest` or `./build/den_tests --test-suite=formula_parser_oracle`
+#      and confirm everything passes.
+#
+# When a formula in this list regresses to COMPLEX (e.g. upstream adds
+# an `inreplace` in the install body), CI fails — either remove it or
+# file a target to extend the parser. When the submodule is bumped and
+# upstream changes a formula's url/sha256/install body, rerun the
+# golden generator in the same commit as the submodule bump.
 
 xz
 gzip

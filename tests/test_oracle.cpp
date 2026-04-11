@@ -4,23 +4,29 @@
 // Oracle tests for the native formula parser (🎯T18).
 //
 // Runs `parse_formula` against real Homebrew formulae checked out via the
-// `tests/corpus/homebrew-core` submodule and asserts two things:
+// `tests/corpus/homebrew-core` submodule and asserts three things:
 //
 //   * Formulae listed in `tests/corpus/simple_formulae.txt` classify as
 //     SIMPLE and the extracted `source_url` / `source_sha256` match the
 //     values in the Ruby source verbatim.
 //   * Formulae listed in `tests/corpus/complex_formulae.txt` classify as
 //     COMPLEX and every expected complexity marker is present.
+//   * For each SIMPLE formula, the native parser's `build_commands` and
+//     `env_settings` match the golden JSON at `tests/corpus/golden/<name>.json`
+//     field-by-field. The golden files are precomputed by a dev-time
+//     Ruby extractor (`scripts/update-oracle-golden.rb`) that evaluates
+//     the formula's install method via a minimal Formula stub. The
+//     golden files use the sentinel prefix `/ORACLE_PREFIX/<name>` and
+//     the oracle test passes the same prefix to `parse_formula` so the
+//     two sides produce byte-identical output.
 //
 // If the submodule isn't initialised (e.g. a clone without
 // `--recursive`), the tests emit an informational message and pass so
 // that `ctest` still succeeds for contributors who don't want the
 // ~40MB corpus.
-//
-// This is the first slice of the oracle. A later PR will add
-// field-by-field cross-validation against Ruby's `extract_formula.rb`.
 
 #include <doctest.h>
+#include <nlohmann/json.hpp>
 
 #include "build/formula_parser.h"
 
@@ -214,6 +220,71 @@ TEST_SUITE("formula_parser_oracle") {
             // silent-drop regression or a genuinely-empty install. For
             // the SIMPLE baseline we require at least one build command.
             CHECK(!p.build_commands.empty());
+        }
+    }
+
+    TEST_CASE("simple formulae match their golden build_commands and env_settings") {
+        // Field-by-field cross-validation against the Ruby-extracted
+        // goldens. Each SIMPLE baseline entry has a committed
+        // tests/corpus/golden/<name>.json produced by
+        // scripts/update-oracle-golden.rb. The golden uses the sentinel
+        // prefix "/ORACLE_PREFIX/<name>"; we pass the same prefix to
+        // parse_formula so both sides produce byte-identical output.
+        auto root = corpus_root();
+        if (root.empty())
+            return;
+
+        auto corpus_dir = fs::path(kCorpusDir).parent_path();
+        auto baseline_path = corpus_dir / "simple_formulae.txt";
+        auto golden_dir = corpus_dir / "golden";
+        auto names = read_baseline(baseline_path);
+        REQUIRE_MESSAGE(!names.empty(),
+                        "simple_formulae.txt is empty or missing: " << baseline_path);
+
+        for (const auto& name : names) {
+            CAPTURE(name);
+            auto source_path = formula_path(root, name);
+            REQUIRE_MESSAGE(fs::exists(source_path), "formula source missing: " << source_path);
+
+            auto golden_path = golden_dir / (name + ".json");
+            REQUIRE_MESSAGE(fs::exists(golden_path),
+                            "golden missing — rerun scripts/update-oracle-golden.rb: "
+                                << golden_path);
+
+            auto source = read_file(source_path);
+            auto p = parse_formula(source, "/ORACLE_PREFIX/" + name, name);
+            REQUIRE_MESSAGE(p.complexity == FormulaComplexity::Simple,
+                            name << " classified as " << to_string(p.complexity)
+                                 << " — oracle comparison is only meaningful on SIMPLE");
+
+            nlohmann::json golden;
+            try {
+                std::ifstream gin(golden_path);
+                gin >> golden;
+            } catch (const std::exception& e) {
+                FAIL("failed to parse golden " << golden_path << ": " << e.what());
+                continue;
+            }
+
+            CHECK(p.source_url == golden.value("url", std::string{}));
+            CHECK(p.source_sha256 == golden.value("sha256", std::string{}));
+
+            auto expected_commands =
+                golden.value("build_commands", std::vector<std::string>{});
+            CHECK_MESSAGE(p.build_commands == expected_commands,
+                          name << " build_commands diverged from golden");
+            if (p.build_commands != expected_commands) {
+                MESSAGE("native:");
+                for (const auto& c : p.build_commands)
+                    MESSAGE("  " << c);
+                MESSAGE("golden:");
+                for (const auto& c : expected_commands)
+                    MESSAGE("  " << c);
+            }
+
+            auto expected_env = golden.value("env_settings", std::vector<std::string>{});
+            CHECK_MESSAGE(p.env_settings == expected_env,
+                          name << " env_settings diverged from golden");
         }
     }
 
