@@ -14,14 +14,16 @@ targets:
     achieved: 2026-04-11
   T10:
     name: Version switching
-    status: identified
+    status: achieved
     value: 1.0
     cost: 1.0
+    actual_cost: 1.0
     acceptance:
     - TODO
     context: '`den use pkg=version` updates manifest and re-materialises. Old and new versions coexist in the Cellar. **Achieved.**'
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-04-11
   T11:
     name: ��� Source builds
     status: identified
@@ -36,14 +38,16 @@ targets:
     discovered: 2026-04-09
   T12:
     name: Cask support
-    status: identified
+    status: achieved
     value: 1.0
     cost: 1.0
+    actual_cost: 1.0
     acceptance:
     - TODO
     context: '`den install --cask` handles DMG and ZIP casks with app artifacts. Downloads, mounts/extracts, copies .app to /Applications, tracks in manifest. **Achieved.**'
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-04-11
   T13:
     name: Background maintenance daemon
     status: identified
@@ -56,24 +60,28 @@ targets:
     discovered: 2026-04-09
   T14:
     name: Info, search, and query commands
-    status: identified
+    status: achieved
     value: 1.0
     cost: 1.0
+    actual_cost: 1.0
     acceptance:
     - TODO
     context: '`den info`, `den search`, `den deps --tree` all implemented. **Achieved.**'
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-04-11
   T15:
     name: Cleanup and maintenance
-    status: identified
+    status: achieved
     value: 1.0
     cost: 1.0
+    actual_cost: 1.0
     acceptance:
     - TODO
     context: '`den cleanup` (remove old kegs), `den doctor` (system health). **Achieved.**'
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-04-11
   T16:
     name: Services (basic)
     status: identified
@@ -128,34 +136,40 @@ targets:
     discovered: 2026-04-09
   T20:
     name: Cellar migration
-    status: identified
+    status: achieved
     value: 1.0
     cost: 1.0
+    actual_cost: 1.0
     acceptance:
     - TODO
     context: '`den migrate` scans the Homebrew Cellar, reads INSTALL_RECEIPT.json for each keg, and populates the root manifest. One command imports the entire existing package state. **Achieved.**'
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-04-11
   T21:
     name: Uninstall
-    status: identified
+    status: achieved
     value: 1.0
     cost: 1.0
+    actual_cost: 1.0
     acceptance:
     - TODO
     context: '`den uninstall` removes from the manifest and re-materialises. `den autoremove` stub exists. **Achieved.**'
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-04-11
   T22:
     name: Update and upgrade
-    status: identified
+    status: achieved
     value: 1.0
     cost: 1.0
+    actual_cost: 1.0
     acceptance:
     - TODO
     context: '`den outdated` compares manifest vs API. `den upgrade` pours new bottles and re-materialises. **Achieved.**'
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-04-11
   T23:
     name: Multi-provider package management
     status: identified
@@ -235,14 +249,16 @@ targets:
     discovered: 2026-04-09
   T3:
     name: API client
-    status: identified
+    status: achieved
     value: 1.0
     cost: 1.0
+    actual_cost: 1.0
     acceptance:
     - TODO
     context: Fetches formula metadata from formulae.brew.sh JSON API. **Achieved.**
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-04-11
   T30:
     name: Stability ratings
     status: identified
@@ -299,24 +315,28 @@ targets:
     discovered: 2026-04-09
   T35:
     name: Build environment integration
-    status: identified
+    status: achieved
     value: 1.0
     cost: 1.0
+    actual_cost: 1.0
     acceptance:
     - TODO
     context: '`den init` exports LIBRARY_PATH, CPATH, PKG_CONFIG_PATH, CMAKE_PREFIX_PATH, and MANPATH pointing at the active environment. These swap when `den env use` switches environments. **Achieved.**'
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-04-11
   T36:
     name: Homebrew prefix compatibility layer
-    status: identified
+    status: achieved
     value: 1.0
     cost: 1.0
+    actual_cost: 1.0
     acceptance:
     - TODO
     context: '**Subsumed by 🎯T49.** With the Cellar at `/opt/homebrew`, no compatibility layer is needed — packages are already at their expected prefix.'
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-04-11
   T37:
     name: Full brew-to-den migration
     status: identified
@@ -422,14 +442,16 @@ targets:
     discovered: 2026-04-09
   T44.5:
     name: Manifest file locking
-    status: identified
+    status: achieved
     value: 1.0
     cost: 1.0
+    actual_cost: 1.0
     acceptance:
     - TODO
     context: Advisory flock-based locking around manifest read-modify-write cycles. All read-modify-write call sites use `with_manifest` / `with_manifest_ret` with exclusive `flock`. **Achieved.**  ---
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-04-11
   T45:
     name: Shim-free build toolchain
     status: identified
@@ -554,41 +576,49 @@ targets:
     achieved: 2026-04-10
   T6:
     name: Dependency resolution
-    status: identified
+    status: achieved
     value: 1.0
     cost: 1.0
+    actual_cost: 1.0
     acceptance:
     - TODO
     context: '`den install` resolves the full transitive dependency graph via the JSON API (post-order DFS), pours deps before the target, and tracks auto-installed packages in the manifest. **Achieved.**'
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-04-11
   T7:
     name: Download caching
-    status: identified
+    status: achieved
     value: 1.0
     cost: 1.0
+    actual_cost: 1.0
     acceptance:
     - TODO
     context: Content-addressed bottle cache in `~/.den/cache/bottles/` with SHA256-keyed storage. Bottles are fetched once and reused across installs. **Achieved.**
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-04-11
   T8:
     name: Bottle pouring
-    status: identified
+    status: achieved
     value: 1.0
     cost: 1.0
+    actual_cost: 1.0
     acceptance:
     - TODO
     context: Downloads and pours Homebrew bottles with SHA256 verification. Multi-version coinstallation works. **Achieved.**
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-04-11
   T9:
     name: Environment management
-    status: identified
+    status: achieved
     value: 1.0
     cost: 1.0
+    actual_cost: 1.0
     acceptance:
     - TODO
     context: Manifest-based environment hierarchy with path naming (/ is root, /ml, /work/legacy). Inheritance at the manifest level — child envs inherit packages and can override versions. Materialisation produces flat symlink directories. Shell integration via `eval "$(den init)"`. **Achieved.**
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-04-11

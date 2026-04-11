@@ -4,14 +4,6 @@
 
 ## Active
 
-### 🎯T10 Version switching
-- **Value**: 1
-- **Cost**: 1
-- **Acceptance**: TODO
-- **Context**: `den use pkg=version` updates manifest and re-materialises. Old and new versions coexist in the Cellar. **Achieved.**
-- **Status**: Identified
-- **Discovered**: 2026-04-09
-
 ### 🎯T11 ��� Source builds
 - **Value**: 3
 - **Cost**: 8
@@ -21,35 +13,11 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-09
 
-### 🎯T12 Cask support
-- **Value**: 1
-- **Cost**: 1
-- **Acceptance**: TODO
-- **Context**: `den install --cask` handles DMG and ZIP casks with app artifacts. Downloads, mounts/extracts, copies .app to /Applications, tracks in manifest. **Achieved.**
-- **Status**: Identified
-- **Discovered**: 2026-04-09
-
 ### 🎯T13 Background maintenance daemon
 - **Value**: 1
 - **Cost**: 1
 - **Acceptance**: TODO
 - **Context**: `den daemon run/stop/status/install/uninstall` implemented. Daemon runs as a long-lived process, refreshes the formula index, downloads bottles for outdated packages, and supports auto-upgrade with configurable maintenance windows. State stored in `~/.den/daemon_state.json`. Granular user control via `daemon.auto_download` (default: on) and `daemon.auto_upgrade` (default: off). **Achieved.**
-- **Status**: Identified
-- **Discovered**: 2026-04-09
-
-### 🎯T14 Info, search, and query commands
-- **Value**: 1
-- **Cost**: 1
-- **Acceptance**: TODO
-- **Context**: `den info`, `den search`, `den deps --tree` all implemented. **Achieved.**
-- **Status**: Identified
-- **Discovered**: 2026-04-09
-
-### 🎯T15 Cleanup and maintenance
-- **Value**: 1
-- **Cost**: 1
-- **Acceptance**: TODO
-- **Context**: `den cleanup` (remove old kegs), `den doctor` (system health). **Achieved.**
 - **Status**: Identified
 - **Discovered**: 2026-04-09
 
@@ -91,30 +59,6 @@
 - **Cost**: 2
 - **Acceptance**: TODO
 - **Context**: Xcode/CLT version detection, full Homebrew config parity.
-- **Status**: Identified
-- **Discovered**: 2026-04-09
-
-### 🎯T20 Cellar migration
-- **Value**: 1
-- **Cost**: 1
-- **Acceptance**: TODO
-- **Context**: `den migrate` scans the Homebrew Cellar, reads INSTALL_RECEIPT.json for each keg, and populates the root manifest. One command imports the entire existing package state. **Achieved.**
-- **Status**: Identified
-- **Discovered**: 2026-04-09
-
-### 🎯T21 Uninstall
-- **Value**: 1
-- **Cost**: 1
-- **Acceptance**: TODO
-- **Context**: `den uninstall` removes from the manifest and re-materialises. `den autoremove` stub exists. **Achieved.**
-- **Status**: Identified
-- **Discovered**: 2026-04-09
-
-### 🎯T22 Update and upgrade
-- **Value**: 1
-- **Cost**: 1
-- **Acceptance**: TODO
-- **Context**: `den outdated` compares manifest vs API. `den upgrade` pours new bottles and re-materialises. **Achieved.**
 - **Status**: Identified
 - **Discovered**: 2026-04-09
 
@@ -167,14 +111,6 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-09
 
-### 🎯T3 API client
-- **Value**: 1
-- **Cost**: 1
-- **Acceptance**: TODO
-- **Context**: Fetches formula metadata from formulae.brew.sh JSON API. **Achieved.**
-- **Status**: Identified
-- **Discovered**: 2026-04-09
-
 ### 🎯T30 Stability ratings
 - **Value**: 3
 - **Cost**: 5
@@ -214,22 +150,6 @@
 - **Acceptance**: TODO
 - **Context**: Extend the daemon (T13) with a Unix socket at `~/.den/den.sock` for real-time CLI↔daemon communication. Required for T33 (process supervision) where the CLI needs to send commands to a running supervisor. Not needed for background maintenance alone.
 - **Depends on**: 🎯T33
-- **Status**: Identified
-- **Discovered**: 2026-04-09
-
-### 🎯T35 Build environment integration
-- **Value**: 1
-- **Cost**: 1
-- **Acceptance**: TODO
-- **Context**: `den init` exports LIBRARY_PATH, CPATH, PKG_CONFIG_PATH, CMAKE_PREFIX_PATH, and MANPATH pointing at the active environment. These swap when `den env use` switches environments. **Achieved.**
-- **Status**: Identified
-- **Discovered**: 2026-04-09
-
-### 🎯T36 Homebrew prefix compatibility layer
-- **Value**: 1
-- **Cost**: 1
-- **Acceptance**: TODO
-- **Context**: **Subsumed by 🎯T49.** With the Cellar at `/opt/homebrew`, no compatibility layer is needed — packages are already at their expected prefix.
 - **Status**: Identified
 - **Discovered**: 2026-04-09
 
@@ -302,14 +222,6 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-09
 
-### 🎯T44.5 Manifest file locking
-- **Value**: 1
-- **Cost**: 1
-- **Acceptance**: TODO
-- **Context**: Advisory flock-based locking around manifest read-modify-write cycles. All read-modify-write call sites use `with_manifest` / `with_manifest_ret` with exclusive `flock`. **Achieved.**  ---
-- **Status**: Identified
-- **Discovered**: 2026-04-09
-
 ### 🎯T45 Shim-free build toolchain
 - **Value**: 3
 - **Cost**: 8
@@ -360,38 +272,6 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-09
 
-### 🎯T6 Dependency resolution
-- **Value**: 1
-- **Cost**: 1
-- **Acceptance**: TODO
-- **Context**: `den install` resolves the full transitive dependency graph via the JSON API (post-order DFS), pours deps before the target, and tracks auto-installed packages in the manifest. **Achieved.**
-- **Status**: Identified
-- **Discovered**: 2026-04-09
-
-### 🎯T7 Download caching
-- **Value**: 1
-- **Cost**: 1
-- **Acceptance**: TODO
-- **Context**: Content-addressed bottle cache in `~/.den/cache/bottles/` with SHA256-keyed storage. Bottles are fetched once and reused across installs. **Achieved.**
-- **Status**: Identified
-- **Discovered**: 2026-04-09
-
-### 🎯T8 Bottle pouring
-- **Value**: 1
-- **Cost**: 1
-- **Acceptance**: TODO
-- **Context**: Downloads and pours Homebrew bottles with SHA256 verification. Multi-version coinstallation works. **Achieved.**
-- **Status**: Identified
-- **Discovered**: 2026-04-09
-
-### 🎯T9 Environment management
-- **Value**: 1
-- **Cost**: 1
-- **Acceptance**: TODO
-- **Context**: Manifest-based environment hierarchy with path naming (/ is root, /ml, /work/legacy). Inheritance at the manifest level — child envs inherit packages and can override versions. Materialisation produces flat symlink directories. Shell integration via `eval "$(den init)"`. **Achieved.**
-- **Status**: Identified
-- **Discovered**: 2026-04-09
-
 ## Achieved
 
 ### 🎯T1 Core infrastructure
@@ -399,6 +279,76 @@
 - **Cost**: 1
 - **Acceptance**: TODO
 - **Context**: den builds, runs, has module skeleton. **Achieved.**
+- **Status**: Achieved
+- **Discovered**: 2026-04-09
+- **Achieved**: 2026-04-11
+- **Actual-cost**: 1
+
+### 🎯T10 Version switching
+- **Value**: 1
+- **Cost**: 1
+- **Acceptance**: TODO
+- **Context**: `den use pkg=version` updates manifest and re-materialises. Old and new versions coexist in the Cellar. **Achieved.**
+- **Status**: Achieved
+- **Discovered**: 2026-04-09
+- **Achieved**: 2026-04-11
+- **Actual-cost**: 1
+
+### 🎯T12 Cask support
+- **Value**: 1
+- **Cost**: 1
+- **Acceptance**: TODO
+- **Context**: `den install --cask` handles DMG and ZIP casks with app artifacts. Downloads, mounts/extracts, copies .app to /Applications, tracks in manifest. **Achieved.**
+- **Status**: Achieved
+- **Discovered**: 2026-04-09
+- **Achieved**: 2026-04-11
+- **Actual-cost**: 1
+
+### 🎯T14 Info, search, and query commands
+- **Value**: 1
+- **Cost**: 1
+- **Acceptance**: TODO
+- **Context**: `den info`, `den search`, `den deps --tree` all implemented. **Achieved.**
+- **Status**: Achieved
+- **Discovered**: 2026-04-09
+- **Achieved**: 2026-04-11
+- **Actual-cost**: 1
+
+### 🎯T15 Cleanup and maintenance
+- **Value**: 1
+- **Cost**: 1
+- **Acceptance**: TODO
+- **Context**: `den cleanup` (remove old kegs), `den doctor` (system health). **Achieved.**
+- **Status**: Achieved
+- **Discovered**: 2026-04-09
+- **Achieved**: 2026-04-11
+- **Actual-cost**: 1
+
+### 🎯T20 Cellar migration
+- **Value**: 1
+- **Cost**: 1
+- **Acceptance**: TODO
+- **Context**: `den migrate` scans the Homebrew Cellar, reads INSTALL_RECEIPT.json for each keg, and populates the root manifest. One command imports the entire existing package state. **Achieved.**
+- **Status**: Achieved
+- **Discovered**: 2026-04-09
+- **Achieved**: 2026-04-11
+- **Actual-cost**: 1
+
+### 🎯T21 Uninstall
+- **Value**: 1
+- **Cost**: 1
+- **Acceptance**: TODO
+- **Context**: `den uninstall` removes from the manifest and re-materialises. `den autoremove` stub exists. **Achieved.**
+- **Status**: Achieved
+- **Discovered**: 2026-04-09
+- **Achieved**: 2026-04-11
+- **Actual-cost**: 1
+
+### 🎯T22 Update and upgrade
+- **Value**: 1
+- **Cost**: 1
+- **Acceptance**: TODO
+- **Context**: `den outdated` compares manifest vs API. `den upgrade` pours new bottles and re-materialises. **Achieved.**
 - **Status**: Achieved
 - **Discovered**: 2026-04-09
 - **Achieved**: 2026-04-11
@@ -418,6 +368,36 @@
 - **Achieved**: 2026-04-11
 - **Actual-cost**: 1
 
+### 🎯T3 API client
+- **Value**: 1
+- **Cost**: 1
+- **Acceptance**: TODO
+- **Context**: Fetches formula metadata from formulae.brew.sh JSON API. **Achieved.**
+- **Status**: Achieved
+- **Discovered**: 2026-04-09
+- **Achieved**: 2026-04-11
+- **Actual-cost**: 1
+
+### 🎯T35 Build environment integration
+- **Value**: 1
+- **Cost**: 1
+- **Acceptance**: TODO
+- **Context**: `den init` exports LIBRARY_PATH, CPATH, PKG_CONFIG_PATH, CMAKE_PREFIX_PATH, and MANPATH pointing at the active environment. These swap when `den env use` switches environments. **Achieved.**
+- **Status**: Achieved
+- **Discovered**: 2026-04-09
+- **Achieved**: 2026-04-11
+- **Actual-cost**: 1
+
+### 🎯T36 Homebrew prefix compatibility layer
+- **Value**: 1
+- **Cost**: 1
+- **Acceptance**: TODO
+- **Context**: **Subsumed by 🎯T49.** With the Cellar at `/opt/homebrew`, no compatibility layer is needed — packages are already at their expected prefix.
+- **Status**: Achieved
+- **Discovered**: 2026-04-09
+- **Achieved**: 2026-04-11
+- **Actual-cost**: 1
+
 ### 🎯T43 CI/CD pipeline
 - **Value**: 13
 - **Cost**: 3
@@ -429,6 +409,16 @@
 - **Status**: Achieved
 - **Discovered**: 2026-04-09
 - **Achieved**: 2026-04-11
+
+### 🎯T44.5 Manifest file locking
+- **Value**: 1
+- **Cost**: 1
+- **Acceptance**: TODO
+- **Context**: Advisory flock-based locking around manifest read-modify-write cycles. All read-modify-write call sites use `with_manifest` / `with_manifest_ret` with exclusive `flock`. **Achieved.**  ---
+- **Status**: Achieved
+- **Discovered**: 2026-04-09
+- **Achieved**: 2026-04-11
+- **Actual-cost**: 1
 
 ### 🎯T46 Eliminate `brew cat` dependency
 - **Value**: 5
@@ -464,6 +454,46 @@
 - **Achieved**: 2026-04-11
 - **Actual-cost**: 1
 
+### 🎯T6 Dependency resolution
+- **Value**: 1
+- **Cost**: 1
+- **Acceptance**: TODO
+- **Context**: `den install` resolves the full transitive dependency graph via the JSON API (post-order DFS), pours deps before the target, and tracks auto-installed packages in the manifest. **Achieved.**
+- **Status**: Achieved
+- **Discovered**: 2026-04-09
+- **Achieved**: 2026-04-11
+- **Actual-cost**: 1
+
+### 🎯T7 Download caching
+- **Value**: 1
+- **Cost**: 1
+- **Acceptance**: TODO
+- **Context**: Content-addressed bottle cache in `~/.den/cache/bottles/` with SHA256-keyed storage. Bottles are fetched once and reused across installs. **Achieved.**
+- **Status**: Achieved
+- **Discovered**: 2026-04-09
+- **Achieved**: 2026-04-11
+- **Actual-cost**: 1
+
+### 🎯T8 Bottle pouring
+- **Value**: 1
+- **Cost**: 1
+- **Acceptance**: TODO
+- **Context**: Downloads and pours Homebrew bottles with SHA256 verification. Multi-version coinstallation works. **Achieved.**
+- **Status**: Achieved
+- **Discovered**: 2026-04-09
+- **Achieved**: 2026-04-11
+- **Actual-cost**: 1
+
+### 🎯T9 Environment management
+- **Value**: 1
+- **Cost**: 1
+- **Acceptance**: TODO
+- **Context**: Manifest-based environment hierarchy with path naming (/ is root, /ml, /work/legacy). Inheritance at the manifest level — child envs inherit packages and can override versions. Materialisation produces flat symlink directories. Shell integration via `eval "$(den init)"`. **Achieved.**
+- **Status**: Achieved
+- **Discovered**: 2026-04-09
+- **Achieved**: 2026-04-11
+- **Actual-cost**: 1
+
 ### 🎯T53 Upgrade activity is logged and queryable via `den log`
 - **Value**: 5
 - **Cost**: 3
@@ -485,34 +515,24 @@
 
 ```mermaid
 graph TD
-    T10["Version switching"]
     T11["��� Source builds"]
-    T12["Cask support"]
     T13["Background maintenance daemon"]
-    T14["Info, search, and query comma…"]
-    T15["Cleanup and maintenance"]
     T16["Services (basic)"]
     T17["Formula metadata parsing (thi…"]
     T18["Testing oracle"]
     T19["Performance"]
     T2["Configuration and environment…"]
-    T20["Cellar migration"]
-    T21["Uninstall"]
-    T22["Update and upgrade"]
     T23["Multi-provider package manage…"]
     T24["Semantic search"]
     T25["Search corpus CI pipeline"]
     T26["Content-addressed Cellar"]
     T28["Explicit bindings"]
     T29["SAT-based dependency solver"]
-    T3["API client"]
     T30["Stability ratings"]
     T31["Bundled Ruby"]
     T32["Opt-in telemetry"]
     T33["Built-in process supervisor"]
     T34["Daemon socket API"]
-    T35["Build environment integration"]
-    T36["Homebrew prefix compatibility…"]
     T37["Full brew-to-den migration"]
     T38["Python provider (subsume virt…"]
     T39["Node.js/npm provider"]
@@ -521,17 +541,12 @@ graph TD
     T41["Cargo provider"]
     T42["Independent hash verification…"]
     T44["Advanced trust model"]
-    T44_5["Manifest file locking"]
     T45["Shim-free build toolchain"]
     T47["Linux bundled Ruby"]
     T48["Bottle relocation at scale"]
     T5["Tap management"]
     T51["Safe automatic upgrades"]
     T52["Restart services after upgrade"]
-    T6["Dependency resolution"]
-    T7["Download caching"]
-    T8["Bottle pouring"]
-    T9["Environment management"]
     T11 -.->|needs| T31
     T17 -.->|needs| T31
     T25 -.->|needs| T24
