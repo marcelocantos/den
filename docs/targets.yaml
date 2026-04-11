@@ -50,14 +50,16 @@ targets:
     achieved: 2026-04-11
   T13:
     name: Background maintenance daemon
-    status: identified
+    status: achieved
     value: 1.0
     cost: 1.0
+    actual_cost: 1.0
     acceptance:
     - TODO
     context: '`den daemon run/stop/status/install/uninstall` implemented. Daemon runs as a long-lived process, refreshes the formula index, downloads bottles for outdated packages, and supports auto-upgrade with configurable maintenance windows. State stored in `~/.den/daemon_state.json`. Granular user control via `daemon.auto_download` (default: on) and `daemon.auto_upgrade` (default: off). **Achieved.**'
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-04-11
   T14:
     name: Info, search, and query commands
     status: achieved
@@ -84,14 +86,16 @@ targets:
     achieved: 2026-04-11
   T16:
     name: Services (basic)
-    status: identified
+    status: achieved
     value: 1.0
     cost: 1.0
+    actual_cost: 1.0
     acceptance:
     - TODO
     context: '`den services list/start/stop/restart` manages launchd plists. **Achieved.** See T33 for the built-in supervisor that replaces this.'
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-04-11
   T17:
     name: Formula metadata parsing (third-party taps)
     status: identified

@@ -13,22 +13,6 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-09
 
-### 🎯T13 Background maintenance daemon
-- **Value**: 1
-- **Cost**: 1
-- **Acceptance**: TODO
-- **Context**: `den daemon run/stop/status/install/uninstall` implemented. Daemon runs as a long-lived process, refreshes the formula index, downloads bottles for outdated packages, and supports auto-upgrade with configurable maintenance windows. State stored in `~/.den/daemon_state.json`. Granular user control via `daemon.auto_download` (default: on) and `daemon.auto_upgrade` (default: off). **Achieved.**
-- **Status**: Identified
-- **Discovered**: 2026-04-09
-
-### 🎯T16 Services (basic)
-- **Value**: 1
-- **Cost**: 1
-- **Acceptance**: TODO
-- **Context**: `den services list/start/stop/restart` manages launchd plists. **Achieved.** See T33 for the built-in supervisor that replaces this.
-- **Status**: Identified
-- **Discovered**: 2026-04-09
-
 ### 🎯T17 Formula metadata parsing (third-party taps)
 - **Value**: 3
 - **Cost**: 5
@@ -304,6 +288,16 @@
 - **Achieved**: 2026-04-11
 - **Actual-cost**: 1
 
+### 🎯T13 Background maintenance daemon
+- **Value**: 1
+- **Cost**: 1
+- **Acceptance**: TODO
+- **Context**: `den daemon run/stop/status/install/uninstall` implemented. Daemon runs as a long-lived process, refreshes the formula index, downloads bottles for outdated packages, and supports auto-upgrade with configurable maintenance windows. State stored in `~/.den/daemon_state.json`. Granular user control via `daemon.auto_download` (default: on) and `daemon.auto_upgrade` (default: off). **Achieved.**
+- **Status**: Achieved
+- **Discovered**: 2026-04-09
+- **Achieved**: 2026-04-11
+- **Actual-cost**: 1
+
 ### 🎯T14 Info, search, and query commands
 - **Value**: 1
 - **Cost**: 1
@@ -319,6 +313,16 @@
 - **Cost**: 1
 - **Acceptance**: TODO
 - **Context**: `den cleanup` (remove old kegs), `den doctor` (system health). **Achieved.**
+- **Status**: Achieved
+- **Discovered**: 2026-04-09
+- **Achieved**: 2026-04-11
+- **Actual-cost**: 1
+
+### 🎯T16 Services (basic)
+- **Value**: 1
+- **Cost**: 1
+- **Acceptance**: TODO
+- **Context**: `den services list/start/stop/restart` manages launchd plists. **Achieved.** See T33 for the built-in supervisor that replaces this.
 - **Status**: Achieved
 - **Discovered**: 2026-04-09
 - **Achieved**: 2026-04-11
@@ -516,8 +520,6 @@
 ```mermaid
 graph TD
     T11["��� Source builds"]
-    T13["Background maintenance daemon"]
-    T16["Services (basic)"]
     T17["Formula metadata parsing (thi…"]
     T18["Testing oracle"]
     T19["Performance"]
@@ -556,6 +558,5 @@ graph TD
     T39 -.->|needs| T23
     T40 -.->|needs| T23
     T41 -.->|needs| T23
-    T51 -.->|needs| T13
     T52 -.->|needs| T33
 ```
