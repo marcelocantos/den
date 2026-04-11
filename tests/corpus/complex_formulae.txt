@@ -14,4 +14,4 @@ lz4:inreplace
 jq:trailing-conditional
 pcre2:unknown-statement
 pigz:unknown-statement
-wget:trailing-conditional
+wget:trailing-conditional,interpolation

@@ -470,7 +470,18 @@ ParsedFormula parse_formula(const std::string& brew_cat_output, const std::strin
             // Extract key=value from ENV.append "KEY", "value"
             std::regex env_re(R"RE(ENV\.\w+\s+"(\w+)",\s+"([^"]+)")RE");
             if (std::regex_search(trimmed, match, env_re)) {
-                result.env_settings.push_back(match[1].str() + "+=" + match[2].str());
+                auto val = match[2].str();
+                // 🎯T57: any `#{...}` we can't resolve is a silent drop.
+                // The ENV branch does no substitution at all (all known
+                // formula-path tokens would still appear literal), so we
+                // simply refuse if the value contains any interpolation.
+                if (val.find("#{") != std::string::npos) {
+                    result.complexity_markers.push_back(
+                        {"interpolation", ll.start_line, trimmed});
+                    result.complexity = FormulaComplexity::Complex;
+                    continue;
+                }
+                result.env_settings.push_back(match[1].str() + "+=" + val);
                 continue;
             }
             // An ENV mutation we can't decode is an unhandled construct.
@@ -482,14 +493,24 @@ ParsedFormula parse_formula(const std::string& brew_cat_output, const std::strin
         // system calls — the main build commands.
         if (trimmed.starts_with("system ")) {
             auto cmd = parse_system_call(trimmed, prefix, lib, name);
-            if (!cmd.empty()) {
-                result.build_commands.push_back(cmd);
+            if (cmd.empty()) {
+                // A `system` line the parser couldn't decode is still
+                // an unhandled construct — don't drop it on the floor.
+                result.complexity_markers.push_back({"system", ll.start_line, trimmed});
+                result.complexity = FormulaComplexity::Complex;
                 continue;
             }
-            // A `system` line the parser couldn't decode is still an
-            // unhandled construct — don't drop it on the floor.
-            result.complexity_markers.push_back({"system", ll.start_line, trimmed});
-            result.complexity = FormulaComplexity::Complex;
+            // 🎯T57: after substitution, any surviving `#{...}` is an
+            // interpolation the parser couldn't resolve (e.g. `#{ENV.cc}`,
+            // `#{Formula["openssl@3"].opt_prefix}`). Passing it through as
+            // a literal shell token is a silent-drop soundness bug.
+            if (cmd.find("#{") != std::string::npos) {
+                result.complexity_markers.push_back(
+                    {"interpolation", ll.start_line, trimmed});
+                result.complexity = FormulaComplexity::Complex;
+                continue;
+            }
+            result.build_commands.push_back(cmd);
             continue;
         }
 
@@ -504,6 +525,15 @@ ParsedFormula parse_formula(const std::string& brew_cat_output, const std::strin
                         s.replace(p, 9, prefix);
                 };
                 replace_prefix(dir);
+                // 🎯T57: `mkdir_p` only substitutes `#{prefix}`. Any other
+                // surviving interpolation (`#{pkgshare}`, `#{buildpath}`,
+                // etc.) must refuse rather than exec `mkdir -p "#{…}"`.
+                if (dir.find("#{") != std::string::npos) {
+                    result.complexity_markers.push_back(
+                        {"interpolation", ll.start_line, trimmed});
+                    result.complexity = FormulaComplexity::Complex;
+                    continue;
+                }
                 result.build_commands.push_back("mkdir -p " + dir);
                 continue;
             }
