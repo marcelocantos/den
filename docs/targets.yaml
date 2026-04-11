@@ -200,14 +200,19 @@ targets:
     discovered: 2026-04-09
   T27:
     name: No-code-at-install policy
-    status: identified
+    status: achieved
     value: 5.0
     cost: 2.0
+    actual_cost: 1.0
     acceptance:
-    - TODO
+    - Bottle installs execute zero package-provided code — only unpack + verify + relocate
+    - No post_install hooks or arbitrary script execution during den install
+    - Source builds require explicit --build-from-source flag
+    - install_name_tool calls are den's own relocation, not package scripts
     context: Bottle pours execute zero code — installation is purely unpack + verify digest. No post-install scripts, no hooks, no arbitrary execution. This is enforced as an invariant for den-managed installs.  Source builds (T11) are the only exception and require explicit opt-in (`--build-from-source`). When source builds eventually land, they run in a sandboxed environment with declared capabilities.  This inverts the Homebrew model where `def post_install` runs arbitrary Ruby as the installing user. In den, you can pour a bottle with zero trust in the build system — just verify the hash.
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-04-11
   T28:
     name: Explicit bindings
     status: identified

@@ -151,14 +151,6 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-09
 
-### 🎯T27 No-code-at-install policy
-- **Value**: 5
-- **Cost**: 2
-- **Acceptance**: TODO
-- **Context**: Bottle pours execute zero code — installation is purely unpack + verify digest. No post-install scripts, no hooks, no arbitrary execution. This is enforced as an invariant for den-managed installs.  Source builds (T11) are the only exception and require explicit opt-in (`--build-from-source`). When source builds eventually land, they run in a sandboxed environment with declared capabilities.  This inverts the Homebrew model where `def post_install` runs arbitrary Ruby as the installing user. In den, you can pour a bottle with zero trust in the build system — just verify the hash.
-- **Status**: Identified
-- **Discovered**: 2026-04-09
-
 ### 🎯T28 Explicit bindings
 - **Value**: 5
 - **Cost**: 8
@@ -412,6 +404,20 @@
 - **Achieved**: 2026-04-11
 - **Actual-cost**: 1
 
+### 🎯T27 No-code-at-install policy
+- **Value**: 5
+- **Cost**: 2
+- **Acceptance**:
+  - Bottle installs execute zero package-provided code — only unpack + verify + relocate
+  - No post_install hooks or arbitrary script execution during den install
+  - Source builds require explicit --build-from-source flag
+  - install_name_tool calls are den's own relocation, not package scripts
+- **Context**: Bottle pours execute zero code — installation is purely unpack + verify digest. No post-install scripts, no hooks, no arbitrary execution. This is enforced as an invariant for den-managed installs.  Source builds (T11) are the only exception and require explicit opt-in (`--build-from-source`). When source builds eventually land, they run in a sandboxed environment with declared capabilities.  This inverts the Homebrew model where `def post_install` runs arbitrary Ruby as the installing user. In den, you can pour a bottle with zero trust in the build system — just verify the hash.
+- **Status**: Achieved
+- **Discovered**: 2026-04-09
+- **Achieved**: 2026-04-11
+- **Actual-cost**: 1
+
 ### 🎯T43 CI/CD pipeline
 - **Value**: 13
 - **Cost**: 3
@@ -497,7 +503,6 @@ graph TD
     T24["Semantic search"]
     T25["Search corpus CI pipeline"]
     T26["Content-addressed Cellar"]
-    T27["No-code-at-install policy"]
     T28["Explicit bindings"]
     T29["SAT-based dependency solver"]
     T3["API client"]
