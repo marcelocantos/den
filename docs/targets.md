@@ -260,6 +260,8 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-09
 
+## Achieved
+
 ### 🎯T57 Native parser refuses unresolvable `#{…}` interpolations
 - **Value**: 3
 - **Cost**: 3
@@ -277,10 +279,10 @@
 
 **Implementation sketch:** After all known interpolations are substituted in `parse_system_call`'s inner loop, check whether the value still contains `#{` — if so, record an `interpolation` complexity marker pointing at the remaining token and downgrade the verdict. Same in the `mkdir_p` branch and anywhere else substitution happens.
 - **Origin**: forked from 🎯T18 on 2026-04-12
-- **Status**: Identified
+- **Status**: Achieved
 - **Discovered**: 2026-04-12
-
-## Achieved
+- **Achieved**: 2026-04-12
+- **Actual-cost**: 2
 
 ### 🎯T1 Core infrastructure
 - **Value**: 1
@@ -648,7 +650,6 @@ graph TD
     T5["Tap management"]
     T51["Safe automatic upgrades"]
     T52["Restart services after upgrade"]
-    T57["Native parser refuses unresol…"]
     T25 -.->|needs| T24
     T30 -.->|needs| T29
     T34 -.->|needs| T33
