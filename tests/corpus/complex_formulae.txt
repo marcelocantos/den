@@ -1,0 +1,17 @@
+# Formulae expected to classify as COMPLEX by the native parser, together
+# with at least one expected complexity marker construct.
+#
+# Format: `name:construct[,construct,...]` — the parser must emit at least
+# one marker whose `construct` field matches each listed value. Extra
+# markers are allowed (the parser collects them all). Blank lines and
+# `#` comments are ignored.
+#
+# The point of this baseline is not to pin down the exhaustive marker
+# set (that's brittle across upstream formula edits) but to guarantee
+# that at least the load-bearing complexity we care about is caught.
+
+lz4:inreplace
+jq:trailing-conditional
+pcre2:unknown-statement
+pigz:unknown-statement
+wget:trailing-conditional

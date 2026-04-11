@@ -70,11 +70,20 @@ target_link_libraries(den PRIVATE den_lib)
 # --- Tests ---
 enable_testing()
 
-file(GLOB_RECURSE TEST_SOURCES tests/*.cpp)
+# Only pick up top-level tests/*.cpp, not anything that might land under
+# tests/corpus/** (e.g. the homebrew-core submodule). Use a non-recursive
+# glob so the submodule's contents are ignored even if it grows .cpp
+# files in the future.
+file(GLOB TEST_SOURCES tests/*.cpp)
 if(TEST_SOURCES)
     add_executable(den_tests ${TEST_SOURCES})
     target_link_libraries(den_tests PRIVATE den_lib vendor_headers)
     target_include_directories(den_tests PRIVATE ${CMAKE_SOURCE_DIR}/vendor/include)
+    # Oracle tests (🎯T18) read formula Ruby source from the homebrew-core
+    # submodule. Pass the path as a compile-time constant so the tests can
+    # locate the corpus and skip gracefully if it isn't initialised.
+    target_compile_definitions(den_tests PRIVATE
+        DEN_CORPUS_DIR="${CMAKE_SOURCE_DIR}/tests/corpus/homebrew-core")
     add_test(NAME den_tests COMMAND den_tests)
 endif()
 
