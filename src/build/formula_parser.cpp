@@ -13,6 +13,70 @@ namespace den {
 namespace {
 
 /// Extract the install method body from formula source.
+/// True if `line` (already trimmed) opens a block whose matching `end`
+/// lives on a later line. Ruby has two syntactic forms for this:
+///
+///   1. A leading keyword:  `def`, `if`, `unless`, `case`, `while`,
+///      `until`, `for`, `begin`, `module`, `class`, or bare `do`.
+///   2. A method call that yields a block, signalled by a trailing
+///      ` do` or ` do |args|`  (e.g. `resource "x" do`,
+///      `Dir.chdir("x") do`, `array.each do |i|`).
+///
+/// Self-closing single-line forms like `if x then y end` or
+/// `foo { |x| x + 1 }` don't open a block and are filtered out by the
+/// caller.
+bool opens_block(const std::string& line) {
+    auto is_word_boundary = [&](size_t after_kw) {
+        if (after_kw >= line.size())
+            return true;
+        char c = line[after_kw];
+        return c == ' ' || c == '\t' || c == '(' || c == ':' || c == '\0';
+    };
+    auto starts_with_keyword = [&](const char* kw) {
+        auto n = std::string_view(kw).size();
+        return line.size() >= n && line.compare(0, n, kw) == 0 && is_word_boundary(n);
+    };
+
+    // Leading keywords that open a block.
+    if (starts_with_keyword("def") || starts_with_keyword("if") ||
+        starts_with_keyword("unless") || starts_with_keyword("case") ||
+        starts_with_keyword("while") || starts_with_keyword("until") ||
+        starts_with_keyword("for") || starts_with_keyword("begin") ||
+        starts_with_keyword("module") || starts_with_keyword("class"))
+        return true;
+    // Bare `do` at the start of a line (rare but legal).
+    if (line == "do" || starts_with_keyword("do"))
+        return true;
+
+    // Trailing-do form: any line ending in ` do`, `do`, ` do |args|`
+    // opens a block. We look for the last ` do` occurrence and check
+    // whether what follows is either empty, just a `|...|` block-args
+    // list, or a comment.
+    auto find_trailing_do = [&]() -> bool {
+        // Case A: line literally ends in ` do`.
+        if (line.size() >= 3 && line.ends_with(" do"))
+            return true;
+        // Case B: line ends in ` do |...|`.
+        auto bar = line.rfind('|');
+        if (bar == std::string::npos || bar == 0)
+            return false;
+        // Walk back from `bar` to find the matching opening `|`.
+        auto open_bar = line.rfind('|', bar - 1);
+        if (open_bar == std::string::npos)
+            return false;
+        // What's before the opening `|` must end in ` do`.
+        // Allow optional whitespace.
+        auto before = open_bar;
+        while (before > 0 && (line[before - 1] == ' ' || line[before - 1] == '\t'))
+            --before;
+        return before >= 3 && line.compare(before - 3, 3, " do") == 0;
+    };
+    if (find_trailing_do())
+        return true;
+
+    return false;
+}
+
 std::string extract_install_body(const std::string& source) {
     // Find "def install" and extract until the matching "end".
     auto pos = source.find("def install");
@@ -40,11 +104,13 @@ std::string extract_install_body(const std::string& source) {
         if (first != std::string::npos)
             trimmed = trimmed.substr(first);
 
-        // Count nesting (simplified — works for Homebrew formulas).
-        if (trimmed.starts_with("def ") || trimmed.starts_with("do") ||
-            trimmed.starts_with("if ") || trimmed.starts_with("unless ") ||
-            trimmed.starts_with("case ") || trimmed.starts_with("begin")) {
-            if (!trimmed.contains(" end") && !trimmed.ends_with(" end"))
+        // A line that opens a block increments the depth, unless it
+        // also closes the same block on the same line (`if x then y
+        // end`, `foo do bar end`).
+        if (opens_block(trimmed)) {
+            bool self_closes =
+                trimmed.contains(" end") || trimmed.ends_with(" end") || trimmed.ends_with(";end");
+            if (!self_closes)
                 ++depth;
         }
         if (trimmed == "end" || trimmed.starts_with("end ") || trimmed.starts_with("end#")) {

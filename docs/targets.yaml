@@ -654,9 +654,10 @@ targets:
     achieved: 2026-04-11
   T55:
     name: Install-body extractor tracks nesting depth correctly for method-with-do forms
-    status: identified
+    status: achieved
     value: 2.0
     cost: 2.0
+    actual_cost: 2.0
     acceptance:
     - '`src/build/formula_parser.cpp::extract_install_body` recognises any line ending in ` do` or `|` as opening a new scope, not just `def`/`do`/`if`/`unless`/`case`/`begin`. In particular, `resource "name" do`, `Dir.chdir("x") do`, and `each do |x|` all increment depth so the matching `end` does not prematurely terminate the install body.'
     - 'Regression test: a formula whose install body contains `resource "extra" do ... end` followed by further statements (`inreplace`, `system`, etc.) is fully scanned — all trailing statements contribute complexity markers instead of being silently truncated.'
@@ -668,6 +669,7 @@ targets:
     - forked-from-T18
     origin: Discovered on 2026-04-11 during 🎯T18 implementation — unit test for marker collection hit early-termination in extract_install_body
     discovered: 2026-04-11
+    achieved: 2026-04-11
   T6:
     name: Dependency resolution
     status: achieved

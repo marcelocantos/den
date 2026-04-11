@@ -155,26 +155,76 @@ end
     }
 
     TEST_CASE("parser collects ALL markers, not just the first") {
-        // Flat install body — no nested do-blocks — so this exercises
-        // marker collection independently of extract_install_body's
-        // nesting tracker. (See follow-up: install-body extractor
-        // truncates early on `resource ... do` and other method-with-do
-        // forms because only specific leading keywords increment depth.)
         auto src = wrap_install(R"(    if OS.mac?
       system "./configure"
     end
+    resource "extra" do
+      system "make"
+    end
     inreplace "Makefile", "old", "new"
-    system "make", "install"
 )");
         auto p = parse_formula(src, "/opt/den/fake/1.0", "fake");
         CHECK(p.complexity == FormulaComplexity::Complex);
         // Every offender is recorded, so humans reviewing a COMPLEX
-        // verdict can see every construct that triggered it.
+        // verdict can see every construct that triggered it. This
+        // exercises both complexity-marker emission AND the install-body
+        // extractor's nesting tracker — if the extractor closed the body
+        // early on `resource "..." do`, the `inreplace` line after it
+        // would be invisible to the loop.
         CHECK(has_marker(p, "if"));
+        CHECK(has_marker(p, "resource"));
         CHECK(has_marker(p, "inreplace"));
-        // A Simple construct mixed in does not suppress the Complex
-        // verdict — Complex is sticky.
+    }
+
+    TEST_CASE("extract_install_body tracks nesting for method-with-do forms") {
+        // Regression test for 🎯T55: the install-body extractor used to
+        // only increment its depth counter for specific leading keywords
+        // (`def`/`do`/`if`/`unless`/`case`/`begin`), so a `resource "x"
+        // do` or `Dir.chdir("x") do` line did NOT deepen the scope, but
+        // the matching `end` DID shallow it — causing the install body
+        // to be silently truncated at the nested block's `end`.
+        // Statements past that point were lost from the parser loop.
+        //
+        // `configure_with_special_marker` is a unique string that can
+        // only appear if the parser saw the line *after* the nested
+        // block. If the extractor truncates early, the marker is
+        // missing from build_commands entirely.
+        auto src = wrap_install(R"(    Dir.chdir("subdir") do
+      system "make"
+    end
+    system "./configure_with_special_marker"
+)");
+        auto p = parse_formula(src, "/opt/den/fake/1.0", "fake");
         CHECK(p.complexity == FormulaComplexity::Complex);
+        CHECK(has_marker(p, "do"));
+        // The post-block line must be visible to the parser loop.
+        // Before the fix, the install body was truncated at the nested
+        // `end` and this line was never seen.
+        bool saw_marker_line = false;
+        for (const auto& cmd : p.build_commands)
+            if (cmd.find("./configure_with_special_marker") != std::string::npos)
+                saw_marker_line = true;
+        CHECK(saw_marker_line);
+    }
+
+    TEST_CASE("extract_install_body tracks nesting for each-with-block-args") {
+        // `array.each do |item|` is another method-with-do form that
+        // the old extractor mis-scoped. The block args `|item|` must
+        // not confuse the depth tracker.
+        auto src = wrap_install(R"(    ["a", "b", "c"].each do |f|
+      system "touch", f
+    end
+    system "./post_block_marker"
+)");
+        auto p = parse_formula(src, "/opt/den/fake/1.0", "fake");
+        CHECK(p.complexity == FormulaComplexity::Complex);
+        CHECK(has_marker(p, "do"));
+        // Without the fix, `./post_block_marker` would never be seen.
+        bool saw_marker_line = false;
+        for (const auto& cmd : p.build_commands)
+            if (cmd.find("./post_block_marker") != std::string::npos)
+                saw_marker_line = true;
+        CHECK(saw_marker_line);
     }
 
     TEST_CASE("markers carry a line number and the offending text") {
