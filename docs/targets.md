@@ -278,6 +278,37 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-09
 
+### 🎯T54 Bundled Ruby runtime is fully retired — den parses and builds all supported formulae natively in C++, with no Ruby process ever spawned at runtime
+- **Value**: 13
+- **Cost**: 13
+- **Acceptance**:
+  - `src/ruby/` is deleted. No `ensure_ruby_bundle`, no Portable Ruby manifest, no `extract_formula.rb`, no `den_build.rb`.
+  - `vendor/den-ruby-bundle*.tar.zst` and `src/ruby/bundle_data.c` are deleted. `cmake/embed_resource.cmake` is deleted (it has no other callers).
+  - `source_build.cpp` (and its successors) contain no Ruby-path, no `brew ruby` fallback, and no text-parser-as-last-resort code. A single native C++ formula interpreter handles every supported formula.
+  - den's smoke test suite installs and source-builds the full popularity-tiered formula set (per 🎯feedback `project_testing_approach`) with no Ruby interpreter present on the host — verified by running tests inside a container that has no Ruby installed.
+  - The `_den_ruby_bundle_*` symbols and all `#ifdef __APPLE__` branches added for the 4.0.2 embedded bundle are gone. One code path, one build, no compatibility shim.
+- **Context**: Ruby exists in den **only** to evaluate legacy Homebrew formula `.rb` files that the native C++ parser cannot yet handle. It is a compatibility shim, not infrastructure, and every ongoing investment in it (bundle pipeline, version pinning, relocation, platform branches, lazy-download path) is debt on code that should not exist in the shipping product.
+
+This target supersedes the long-running Ruby-infrastructure targets (🎯T31 Bundled Ruby, 🎯T47 Linux bundled Ruby) as their natural termination: achieve this and those become no-ops. Under this framing, 🎯T47 and its sibling work should be treated as maintenance on a shim with a known expiry — good enough to ship, not worth polishing.
+
+**Why it matters:**
+- Removes ~30 MB of bundle (either embedded or lazy-downloaded) from every release.
+- Kills an entire cross-language subsystem (Ruby ↔ C++ IPC, extraction script, env shimming).
+- Eliminates an entire class of bugs: Ruby version mismatches, Portable Ruby provenance, per-platform bundle pipelines, runtime Ruby spawn failures, subprocess timeouts, and the `brew ruby` fallback path.
+- Makes den genuinely self-contained rather than "self-contained except for a 14 MB Ruby that downloads itself on first use".
+- Simplifies the story for `den` in containers, CI, air-gapped envs, and minimal Linux images.
+
+**Lever — how to get there:**
+The C++ formula parser (source-level work lives in `src/formula/` and the text-parser path in `source_build.cpp`) has to cover the full DSL surface that supported formulae actually use: `url`, `sha256`, `depends_on`, `install do ... end` blocks, `resource`, `patch`, `on_macos`/`on_linux` guards, DSL method calls like `system`, `mv`, `ENV[...] = ...`, etc. Progress on 🎯T18 (Testing oracle v5/c8) is the right lever — the oracle tells us which formulae the C++ path handles and which still fall back. When the fallback rate hits zero (or an acceptable residual for formulae den explicitly does not support), Ruby can go.
+
+**Do not let Ruby-adjacent targets acquire their own momentum.** If a future `/cv` suggests "improve Ruby bundle reproducibility" or "unify Linux/macOS Ruby paths" as useful work, push back: does it reduce the code path, or does it preserve it? Only the former deserves time.
+
+**Origin:** Discovered 2026-04-11 while implementing 🎯T47 Linux bundled Ruby. The realisation that Ruby is a shim, not infrastructure, reframed every decision about how to ship Linux support — and by extension, every pending decision about the Ruby subsystem.
+- **Tags**: sunset, ruby, simplification
+- **Origin**: Discovered during 🎯T47 implementation, 2026-04-11 — reframing Ruby as a temporary compatibility shim rather than permanent infrastructure
+- **Status**: Identified
+- **Discovered**: 2026-04-11
+
 ## Achieved
 
 ### 🎯T1 Core infrastructure
@@ -571,6 +602,7 @@ graph TD
     T5["Tap management"]
     T51["Safe automatic upgrades"]
     T52["Restart services after upgrade"]
+    T54["Bundled Ruby runtime is fully…"]
     T11 -.->|needs| T31
     T17 -.->|needs| T31
     T25 -.->|needs| T24
