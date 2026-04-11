@@ -1,3 +1,4 @@
+schema_version: 1
 last_evaluated: a0e9822
 targets:
   T1:
@@ -114,31 +115,28 @@ targets:
     value: 5.0
     cost: 8.0
     acceptance:
-    - 'The native parser (`src/formula/formula_parser.cpp`) classifies every formula as **SIMPLE**, **COMPLEX**, or **UNSUPPORTED**. SIMPLE: den can install the package using only the parser''s output, without invoking Ruby. COMPLEX: the formula uses at least one construct the parser does not handle (conditional blocks `if`/`unless`/`case`/`on_macos`/`on_linux`/`on_arm`, `resource { … }`, `patch do`, `bottle { … }`, `inreplace`, unresolvable string interpolation, unknown method calls on Formula instances, etc.). UNSUPPORTED: the parser could not read the source at all (syntax errors, encoding problems).'
-    - '**Soundness invariant — no silent skipping.** The parser must never ignore a construct it does not understand. Every unhandled token/block either triggers COMPLEX classification or is surfaced as an error. The current behaviour of silently dropping `if`/`unless`/`resource`/`patch do`/generic `do` blocks is a soundness bug and must be fixed as part of this target.'
-    - '**Soundness oracle.** A test binary runs the native parser *and* the Ruby extraction pipeline on a corpus of real formulae (popularity-tiered, top-500). For every formula classified as SIMPLE, the extracted metadata must match Ruby''s output field-by-field on all fields den consumes: `url`, `mirrors`, `sha256`, `version`, `dependencies` (grouped by type: build / runtime / optional / recommended / test), `license`, `homepage`, `keg_only`, resolved install commands, and resolved env settings. A SIMPLE classification with a field mismatch is a test failure.'
-    - '**Complexity explainability.** For every formula classified as COMPLEX, the parser emits a structured reason identifying which construct(s) triggered the refusal (e.g. `{formula: "openssl@3", complexity_markers: ["on_macos block at line 42", "resource \"cacert\" at line 58"]}`). Humans reviewing a COMPLEX verdict can see why.'
-    - '**CI gate.** The oracle runs on every PR. The set of formulae currently classified SIMPLE is committed as a baseline (e.g. `tests/corpus/simple_formulae.txt`). Regressions — a formula previously SIMPLE becomes COMPLEX or UNSUPPORTED, or a SIMPLE classification starts failing the soundness oracle — fail the PR. Expanding the SIMPLE set (handling new constructs correctly) is always allowed and requires a baseline update in the same PR.'
-    - '**Installable-for-real check.** A subset of the SIMPLE-classified corpus is actually installed end-to-end in CI via den, using only the parser''s output and no Ruby process. A failed install on any formula in this subset fails the PR. This guards completeness — the parser''s metadata isn''t just equivalent to Ruby''s, it''s *sufficient* to drive a real install.'
+    - '✅ **DONE (PR #20, 7e2c073)** — The native parser (`src/build/formula_parser.cpp`) classifies every formula as SIMPLE / COMPLEX / UNSUPPORTED via `FormulaComplexity`. Every unhandled DSL construct (`if`/`unless`/`case`/`on_macos`/`on_linux`/`on_arm`/`resource`/`patch`/`inreplace`/`bottle`/generic `do`) appends a `ComplexityMarker` (with line number and offending text) and downgrades the verdict; the parser keeps reading so every offender is collected, not just the first. Bare `unknown-statement` lines are flagged too. `source_build.cpp` refuses to apply parser output on anything other than Simple.'
+    - '✅ **DONE (PR #20)** — Complexity explainability: every COMPLEX verdict carries `{construct, line, detail}` markers identifying *why*. Unit tests in `tests/test_formula_parser.cpp` cover each unhandled construct, multi-marker collection, and whole-word keyword matching (`iffy_tool` ≠ `if`).'
+    - '❌ **REMAINING — soundness oracle.** A test binary runs the native parser *and* the Ruby extraction pipeline (`src/ruby/extract_formula.rb`) on a corpus of real formulae (popularity-tiered). For every formula classified as SIMPLE, the extracted metadata must match Ruby''s output field-by-field on the fields den consumes: `url`, `mirrors`, `sha256`, `version`, `dependencies` (build / runtime / optional / recommended / test), `license`, `homepage`, `keg_only`, resolved install commands, env settings. A SIMPLE classification with a field mismatch fails the test.'
+    - ❌ **REMAINING — curated corpus.** A committed corpus (start with top-100, grow to top-500) with hand-verified expected verdicts at `tests/corpus/`. Each entry names the formula, its expected classification, and — for COMPLEX — the expected complexity markers.
+    - ❌ **REMAINING — CI gate.** The oracle runs on every PR. The SIMPLE baseline lives at `tests/corpus/simple_formulae.txt`. Regressions (SIMPLE → COMPLEX, SIMPLE → oracle mismatch) fail the PR. Expanding the SIMPLE set is allowed but requires a baseline update in the same PR.
+    - '❌ **REMAINING — installable-for-real check.** A subset of SIMPLE-classified corpus entries are installed end-to-end via den in CI using only the parser''s output (no Ruby). A failed install fails the PR. Guards completeness: metadata isn''t just equivalent to Ruby''s, it''s sufficient to drive a real install.'
     context: |-
-      **Premise (corrected 2026-04-11 after audit).** The native C++ parser in `src/formula/formula_parser.cpp` is a **fast path for simple formulae**, not a replacement for Ruby. Ruby remains permanent infrastructure for the complex path — anything involving conditional blocks, resources, patches, bottle specs, inreplace, or arbitrary DSL method calls. The native parser exists so den can install simple formulae without spinning up a Ruby interpreter.
+      **Premise (corrected 2026-04-11 after audit).** The native C++ parser at `src/build/formula_parser.cpp` (NB: not `src/formula/…`) is a **fast path for simple formulae**, not a replacement for Ruby. Ruby remains permanent infrastructure for the complex path — conditional blocks, resources, patches, bottle specs, inreplace, arbitrary DSL method calls. The native parser exists so den can install simple formulae without spinning up a Ruby interpreter.
 
-      **The bug this target fixes.** Audit on 2026-04-11 found that the current parser silently drops unhandled constructs: `if`/`unless`/`case` blocks, `resource { ... }`, `patch do`, `inreplace`, and generic `do` blocks are all skipped without a word. That means a formula with an `on_linux` block gets silently treated as if the `on_linux` block didn't exist — partial metadata, wrong install commands, wrong behaviour on Linux. Under the fast-path framing this is *the* correctness bug: the parser must either handle a construct or refuse. Silent skipping is never acceptable.
+      **Status (2026-04-12).** PR #20 (7e2c073) landed the core soundness fix: `FormulaComplexity` enum, per-construct complexity markers with line numbers and detail payloads, "no silent skipping" invariant, and 14 new unit tests covering every known unhandled construct. `source_build.cpp` refuses to apply parser output unless the verdict is Simple. All 106 existing tests still green.
 
-      **Two properties to establish** (from user direction):
-      1. **Soundness of classification** — the parser correctly identifies simple cases and never mis-classifies a complex case as simple.
-      2. **Completeness of extraction for simple cases** — for formulae classified as simple, the extracted metadata is complete and den can use it directly without calling Ruby.
+      **What's left.** The unit tests prove the parser doesn't silently drop *the constructs we've thought of*. The oracle is the missing piece — it proves the parser's SIMPLE extractions actually match Ruby's across real formulae, catches silent drops we haven't anticipated, and establishes a regression gate. The oracle has four sub-pieces (test harness, corpus, CI gate, installable-for-real), any of which could be scoped as its own PR.
 
-      **Implementation sketch:**
-      - Add a `FormulaComplexity` enum (`Simple` / `Complex` / `Unsupported`) and return it alongside `ParsedFormula`. `src/build/source_build.cpp` uses the verdict to decide between the fast path and the Ruby fallback — per-formula, not per-field.
-      - Every `if`/`unless`/`case`/`on_*`/`resource`/`patch`/`inreplace`/`bottle`/`do`-block that the parser encounters becomes a complexity marker, not a silently-skipped line. The parser keeps reading to collect all markers (for explainability) but returns Complex.
-      - Add a test harness at `tests/oracle/` that runs the native parser and the Ruby pipeline on a corpus and compares field-by-field for SIMPLE classifications.
-      - Curate the corpus: start with the top-500 formulae, classify by hand where necessary, commit the expected verdicts.
-      - Wire into CI as a new workflow job.
+      **Design questions still open** (for the oracle PR):
+      - Where does the corpus live? Shipped in-tree (`tests/corpus/*.rb`) vs fetched at test time vs fetched in CI only. In-tree is reproducible but grows the repo.
+      - How does the C++ test binary invoke Ruby? Via the existing bundled Ruby path (`ensure_ruby_bundle()` + `extract_formula.rb`) — reuses infrastructure already in source_build.cpp.
+      - Popularity tiering: start with top-100 for speed, grow to top-500 once stable. Track install analytics from formulae.brew.sh.
+      - How strict is the dependency comparison? Ruby's output groups deps by phase; the native parser currently doesn't extract deps at all (only install commands + env). The oracle likely needs to extend the native parser to emit dependencies, or the comparison is vacuous on that field.
 
-      **Relationship to other targets.** This target is not a stepping stone toward retiring Ruby — 🎯T54 (retire bundled Ruby) was retired on the same day this was reframed, because its premise was wrong. Ruby is permanent. 🎯T18 is about making the fast path *trustworthy*, not about eliminating the slow path.
+      **Relationship to other targets.** This target is not a stepping stone toward retiring Ruby — 🎯T54 (retire bundled Ruby) was retired on the same day this was reframed because its premise was wrong. Ruby is permanent. 🎯T18 is about making the fast path *trustworthy*, not about eliminating the slow path.
 
-      **Out of scope:** extending the fast path to handle any new DSL constructs (that's follow-up work, filed as separate targets). Making the parser a general-purpose Ruby evaluator (never). Matching Ruby's extraction on any field den does not consume (keep the comparison surface small).
+      **Out of scope:** extending the fast path to handle any new DSL constructs (that's follow-up work, filed as separate targets). Making the parser a general-purpose Ruby evaluator (never). Matching Ruby's extraction on any field den does not consume.
     origin: manual
     discovered: 2026-04-09
   T19:
@@ -476,18 +474,6 @@ targets:
     context: den's trust model should substantially exceed Homebrew's. The foundation is in place (🎯T42 independent hash verification, hash pinning, cache sealing, URL allowlist, 0600 permissions). This target covers the remaining layers.
     origin: manual
     discovered: 2026-04-09
-  T44.5:
-    name: Manifest file locking
-    status: achieved
-    value: 1.0
-    cost: 1.0
-    actual_cost: 1.0
-    acceptance:
-    - TODO
-    context: Advisory flock-based locking around manifest read-modify-write cycles. All read-modify-write call sites use `with_manifest` / `with_manifest_ret` with exclusive `flock`. **Achieved.**  ---
-    origin: manual
-    discovered: 2026-04-09
-    achieved: 2026-04-11
   T45:
     name: Shim-free build toolchain
     status: identified
@@ -670,6 +656,39 @@ targets:
     origin: Discovered on 2026-04-11 during 🎯T18 implementation — unit test for marker collection hit early-termination in extract_install_body
     discovered: 2026-04-11
     achieved: 2026-04-11
+  T56:
+    name: Manifest file locking
+    status: achieved
+    value: 1.0
+    cost: 1.0
+    actual_cost: 1.0
+    acceptance:
+    - TODO
+    context: Advisory flock-based locking around manifest read-modify-write cycles. All read-modify-write call sites use `with_manifest` / `with_manifest_ret` with exclusive `flock`. **Achieved.**  Re-parented 2026-04-12 from 🎯T44.5 — concurrency fix, not a trust-model layer. Original 🎯T44 umbrella remains identified and awaits concrete acceptance criteria.
+    origin: manual
+    discovered: 2026-04-09
+    achieved: 2026-04-11
+  T57:
+    name: Native parser refuses unresolvable `#{…}` interpolations
+    status: identified
+    value: 3.0
+    cost: 3.0
+    acceptance:
+    - 'The native parser (`src/build/formula_parser.cpp`) treats any `#{...}` Ruby interpolation it cannot resolve to a concrete string as a complexity marker (`construct: "interpolation"`) and downgrades the formula to COMPLEX. The current set of resolvable interpolations is the fixed list in `parse_system_call` (`#{prefix}`, `#{lib}`, `#{bin}`, `#{include}`, `#{share}`, `#{sbin}`, `#{libexec}`, `#{man}`, `#{pkgshare}`, `#{etc}`, `#{var}`, `#{rpath}`). Anything else — `#{ENV.cc}`, `#{Formula["openssl@3"].opt_prefix}`, `#{version}`, etc. — is unresolvable and must not be silently passed through.'
+    - 'Unit test covers: `system "./configure", "--with-ssl=#{Formula[\"openssl@3\"].opt_prefix}"` classifies as COMPLEX with a `interpolation` marker pointing at the offending substring.'
+    - Oracle test `wget` moves from the COMPLEX baseline (where it currently sits for the `trailing-conditional` marker) to also carry an `interpolation` expectation, or the wget-specific entry is updated to list both.
+    context: |-
+      **Discovered 2026-04-12** while building the 🎯T18 oracle. `wget`'s install body contains `"--with-libssl-prefix=#{Formula["openssl@3"].opt_prefix}"`, which the native parser currently passes through verbatim as a literal argument string. The resulting "build command" has an unresolved `#{...}` in it that would fail at exec time (or worse, succeed with the wrong path if something later does textual substitution).
+
+      **Why this is a soundness bug.** Under the 🎯T18 framing, the parser must either handle a construct or refuse. Unresolvable interpolation is a silent partial-handling case: the line *looks* like it was parsed, build_commands is populated, and the verdict is SIMPLE — but the output is nonsense. This is exactly the class of failure 🎯T18 is meant to prevent.
+
+      **Why it's a separate target** and not folded into 🎯T18: 🎯T18 is about the parser refusing unhandled *constructs* (blocks, trailing modifiers, top-level DSL methods). This is a distinct failure mode inside the handled `system`/`ENV`/`mkdir_p` branches, and fixing it is orthogonal — it's about auditing string substitution, not about extending the grammar.
+
+      **Forked from 🎯T18.** Found during oracle baseline expansion on 2026-04-12 while adding wget as a COMPLEX example. wget currently classifies as COMPLEX for the right trailing-conditional reason, but if that line were removed, the parser would happily return SIMPLE with a nonsense `--with-libssl-prefix=#{Formula["openssl@3"].opt_prefix}` command.
+
+      **Implementation sketch:** After all known interpolations are substituted in `parse_system_call`'s inner loop, check whether the value still contains `#{` — if so, record an `interpolation` complexity marker pointing at the remaining token and downgrade the verdict. Same in the `mkdir_p` branch and anywhere else substitution happens.
+    origin: forked from 🎯T18 on 2026-04-12
+    discovered: 2026-04-12
   T6:
     name: Dependency resolution
     status: achieved

@@ -38,11 +38,11 @@ bool opens_block(const std::string& line) {
     };
 
     // Leading keywords that open a block.
-    if (starts_with_keyword("def") || starts_with_keyword("if") ||
-        starts_with_keyword("unless") || starts_with_keyword("case") ||
-        starts_with_keyword("while") || starts_with_keyword("until") ||
-        starts_with_keyword("for") || starts_with_keyword("begin") ||
-        starts_with_keyword("module") || starts_with_keyword("class"))
+    if (starts_with_keyword("def") || starts_with_keyword("if") || starts_with_keyword("unless") ||
+        starts_with_keyword("case") || starts_with_keyword("while") ||
+        starts_with_keyword("until") || starts_with_keyword("for") ||
+        starts_with_keyword("begin") || starts_with_keyword("module") ||
+        starts_with_keyword("class"))
         return true;
     // Bare `do` at the start of a line (rare but legal).
     if (line == "do" || starts_with_keyword("do"))
@@ -196,8 +196,7 @@ std::string parse_system_call(const std::string& line, const std::string& prefix
         } else {
             // Substitute #{prefix}, #{lib}, #{bin}, etc.
             std::string val = part;
-            auto replace_all = [](std::string& s, const std::string& from,
-                                  const std::string& to) {
+            auto replace_all = [](std::string& s, const std::string& from, const std::string& to) {
                 size_t pos = 0;
                 while ((pos = s.find(from, pos)) != std::string::npos) {
                     s.replace(pos, from.size(), to);
@@ -241,10 +240,53 @@ bool line_starts_with_keyword(const std::string& line, const std::string& keywor
     return next == ' ' || next == '\t' || next == '(' || next == '{' || next == ':';
 }
 
+/// Does the logical line end in a Ruby trailing conditional modifier
+/// (`if`, `unless`, `while`, `until`)? These attach a predicate to an
+/// arbitrary statement (`system "cmd" if build.head?`) and are a
+/// silent-drop hazard: without this check the `system` branch would
+/// happily parse the left-hand side as a plain invocation and fold the
+/// `if build.head?` tail into the command's argument list.
+///
+/// We approximate by finding the rightmost match for ` if `, ` unless `,
+/// ` while `, ` until ` that sits outside a double-quoted string, then
+/// checking that what follows is a non-empty expression. String
+/// boundaries are tracked by counting unescaped quotes; this is good
+/// enough for Homebrew install bodies, which don't nest heredocs or
+/// single-quoted strings containing double quotes.
+bool has_trailing_conditional(const std::string& line) {
+    static constexpr std::string_view kws[] = {" if ", " unless ", " while ", " until "};
+    for (auto kw : kws) {
+        auto pos = line.rfind(kw);
+        if (pos == std::string::npos)
+            continue;
+        // Count unescaped double-quotes before `pos`. If odd, `pos` is
+        // inside a string literal and doesn't open a modifier.
+        int quotes = 0;
+        for (size_t i = 0; i < pos; ++i) {
+            if (line[i] == '"' && (i == 0 || line[i - 1] != '\\'))
+                ++quotes;
+        }
+        if (quotes % 2 != 0)
+            continue;
+        // The condition expression must be non-empty.
+        auto cond_start = pos + kw.size();
+        while (cond_start < line.size() && (line[cond_start] == ' ' || line[cond_start] == '\t'))
+            ++cond_start;
+        if (cond_start < line.size())
+            return true;
+    }
+    return false;
+}
+
 /// Does a logical line contain an unhandled DSL construct? Returns the
 /// construct name to record, or empty if the line is plain. The returned
 /// name identifies *why* the formula is complex, for explainability.
 std::string detect_complexity_construct(const std::string& line) {
+    // Trailing conditional modifiers come first: they can attach to any
+    // statement (including `system`), and every subsequent branch needs
+    // to treat them as "unhandled" rather than silently absorbing them.
+    if (has_trailing_conditional(line))
+        return "trailing-conditional";
     // Conditional / control flow.
     if (line_starts_with_keyword(line, "if"))
         return "if";
@@ -264,8 +306,10 @@ std::string detect_complexity_construct(const std::string& line) {
         return "on_arm";
     if (line_starts_with_keyword(line, "on_intel"))
         return "on_intel";
-    if (line_starts_with_keyword(line, "on_big_sur") || line_starts_with_keyword(line, "on_monterey") ||
-        line_starts_with_keyword(line, "on_ventura") || line_starts_with_keyword(line, "on_sonoma") ||
+    if (line_starts_with_keyword(line, "on_big_sur") ||
+        line_starts_with_keyword(line, "on_monterey") ||
+        line_starts_with_keyword(line, "on_ventura") ||
+        line_starts_with_keyword(line, "on_sonoma") ||
         line_starts_with_keyword(line, "on_sequoia") || line_starts_with_keyword(line, "on_tahoe"))
         return "on_macos_version";
     // Top-level DSL blocks that can appear in install.

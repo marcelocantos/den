@@ -1,0 +1,18 @@
+# Formulae expected to classify as SIMPLE by the native parser.
+#
+# Format: one formula name per line (no path, no version), matching the
+# file at tests/corpus/homebrew-core/Formula/<first-letter>/<name>.rb.
+# Blank lines and `#` comments are ignored.
+#
+# A formula belongs here iff:
+#   1. The native parser classifies it as SIMPLE (no complexity markers).
+#   2. The parser's extracted url/sha256 match the values in the Ruby
+#      source verbatim.
+#
+# When adding a formula, run `ctest -R oracle` and confirm the test
+# still passes. When a formula in this list regresses to COMPLEX (e.g.
+# upstream adds an `inreplace` in the install body), CI fails — either
+# remove it or file a target to extend the parser.
+
+xz
+gzip

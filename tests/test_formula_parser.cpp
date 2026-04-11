@@ -82,6 +82,37 @@ end
         CHECK(has_marker(p, "unless"));
     }
 
+    TEST_CASE("trailing-if modifier on system is caught, not silently absorbed") {
+        // Real-world bug from the 🎯T18 oracle: the parser used to fold
+        // `if build.head?` into the system call's argument list.
+        auto src = wrap_install(R"(    system "autoreconf", "--force" if build.head?
+    system "make", "install"
+)");
+        auto p = parse_formula(src, "/opt/den/fake/1.0", "fake");
+        CHECK(p.complexity == FormulaComplexity::Complex);
+        CHECK(has_marker(p, "trailing-conditional"));
+    }
+
+    TEST_CASE("trailing-unless modifier is caught") {
+        auto src = wrap_install(R"(    system "./configure" unless OS.mac?
+    system "make", "install"
+)");
+        auto p = parse_formula(src, "/opt/den/fake/1.0", "fake");
+        CHECK(p.complexity == FormulaComplexity::Complex);
+        CHECK(has_marker(p, "trailing-conditional"));
+    }
+
+    TEST_CASE(
+        "`if` inside a string literal doesn't trigger a trailing-conditional false positive") {
+        // The word `if` surrounded by spaces appears inside the command
+        // string but the full statement has no real trailing conditional.
+        auto src = wrap_install(R"(    system "echo", "check if needed"
+)");
+        auto p = parse_formula(src, "/opt/den/fake/1.0", "fake");
+        CHECK(p.complexity == FormulaComplexity::Simple);
+        CHECK(p.complexity_markers.empty());
+    }
+
     TEST_CASE("on_macos block triggers COMPLEX") {
         auto src = wrap_install(R"(    on_macos do
       system "./configure", "--with-mac"
