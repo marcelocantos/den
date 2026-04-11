@@ -1,0 +1,10 @@
+{
+  "url": "https://github.com/tukaani-project/xz/releases/download/v5.8.3/xz-5.8.3.tar.gz",
+  "sha256": "3d3a1b973af218114f4f889bbaa2f4c037deaae0c8e815eec381c3d546b974a0",
+  "build_commands": [
+    "./configure --disable-debug --disable-dependency-tracking --prefix=/ORACLE_PREFIX/xz --libdir=/ORACLE_PREFIX/xz/lib --disable-silent-rules --disable-nls",
+    "make check",
+    "make install"
+  ],
+  "env_settings": []
+}

@@ -670,9 +670,10 @@ targets:
     achieved: 2026-04-11
   T57:
     name: Native parser refuses unresolvable `#{…}` interpolations
-    status: identified
+    status: achieved
     value: 3.0
     cost: 3.0
+    actual_cost: 2.0
     acceptance:
     - 'The native parser (`src/build/formula_parser.cpp`) treats any `#{...}` Ruby interpolation it cannot resolve to a concrete string as a complexity marker (`construct: "interpolation"`) and downgrades the formula to COMPLEX. The current set of resolvable interpolations is the fixed list in `parse_system_call` (`#{prefix}`, `#{lib}`, `#{bin}`, `#{include}`, `#{share}`, `#{sbin}`, `#{libexec}`, `#{man}`, `#{pkgshare}`, `#{etc}`, `#{var}`, `#{rpath}`). Anything else — `#{ENV.cc}`, `#{Formula["openssl@3"].opt_prefix}`, `#{version}`, etc. — is unresolvable and must not be silently passed through.'
     - 'Unit test covers: `system "./configure", "--with-ssl=#{Formula[\"openssl@3\"].opt_prefix}"` classifies as COMPLEX with a `interpolation` marker pointing at the offending substring.'
@@ -689,6 +690,7 @@ targets:
       **Implementation sketch:** After all known interpolations are substituted in `parse_system_call`'s inner loop, check whether the value still contains `#{` — if so, record an `interpolation` complexity marker pointing at the remaining token and downgrade the verdict. Same in the `mkdir_p` branch and anywhere else substitution happens.
     origin: forked from 🎯T18 on 2026-04-12
     discovered: 2026-04-12
+    achieved: 2026-04-12
   T6:
     name: Dependency resolution
     status: achieved
