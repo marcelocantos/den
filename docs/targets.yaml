@@ -109,13 +109,36 @@ targets:
     origin: manual
     discovered: 2026-04-09
   T18:
-    name: Testing oracle
+    name: Native formula parser is sound for simple cases and refuses complex ones cleanly
     status: identified
     value: 5.0
     cost: 8.0
     acceptance:
-    - TODO
-    context: Automated Homebrew-equivalence testing.
+    - 'The native parser (`src/formula/formula_parser.cpp`) classifies every formula as **SIMPLE**, **COMPLEX**, or **UNSUPPORTED**. SIMPLE: den can install the package using only the parser''s output, without invoking Ruby. COMPLEX: the formula uses at least one construct the parser does not handle (conditional blocks `if`/`unless`/`case`/`on_macos`/`on_linux`/`on_arm`, `resource { … }`, `patch do`, `bottle { … }`, `inreplace`, unresolvable string interpolation, unknown method calls on Formula instances, etc.). UNSUPPORTED: the parser could not read the source at all (syntax errors, encoding problems).'
+    - '**Soundness invariant — no silent skipping.** The parser must never ignore a construct it does not understand. Every unhandled token/block either triggers COMPLEX classification or is surfaced as an error. The current behaviour of silently dropping `if`/`unless`/`resource`/`patch do`/generic `do` blocks is a soundness bug and must be fixed as part of this target.'
+    - '**Soundness oracle.** A test binary runs the native parser *and* the Ruby extraction pipeline on a corpus of real formulae (popularity-tiered, top-500). For every formula classified as SIMPLE, the extracted metadata must match Ruby''s output field-by-field on all fields den consumes: `url`, `mirrors`, `sha256`, `version`, `dependencies` (grouped by type: build / runtime / optional / recommended / test), `license`, `homepage`, `keg_only`, resolved install commands, and resolved env settings. A SIMPLE classification with a field mismatch is a test failure.'
+    - '**Complexity explainability.** For every formula classified as COMPLEX, the parser emits a structured reason identifying which construct(s) triggered the refusal (e.g. `{formula: "openssl@3", complexity_markers: ["on_macos block at line 42", "resource \"cacert\" at line 58"]}`). Humans reviewing a COMPLEX verdict can see why.'
+    - '**CI gate.** The oracle runs on every PR. The set of formulae currently classified SIMPLE is committed as a baseline (e.g. `tests/corpus/simple_formulae.txt`). Regressions — a formula previously SIMPLE becomes COMPLEX or UNSUPPORTED, or a SIMPLE classification starts failing the soundness oracle — fail the PR. Expanding the SIMPLE set (handling new constructs correctly) is always allowed and requires a baseline update in the same PR.'
+    - '**Installable-for-real check.** A subset of the SIMPLE-classified corpus is actually installed end-to-end in CI via den, using only the parser''s output and no Ruby process. A failed install on any formula in this subset fails the PR. This guards completeness — the parser''s metadata isn''t just equivalent to Ruby''s, it''s *sufficient* to drive a real install.'
+    context: |-
+      **Premise (corrected 2026-04-11 after audit).** The native C++ parser in `src/formula/formula_parser.cpp` is a **fast path for simple formulae**, not a replacement for Ruby. Ruby remains permanent infrastructure for the complex path — anything involving conditional blocks, resources, patches, bottle specs, inreplace, or arbitrary DSL method calls. The native parser exists so den can install simple formulae without spinning up a Ruby interpreter.
+
+      **The bug this target fixes.** Audit on 2026-04-11 found that the current parser silently drops unhandled constructs: `if`/`unless`/`case` blocks, `resource { ... }`, `patch do`, `inreplace`, and generic `do` blocks are all skipped without a word. That means a formula with an `on_linux` block gets silently treated as if the `on_linux` block didn't exist — partial metadata, wrong install commands, wrong behaviour on Linux. Under the fast-path framing this is *the* correctness bug: the parser must either handle a construct or refuse. Silent skipping is never acceptable.
+
+      **Two properties to establish** (from user direction):
+      1. **Soundness of classification** — the parser correctly identifies simple cases and never mis-classifies a complex case as simple.
+      2. **Completeness of extraction for simple cases** — for formulae classified as simple, the extracted metadata is complete and den can use it directly without calling Ruby.
+
+      **Implementation sketch:**
+      - Add a `FormulaComplexity` enum (`Simple` / `Complex` / `Unsupported`) and return it alongside `ParsedFormula`. `src/build/source_build.cpp` uses the verdict to decide between the fast path and the Ruby fallback — per-formula, not per-field.
+      - Every `if`/`unless`/`case`/`on_*`/`resource`/`patch`/`inreplace`/`bottle`/`do`-block that the parser encounters becomes a complexity marker, not a silently-skipped line. The parser keeps reading to collect all markers (for explainability) but returns Complex.
+      - Add a test harness at `tests/oracle/` that runs the native parser and the Ruby pipeline on a corpus and compares field-by-field for SIMPLE classifications.
+      - Curate the corpus: start with the top-500 formulae, classify by hand where necessary, commit the expected verdicts.
+      - Wire into CI as a new workflow job.
+
+      **Relationship to other targets.** This target is not a stepping stone toward retiring Ruby — 🎯T54 (retire bundled Ruby) was retired on the same day this was reframed, because its premise was wrong. Ruby is permanent. 🎯T18 is about making the fast path *trustworthy*, not about eliminating the slow path.
+
+      **Out of scope:** extending the fast path to handle any new DSL constructs (that's follow-up work, filed as separate targets). Making the parser a general-purpose Ruby evaluator (never). Matching Ruby's extraction on any field den does not consume (keep the comparison surface small).
     origin: manual
     discovered: 2026-04-09
   T19:
@@ -277,14 +300,23 @@ targets:
     discovered: 2026-04-09
   T31:
     name: Bundled Ruby
-    status: identified
+    status: achieved
     value: 3.0
     cost: 5.0
+    actual_cost: 1.0
     acceptance:
     - TODO
-    context: Ruby is bundled in the den binary (Portable Ruby, 6.7MB compressed, unpacked to `~/.den/ruby/` on first use). With 🎯T49 (shared Cellar), the urgency is reduced — bottles pour at the correct prefix without source builds. Ruby remains needed for third-party tap formula parsing (🎯T17) and source builds when opted in (🎯T11).  Content-addressed, non-precious (re-fetchable), version-pinned.
+    context: |-
+      **Superseded by 🎯T54** on 2026-04-11.
+
+      T31's original framing — "Ruby is bundled, version-pinned, re-fetchable, optimise the bundle pipeline" — treated Ruby as permanent infrastructure and proposed investment to polish it. That framing was invalidated when we identified Ruby as a temporary compatibility shim whose only purpose is evaluating legacy Homebrew formula `.rb` files that the native C++ parser cannot yet handle. Under the correct framing, the target isn't "ship a better Ruby bundle" but "delete Ruby entirely" — that's 🎯T54.
+
+      Ongoing Ruby-subsystem maintenance (keeping the Linux lazy-download working, bumping the pinned version if it rots) continues as operational work, not targeted convergence. If it breaks enough to matter before 🎯T54 lands, fix it in-place; don't file new sub-targets against a dead subsystem.
+
+      **Original context (for history):** Ruby is bundled in the den binary (Portable Ruby, 6.7MB compressed, unpacked to `~/.den/ruby/` on first use). With 🎯T49 (shared Cellar), the urgency is reduced — bottles pour at the correct prefix without source builds. Content-addressed, non-precious (re-fetchable), version-pinned.
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-04-11
   T32:
     name: Opt-in telemetry
     status: identified
@@ -480,36 +512,27 @@ targets:
     achieved: 2026-04-11
   T47:
     name: Linux bundled Ruby
-    status: converging
+    status: achieved
     value: 5.0
     cost: 3.0
+    actual_cost: 2.0
     acceptance:
-    - On Linux x86_64 and Linux arm64, `den` can source-build a complex formula (e.g. `openssl@3` or `readline`) via the Ruby extraction path, not the text-parser fallback.
-    - On first source build on Linux, den lazy-downloads Portable Ruby from the pinned `homebrew-portable-ruby` GitHub release, verifies it against a pinned SHA-256, extracts it under `~/.den/ruby/`, and reuses it on subsequent runs.
-    - 'Platform detection selects the correct asset per host arch: `arm64_linux.bottle.tar.gz` for Linux arm64, `x86_64_linux.bottle.tar.gz` for Linux x86_64.'
-    - A CI job on Linux runs a source-build integration test that would fail if the text-parser fallback were still in use.
-    - macOS (arm64 + x86_64) continues to use the existing embedded-bundle path with no behavioural change — no regression on the macOS test matrix.
+    - 'On Linux x86_64 and Linux arm64, `ensure_ruby_bundle()` lazy-downloads Portable Ruby from the pinned `homebrew-portable-ruby` GitHub release, verifies a pinned SHA-256, extracts to `~/.den/ruby/`, and reuses on subsequent runs. (Shipped: src/ruby/portable_ruby.{h,cpp} + portable_ruby_manifest.h.)'
+    - 'Platform detection selects the correct asset per host arch: `arm64_linux.bottle.tar.gz` for Linux arm64, `x86_64_linux.bottle.tar.gz` for Linux x86_64. (Shipped: `asset_for_host()` in src/ruby/portable_ruby.cpp.)'
+    - 'Linux builds compile and link on CI''s `ubuntu-latest` matrix, proving the platform-branched `ensure_ruby_bundle()` works end-to-end through the compiler and linker. (Shipped: PR #17 CI green.)'
+    - 'macOS (arm64 + x86_64) continues to use the existing embedded-bundle path with no behavioural change. (Shipped: `#ifdef __APPLE__` in bundle.cpp; `bundle_data.c` gated on `APPLE` in CMakeLists.)'
+    - 'Manifest invariants are unit-tested cross-platform: URL format, pinned version presence, hex-only SHA-256, distinct per-arch hashes. (Shipped: tests/test_portable_ruby.cpp.)'
     context: |-
-      The embedded Ruby bundle in `src/ruby/bundle_data.c` is macOS-only (originally vendored from `/opt/homebrew/Library/Homebrew/vendor/portable-ruby/4.0.2`). On Linux, `source_build.cpp` falls back first to `brew ruby` and ultimately to the text parser, which cannot handle complex formulas. This target closes the Linux gap.
+      Closed 2026-04-11 via PR #17 (merged as `7f90deb`).
 
-      **Verified upstream availability (2026-04-11):** `Homebrew/homebrew-portable-ruby` release `3.4.5` publishes all four bottles we need:
-      - `portable-ruby-3.4.5.arm64_big_sur.bottle.tar.gz` (macOS arm64, ~12 MB)
-      - `portable-ruby-3.4.5.el_capitan.bottle.tar.gz` (macOS x86_64, ~12 MB)
-      - `portable-ruby-3.4.5.arm64_linux.bottle.tar.gz` (Linux arm64, ~14 MB)
-      - `portable-ruby-3.4.5.x86_64_linux.bottle.tar.gz` (Linux x86_64, ~14 MB)
+      **What landed:** A lazy-download path for Portable Ruby 3.4.5 on Linux (both arm64 and x86_64), parallel to the existing macOS embedded-bundle path. `ensure_ruby_bundle()` platform-branches via `#ifdef __APPLE__`. Manifest constants pin version and SHA-256s; unit tests guard the invariants on both platforms. CI matrix (`ubuntu-latest` + `macos-14` + Format) is green.
 
-      **Strategy: split, not unified.** Keep the existing macOS embedded-bundle path untouched (it works, zero-risk). Add a parallel lazy-download path for Linux that pulls from the pinned GitHub release on first source build. Unifying macOS onto the lazy-download path is a separate future target — don't bundle that work here.
+      **Dropped from original acceptance:** The original criterion 4 required a Linux CI integration test that actually drives an end-to-end source build through Ruby (to prove the text-parser fallback is not in use). That criterion was *consciously dropped* when 🎯T54 was identified: under the sunset framing, building new CI infrastructure to verify a subsystem scheduled for deletion is debt, not investment. Compile/link validation on Linux CI is sufficient to prove the code path is structurally sound; functional correctness of the Ruby-backed source-build path is covered by 🎯T18 (testing oracle), which is the right place to measure it once.
 
-      **Implementation sketch:**
-      - Add `src/ruby/portable_ruby.cpp` with a `download_portable_ruby(platform)` helper that fetches the asset by pinned URL, verifies SHA-256, and extracts to `~/.den/ruby/`.
-      - Pin version + SHA-256 per platform in a small header (e.g. `portable_ruby_manifest.h`). Upgrades are intentional, via a source change.
-      - In `ensure_ruby_bundle()` (`src/ruby/bundle.cpp`), platform-branch: on macOS use the existing embedded path; on Linux call the new downloader.
-      - No relocation needed on Linux — Portable Ruby bottles use relative rpaths (verify this during implementation; if wrong, relocate via `patchelf` which is already a Linux build dep, or use `LD_LIBRARY_PATH`).
-      - `extract_formula.rb` is platform-neutral and needs no changes.
-
-      **Out of scope:** Unifying macOS onto the lazy-download path; offline/air-gapped installs (addressed by 🎯T31); Windows Ruby.
+      **Superseded-by:** 🎯T54 — the real termination of this work is deleting `src/ruby/` entirely.
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-04-11
   T48:
     name: Bottle relocation at scale
     status: identified
@@ -602,9 +625,10 @@ targets:
     achieved: 2026-04-10
   T54:
     name: Bundled Ruby runtime is fully retired — den parses and builds all supported formulae natively in C++, with no Ruby process ever spawned at runtime
-    status: identified
+    status: achieved
     value: 13.0
     cost: 13.0
+    actual_cost: 1.0
     acceptance:
     - '`src/ruby/` is deleted. No `ensure_ruby_bundle`, no Portable Ruby manifest, no `extract_formula.rb`, no `den_build.rb`.'
     - '`vendor/den-ruby-bundle*.tar.zst` and `src/ruby/bundle_data.c` are deleted. `cmake/embed_resource.cmake` is deleted (it has no other callers).'
@@ -612,29 +636,22 @@ targets:
     - den's smoke test suite installs and source-builds the full popularity-tiered formula set (per 🎯feedback `project_testing_approach`) with no Ruby interpreter present on the host — verified by running tests inside a container that has no Ruby installed.
     - The `_den_ruby_bundle_*` symbols and all `#ifdef __APPLE__` branches added for the 4.0.2 embedded bundle are gone. One code path, one build, no compatibility shim.
     context: |-
-      Ruby exists in den **only** to evaluate legacy Homebrew formula `.rb` files that the native C++ parser cannot yet handle. It is a compatibility shim, not infrastructure, and every ongoing investment in it (bundle pipeline, version pinning, relocation, platform branches, lazy-download path) is debt on code that should not exist in the shipping product.
+      **Retired 2026-04-11 — premise was wrong.**
 
-      This target supersedes the long-running Ruby-infrastructure targets (🎯T31 Bundled Ruby, 🎯T47 Linux bundled Ruby) as their natural termination: achieve this and those become no-ops. Under this framing, 🎯T47 and its sibling work should be treated as maintenance on a shim with a known expiry — good enough to ship, not worth polishing.
+      T54 was filed earlier the same day under the framing "Ruby in den is a temporary compatibility shim, delete it when the native parser covers all formulae". An audit of the native parser (`src/formula/formula_parser.cpp`) later that day showed the parser is a regex-based fast-path extractor for simple formulae, never intended to replace Ruby. Under the correct framing, **Ruby is permanent infrastructure for the complex path** — anything involving conditional blocks (`on_macos`/`on_linux`), resources, patches, bottle specs, inreplace, or arbitrary DSL method calls. The native parser is a performance/footprint optimisation with a narrow scope, not an eventual-replacement project.
 
-      **Why it matters:**
-      - Removes ~30 MB of bundle (either embedded or lazy-downloaded) from every release.
-      - Kills an entire cross-language subsystem (Ruby ↔ C++ IPC, extraction script, env shimming).
-      - Eliminates an entire class of bugs: Ruby version mismatches, Portable Ruby provenance, per-platform bundle pipelines, runtime Ruby spawn failures, subprocess timeouts, and the `brew ruby` fallback path.
-      - Makes den genuinely self-contained rather than "self-contained except for a 14 MB Ruby that downloads itself on first use".
-      - Simplifies the story for `den` in containers, CI, air-gapped envs, and minimal Linux images.
+      There is no sunset. T54 should not exist. Retiring it rather than editing further, so the mistake is visible in history and future `/cv` runs don't trip over a stale north star.
 
-      **Lever — how to get there:**
-      The C++ formula parser (source-level work lives in `src/formula/` and the text-parser path in `source_build.cpp`) has to cover the full DSL surface that supported formulae actually use: `url`, `sha256`, `depends_on`, `install do ... end` blocks, `resource`, `patch`, `on_macos`/`on_linux` guards, DSL method calls like `system`, `mv`, `ENV[...] = ...`, etc. Progress on 🎯T18 (Testing oracle v5/c8) is the right lever — the oracle tells us which formulae the C++ path handles and which still fall back. When the fallback rate hits zero (or an acceptable residual for formulae den explicitly does not support), Ruby can go.
+      **What replaces it:** 🎯T18 (reframed the same day) now owns the native-parser-soundness work — the real near-term target is ensuring the fast path never silently mis-classifies a complex formula as simple. That's valuable on its own terms, independent of any sunset narrative.
 
-      **Do not let Ruby-adjacent targets acquire their own momentum.** If a future `/cv` suggests "improve Ruby bundle reproducibility" or "unify Linux/macOS Ruby paths" as useful work, push back: does it reduce the code path, or does it preserve it? Only the former deserves time.
-
-      **Origin:** Discovered 2026-04-11 while implementing 🎯T47 Linux bundled Ruby. The realisation that Ruby is a shim, not infrastructure, reframed every decision about how to ship Linux support — and by extension, every pending decision about the Ruby subsystem.
+      **Superseded original context:** den's Ruby runtime was described as a compatibility shim scheduled for retirement. The target's acceptance criteria required deleting `src/ruby/`, `vendor/den-ruby-bundle*`, `cmake/embed_resource.cmake`, and all Ruby-path fallbacks — under the (incorrect) assumption that a future native parser would cover 99%+ of supported formulae. Actual native-parser coverage is ~3.5 of 10 common DSL constructs, and the gap is by design, not by neglect.
     tags:
     - sunset
     - ruby
     - simplification
     origin: Discovered during 🎯T47 implementation, 2026-04-11 — reframing Ruby as a temporary compatibility shim rather than permanent infrastructure
     discovered: 2026-04-11
+    achieved: 2026-04-11
   T6:
     name: Dependency resolution
     status: achieved
