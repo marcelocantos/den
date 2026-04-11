@@ -437,14 +437,16 @@ targets:
     discovered: 2026-04-09
   T46:
     name: Eliminate `brew cat` dependency
-    status: identified
+    status: achieved
     value: 5.0
     cost: 1.0
+    actual_cost: 2.0
     acceptance:
     - TODO
     context: The C++ source build code path (`source_build.cpp`) shells out to `brew cat` in four places to fetch formula source. This defeats the goal of running without Homebrew installed. The Ruby code path (`extract_formula.rb`) already fetches formula source from the GitHub API via the `ruby_source_path` field in the formulae.brew.sh JSON — the C++ path should do the same.  **What to do:** - Fetch formula source from `https://raw.githubusercontent.com/Homebrew/homebrew-core/master/{ruby_source_path}` using the `ruby_source_path` from the JSON API (already available). - Remove all `brew cat` calls from `source_build.cpp`. - The Ruby path already works correctly — this is C++ parity.
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-04-11
   T47:
     name: Linux bundled Ruby
     status: identified

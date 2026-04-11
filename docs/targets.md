@@ -326,14 +326,6 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-09
 
-### 🎯T46 Eliminate `brew cat` dependency
-- **Value**: 5
-- **Cost**: 1
-- **Acceptance**: TODO
-- **Context**: The C++ source build code path (`source_build.cpp`) shells out to `brew cat` in four places to fetch formula source. This defeats the goal of running without Homebrew installed. The Ruby code path (`extract_formula.rb`) already fetches formula source from the GitHub API via the `ruby_source_path` field in the formulae.brew.sh JSON — the C++ path should do the same.  **What to do:** - Fetch formula source from `https://raw.githubusercontent.com/Homebrew/homebrew-core/master/{ruby_source_path}` using the `ruby_source_path` from the JSON API (already available). - Remove all `brew cat` calls from `source_build.cpp`. - The Ruby path already works correctly — this is C++ parity.
-- **Status**: Identified
-- **Discovered**: 2026-04-09
-
 ### 🎯T47 Linux bundled Ruby
 - **Value**: 5
 - **Cost**: 3
@@ -440,6 +432,16 @@
 - **Discovered**: 2026-04-09
 - **Achieved**: 2026-04-11
 
+### 🎯T46 Eliminate `brew cat` dependency
+- **Value**: 5
+- **Cost**: 1
+- **Acceptance**: TODO
+- **Context**: The C++ source build code path (`source_build.cpp`) shells out to `brew cat` in four places to fetch formula source. This defeats the goal of running without Homebrew installed. The Ruby code path (`extract_formula.rb`) already fetches formula source from the GitHub API via the `ruby_source_path` field in the formulae.brew.sh JSON — the C++ path should do the same.  **What to do:** - Fetch formula source from `https://raw.githubusercontent.com/Homebrew/homebrew-core/master/{ruby_source_path}` using the `ruby_source_path` from the JSON API (already available). - Remove all `brew cat` calls from `source_build.cpp`. - The Ruby path already works correctly — this is C++ parity.
+- **Status**: Achieved
+- **Discovered**: 2026-04-09
+- **Achieved**: 2026-04-11
+- **Actual-cost**: 2
+
 ### 🎯T49 Shared Cellar at /opt/homebrew, environments in ~/.den
 - **Value**: 13
 - **Cost**: 1.5
@@ -510,7 +512,6 @@ graph TD
     T44["Advanced trust model"]
     T44_5["Manifest file locking"]
     T45["Shim-free build toolchain"]
-    T46["Eliminate `brew cat` dependen…"]
     T47["Linux bundled Ruby"]
     T48["Bottle relocation at scale"]
     T5["Tap management"]
