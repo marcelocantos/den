@@ -1,3 +1,6 @@
 [submodule "vendor/github.com/gabime/spdlog"]
 	path = vendor/github.com/gabime/spdlog
 	url = https://github.com/gabime/spdlog.git
+[submodule "tests/corpus/homebrew-core"]
+	path = tests/corpus/homebrew-core
+	url = https://github.com/Homebrew/homebrew-core
