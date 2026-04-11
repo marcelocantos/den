@@ -579,6 +579,7 @@ void Cli::M::setup() {
         auto active = active_env_path(cfg.den_home);
         auto resolved = resolve(cfg.den_home, active);
 
+        std::cout << "den: " << DEN_VERSION << "\n";
         std::cout << "Active environment: " << active << "\n";
         std::cout << "Packages: " << resolved.size() << "\n";
 
@@ -738,6 +739,15 @@ void Cli::M::setup() {
                 ++count;
             }
         }
+        // Check for den self-update.
+        auto self = check_for_update(cfg);
+        if (self) {
+            max_name = std::max(max_name, std::string("den").size());
+            std::cout << std::left << std::setw(static_cast<int>(max_name + 2)) << "den"
+                      << DEN_VERSION << " -> " << self->latest_version << "\n";
+            ++count;
+        }
+
         if (count == 0) {
             std::cout << "All packages are up to date.\n";
         }
