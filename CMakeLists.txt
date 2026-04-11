@@ -30,8 +30,10 @@ find_package(LibArchive REQUIRED)
 # --- den library (all modules) ---
 file(GLOB_RECURSE DEN_SOURCES src/*.cpp)
 
-# Add the embedded Ruby bundle data (C source).
-if(EXISTS "${CMAKE_SOURCE_DIR}/src/ruby/bundle_data.c")
+# Add the embedded Ruby bundle data (C source). macOS only — Linux
+# lazy-downloads Portable Ruby on first source build (🎯T47), so it has
+# no need for the embedded bundle and we keep it out of the binary.
+if(APPLE AND EXISTS "${CMAKE_SOURCE_DIR}/src/ruby/bundle_data.c")
     list(APPEND DEN_SOURCES "${CMAKE_SOURCE_DIR}/src/ruby/bundle_data.c")
 endif()
 

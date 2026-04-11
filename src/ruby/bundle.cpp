@@ -3,16 +3,23 @@
 
 #include "bundle.h"
 
-#include "../build/relocate.h"
 #include "../core/error.h"
+
+#ifdef __APPLE__
+#include "../build/relocate.h"
 #include "../download/archive.h"
-
-#include <spdlog/spdlog.h>
-
 #include <cstdio>
 #include <fstream>
+#include <spdlog/spdlog.h>
 #include <sys/file.h>
 #include <unistd.h>
+#else
+#include "portable_ruby.h"
+#endif
+
+namespace den {
+
+#ifdef __APPLE__
 
 // The bundle data is compiled from src/ruby/bundle_data.c.
 extern "C" {
@@ -20,9 +27,9 @@ extern const unsigned char _den_ruby_bundle_start[];
 extern const size_t _den_ruby_bundle_size;
 }
 
-namespace den {
+namespace {
 
-fs::path ensure_ruby_bundle(const fs::path& den_home) {
+fs::path ensure_ruby_bundle_embedded(const fs::path& den_home) {
     auto ruby_dir = den_home / "ruby";
     auto marker = ruby_dir / ".unpacked";
 
@@ -76,8 +83,8 @@ fs::path ensure_ruby_bundle(const fs::path& den_home) {
     // Make the ruby binary executable.
     auto ruby_bin = ruby_dir / "ruby" / "bin" / "ruby";
     if (fs::exists(ruby_bin)) {
-        fs::permissions(ruby_bin, fs::perms::owner_exec | fs::perms::group_exec |
-                                     fs::perms::others_exec,
+        fs::permissions(ruby_bin,
+                        fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
                         fs::perm_options::add);
     }
 
@@ -94,6 +101,21 @@ fs::path ensure_ruby_bundle(const fs::path& den_home) {
                 std::distance(fs::recursive_directory_iterator(ruby_dir),
                               fs::recursive_directory_iterator{}));
     return ruby_dir;
+}
+
+} // namespace
+
+#endif // __APPLE__
+
+fs::path ensure_ruby_bundle(const fs::path& den_home) {
+#ifdef __APPLE__
+    // macOS: use the Ruby bundle embedded in the den binary at build time.
+    return ensure_ruby_bundle_embedded(den_home);
+#else
+    // Linux: lazy-download Homebrew Portable Ruby from the pinned GitHub
+    // release on first use (🎯T47).
+    return ensure_portable_ruby_linux(den_home);
+#endif
 }
 
 } // namespace den
