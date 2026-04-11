@@ -281,28 +281,41 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
     if (!formula_source.empty()) {
         auto parsed = parse_formula(formula_source, dest.string(), name);
 
-        // Apply env settings from formula.
-        for (const auto& e : parsed.env_settings) {
-            auto eq = e.find("+=");
-            if (eq != std::string::npos) {
-                auto key = e.substr(0, eq);
-                auto val = e.substr(eq + 2);
-                if (env.count(key))
-                    env[key] += " " + val;
-                else
-                    env[key] = val;
+        if (parsed.complexity != FormulaComplexity::Simple) {
+            // Soundness invariant: never use parser output for a formula
+            // whose install body contains constructs we do not handle.
+            // Doing so would silently run a truncated build. Log the
+            // markers for explainability, then fall through to the
+            // generic build-system detector below.
+            SPDLOG_WARN("native parser refused {} ({}): {} complexity markers", name,
+                        to_string(parsed.complexity), parsed.complexity_markers.size());
+            for (const auto& m : parsed.complexity_markers) {
+                SPDLOG_DEBUG("  [{}:{}] {}", m.construct, m.line, m.detail);
             }
-        }
+        } else {
+            // Apply env settings from formula.
+            for (const auto& e : parsed.env_settings) {
+                auto eq = e.find("+=");
+                if (eq != std::string::npos) {
+                    auto key = e.substr(0, eq);
+                    auto val = e.substr(eq + 2);
+                    if (env.count(key))
+                        env[key] += " " + val;
+                    else
+                        env[key] = val;
+                }
+            }
 
-        if (!parsed.build_commands.empty()) {
-            std::cout << "==> Building (formula: " << parsed.build_commands.size()
-                      << " commands)\n";
-            for (const auto& cmd : parsed.build_commands) {
-                rc = run_in_dir(src_dir, cmd, env);
-                if (rc != 0)
-                    break;
+            if (!parsed.build_commands.empty()) {
+                std::cout << "==> Building (formula: " << parsed.build_commands.size()
+                          << " commands)\n";
+                for (const auto& cmd : parsed.build_commands) {
+                    rc = run_in_dir(src_dir, cmd, env);
+                    if (rc != 0)
+                        break;
+                }
+                used_formula = true;
             }
-            used_formula = true;
         }
     }
 
