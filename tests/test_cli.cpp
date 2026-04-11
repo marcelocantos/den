@@ -51,10 +51,23 @@ struct TempDir {
 // Helper: run the den binary with the given args and den_home, capturing
 // combined stdout+stderr.  The binary is expected at ./den relative to the
 // working directory (the build directory when run via ctest).
+//
+// Tests also override HOMEBREW_PREFIX and HOMEBREW_CELLAR so the binary
+// sees an empty, isolated package store rather than the host's shared
+// Homebrew Cellar. Without this, `den list` (and any other command that
+// enumerates the store) leaks host state into test assertions.
 // ---------------------------------------------------------------------------
 static std::string run_den(const std::string& args, const std::string& den_home) {
     // Build command: redirect stderr to stdout so we capture everything.
-    std::string cmd = "DEN_HOME=" + den_home + " ./den " + args + " 2>&1";
+    // Isolate the shared Cellar by pointing HOMEBREW_PREFIX/CELLAR into the
+    // per-test DEN_HOME. The directories don't need to pre-exist — den
+    // tolerates a missing store for read-only queries.
+    const std::string prefix = den_home + "/brew";
+    const std::string cellar = prefix + "/Cellar";
+    std::string cmd = "DEN_HOME=" + den_home +
+                      " HOMEBREW_PREFIX=" + prefix +
+                      " HOMEBREW_CELLAR=" + cellar +
+                      " ./den " + args + " 2>&1";
 
     FILE* pipe = ::popen(cmd.c_str(), "r");
     if (!pipe) {
