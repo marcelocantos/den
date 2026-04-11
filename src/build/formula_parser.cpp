@@ -161,11 +161,83 @@ std::string parse_system_call(const std::string& line, const std::string& prefix
     return cmd;
 }
 
+/// Strip Ruby interpolation so a leading-keyword test (e.g. "if") doesn't
+/// misfire on a quoted string that happens to contain those characters.
+bool line_starts_with_keyword(const std::string& line, const std::string& keyword) {
+    if (!line.starts_with(keyword))
+        return false;
+    if (line.size() == keyword.size())
+        return true;
+    char next = line[keyword.size()];
+    // The keyword must be a whole word, not a prefix of something else
+    // (e.g. "iffy", "doctor", "case_insensitive"). Allow space, tab,
+    // EOL, or an opening paren / brace.
+    return next == ' ' || next == '\t' || next == '(' || next == '{' || next == ':';
+}
+
+/// Does a logical line contain an unhandled DSL construct? Returns the
+/// construct name to record, or empty if the line is plain. The returned
+/// name identifies *why* the formula is complex, for explainability.
+std::string detect_complexity_construct(const std::string& line) {
+    // Conditional / control flow.
+    if (line_starts_with_keyword(line, "if"))
+        return "if";
+    if (line_starts_with_keyword(line, "unless"))
+        return "unless";
+    if (line_starts_with_keyword(line, "case"))
+        return "case";
+    if (line_starts_with_keyword(line, "begin"))
+        return "begin";
+    // Platform / arch gates — these are part of the install body in modern
+    // formulae and must never be silently skipped.
+    if (line_starts_with_keyword(line, "on_macos"))
+        return "on_macos";
+    if (line_starts_with_keyword(line, "on_linux"))
+        return "on_linux";
+    if (line_starts_with_keyword(line, "on_arm"))
+        return "on_arm";
+    if (line_starts_with_keyword(line, "on_intel"))
+        return "on_intel";
+    if (line_starts_with_keyword(line, "on_big_sur") || line_starts_with_keyword(line, "on_monterey") ||
+        line_starts_with_keyword(line, "on_ventura") || line_starts_with_keyword(line, "on_sonoma") ||
+        line_starts_with_keyword(line, "on_sequoia") || line_starts_with_keyword(line, "on_tahoe"))
+        return "on_macos_version";
+    // Top-level DSL blocks that can appear in install.
+    if (line_starts_with_keyword(line, "resource"))
+        return "resource";
+    if (line_starts_with_keyword(line, "patch"))
+        return "patch";
+    if (line_starts_with_keyword(line, "inreplace"))
+        return "inreplace";
+    if (line_starts_with_keyword(line, "bottle"))
+        return "bottle";
+    // Generic do-block (e.g. `Dir.chdir("foo") do`). We cannot reason
+    // about what the block does without a real evaluator.
+    if (line.ends_with(" do") || line.ends_with("|") || line.starts_with("do "))
+        return "do";
+    return "";
+}
+
 } // namespace
+
+const char* to_string(FormulaComplexity c) {
+    switch (c) {
+    case FormulaComplexity::Simple:
+        return "simple";
+    case FormulaComplexity::Complex:
+        return "complex";
+    case FormulaComplexity::Unsupported:
+        return "unsupported";
+    }
+    return "?";
+}
 
 ParsedFormula parse_formula(const std::string& brew_cat_output, const std::string& prefix,
                             const std::string& name) {
     ParsedFormula result;
+    // Optimistic default: downgraded to Complex on any unhandled construct,
+    // or left as Unsupported if the formula has no install body at all.
+    result.complexity = FormulaComplexity::Simple;
     std::string lib = prefix + "/lib";
 
     // Extract source URL and SHA256.
@@ -182,16 +254,27 @@ ParsedFormula parse_formula(const std::string& brew_cat_output, const std::strin
     auto body = extract_install_body(brew_cat_output);
     if (body.empty()) {
         SPDLOG_WARN("no install method found in formula for {}", name);
+        result.complexity = FormulaComplexity::Unsupported;
+        result.complexity_markers.push_back({"missing-install", 0, "no `def install` block found"});
         return result;
     }
 
-    // Join continuation lines (lines ending with comma).
-    std::vector<std::string> lines;
+    // Join continuation lines (lines ending with comma). Each entry is
+    // paired with the 1-based line number it started on, so complexity
+    // markers can point at the offending construct.
+    struct LogicalLine {
+        std::string text;
+        int start_line;
+    };
+    std::vector<LogicalLine> lines;
     {
         std::istringstream raw(body);
         std::string raw_line;
         std::string accum;
+        int accum_start = 0;
+        int current_line = 0;
         while (std::getline(raw, raw_line)) {
+            ++current_line;
             auto first = raw_line.find_first_not_of(" \t");
             if (first == std::string::npos)
                 continue;
@@ -221,6 +304,7 @@ ParsedFormula parse_formula(const std::string& brew_cat_output, const std::strin
 
             if (accum.empty()) {
                 accum = trimmed;
+                accum_start = current_line;
             } else {
                 accum += " " + trimmed;
             }
@@ -235,25 +319,40 @@ ParsedFormula parse_formula(const std::string& brew_cat_output, const std::strin
                 continue;
             }
 
-            lines.push_back(accum_trimmed);
+            lines.push_back({accum_trimmed, accum_start});
             accum.clear();
+            accum_start = 0;
         }
         if (!accum.empty())
-            lines.push_back(accum);
+            lines.push_back({accum, accum_start});
     }
 
     // Process joined lines.
-    for (const auto& trimmed : lines) {
+    for (const auto& ll : lines) {
+        const auto& trimmed = ll.text;
 
-        // Skip comments, conditionals, blocks we can't handle.
+        // Comments are not load-bearing.
         if (trimmed.starts_with("#"))
             continue;
-        if (trimmed.starts_with("if ") || trimmed.starts_with("unless ") ||
-            trimmed.starts_with("else") || trimmed.starts_with("end") ||
-            trimmed.starts_with("do") || trimmed.starts_with("resource") ||
-            trimmed.starts_with("(") || trimmed.starts_with("}") ||
-            trimmed.starts_with("{") || trimmed.starts_with("|"))
+
+        // Scope/structure tokens from previously-opened blocks. `else`/`end`/
+        // closing braces on their own are not unhandled constructs — they're
+        // the tail of a construct the parser already flagged when it saw the
+        // opening keyword.
+        if (trimmed == "else" || trimmed.starts_with("else ") || trimmed.starts_with("elsif ") ||
+            trimmed == "end" || trimmed.starts_with("end ") || trimmed.starts_with("end#") ||
+            trimmed == "}" || trimmed == ")" || trimmed.starts_with("| ") || trimmed == "|")
             continue;
+
+        // Known DSL constructs the parser does not handle: emit a marker
+        // and downgrade the verdict. Keep reading so every offender is
+        // collected — callers get a full picture of *why* a formula is
+        // complex, not just the first trigger.
+        if (auto construct = detect_complexity_construct(trimmed); !construct.empty()) {
+            result.complexity_markers.push_back({construct, ll.start_line, trimmed});
+            result.complexity = FormulaComplexity::Complex;
+            continue;
+        }
 
         // ENV modifications.
         if (trimmed.starts_with("ENV.append") || trimmed.starts_with("ENV.prepend") ||
@@ -262,7 +361,11 @@ ParsedFormula parse_formula(const std::string& brew_cat_output, const std::strin
             std::regex env_re(R"RE(ENV\.\w+\s+"(\w+)",\s+"([^"]+)")RE");
             if (std::regex_search(trimmed, match, env_re)) {
                 result.env_settings.push_back(match[1].str() + "+=" + match[2].str());
+                continue;
             }
+            // An ENV mutation we can't decode is an unhandled construct.
+            result.complexity_markers.push_back({"ENV", ll.start_line, trimmed});
+            result.complexity = FormulaComplexity::Complex;
             continue;
         }
 
@@ -271,21 +374,20 @@ ParsedFormula parse_formula(const std::string& brew_cat_output, const std::strin
             auto cmd = parse_system_call(trimmed, prefix, lib, name);
             if (!cmd.empty()) {
                 result.build_commands.push_back(cmd);
+                continue;
             }
+            // A `system` line the parser couldn't decode is still an
+            // unhandled construct — don't drop it on the floor.
+            result.complexity_markers.push_back({"system", ll.start_line, trimmed});
+            result.complexity = FormulaComplexity::Complex;
             continue;
         }
 
-        // inreplace — text substitution in files (skip for now).
-        if (trimmed.starts_with("inreplace "))
-            continue;
-
-        // mkdir_p, cd, etc. — directory manipulation.
-        if (trimmed.starts_with("mkdir")) {
-            // mkdir_p "path" -> mkdir -p path
+        // mkdir_p — directory manipulation.
+        if (trimmed.starts_with("mkdir_p ")) {
             std::regex mkdir_re(R"RE(mkdir_p\s+"([^"]+)")RE");
             if (std::regex_search(trimmed, match, mkdir_re)) {
                 auto dir = match[1].str();
-                // Substitute prefix vars.
                 auto replace_prefix = [&](std::string& s) {
                     size_t p = 0;
                     while ((p = s.find("#{prefix}", p)) != std::string::npos)
@@ -293,9 +395,17 @@ ParsedFormula parse_formula(const std::string& brew_cat_output, const std::strin
                 };
                 replace_prefix(dir);
                 result.build_commands.push_back("mkdir -p " + dir);
+                continue;
             }
+            result.complexity_markers.push_back({"mkdir_p", ll.start_line, trimmed});
+            result.complexity = FormulaComplexity::Complex;
             continue;
         }
+
+        // Anything else is an unhandled statement. Record it so we never
+        // silently drop install-method logic the parser does not understand.
+        result.complexity_markers.push_back({"unknown-statement", ll.start_line, trimmed});
+        result.complexity = FormulaComplexity::Complex;
     }
 
     return result;
