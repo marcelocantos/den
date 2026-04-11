@@ -2,14 +2,16 @@ last_evaluated: a0e9822
 targets:
   T1:
     name: Core infrastructure
-    status: identified
+    status: achieved
     value: 1.0
     cost: 1.0
+    actual_cost: 1.0
     acceptance:
     - TODO
     context: den builds, runs, has module skeleton. **Achieved.**
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-04-11
   T10:
     name: Version switching
     status: identified
@@ -392,14 +394,17 @@ targets:
     discovered: 2026-04-09
   T43:
     name: CI/CD pipeline
-    status: identified
+    status: achieved
     value: 13.0
     cost: 3.0
     acceptance:
-    - TODO
+    - CI workflow (.github/workflows/ci.yml) runs build + test on macOS and Linux for every push to master
+    - Release workflow (.github/workflows/release.yml) builds binaries for darwin-aarch64, linux-x86_64, linux-aarch64 and uploads to GitHub Release
+    - CI is green on master
     context: 'GitHub Actions workflow for the den project:'
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-04-11
   T44:
     name: Advanced trust model
     status: identified

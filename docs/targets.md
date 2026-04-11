@@ -4,14 +4,6 @@
 
 ## Active
 
-### 🎯T1 Core infrastructure
-- **Value**: 1
-- **Cost**: 1
-- **Acceptance**: TODO
-- **Context**: den builds, runs, has module skeleton. **Achieved.**
-- **Status**: Identified
-- **Discovered**: 2026-04-09
-
 ### 🎯T10 Version switching
 - **Value**: 1
 - **Cost**: 1
@@ -310,14 +302,6 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-09
 
-### 🎯T43 CI/CD pipeline
-- **Value**: 13
-- **Cost**: 3
-- **Acceptance**: TODO
-- **Context**: GitHub Actions workflow for the den project:
-- **Status**: Identified
-- **Discovered**: 2026-04-09
-
 ### 🎯T44 Advanced trust model
 - **Value**: 13
 - **Cost**: 21
@@ -442,6 +426,28 @@
 
 ## Achieved
 
+### 🎯T1 Core infrastructure
+- **Value**: 1
+- **Cost**: 1
+- **Acceptance**: TODO
+- **Context**: den builds, runs, has module skeleton. **Achieved.**
+- **Status**: Achieved
+- **Discovered**: 2026-04-09
+- **Achieved**: 2026-04-11
+- **Actual-cost**: 1
+
+### 🎯T43 CI/CD pipeline
+- **Value**: 13
+- **Cost**: 3
+- **Acceptance**:
+  - CI workflow (.github/workflows/ci.yml) runs build + test on macOS and Linux for every push to master
+  - Release workflow (.github/workflows/release.yml) builds binaries for darwin-aarch64, linux-x86_64, linux-aarch64 and uploads to GitHub Release
+  - CI is green on master
+- **Context**: GitHub Actions workflow for the den project:
+- **Status**: Achieved
+- **Discovered**: 2026-04-09
+- **Achieved**: 2026-04-11
+
 ### 🎯T53 Upgrade activity is logged and queryable via `den log`
 - **Value**: 5
 - **Cost**: 3
@@ -463,7 +469,6 @@
 
 ```mermaid
 graph TD
-    T1["Core infrastructure"]
     T10["Version switching"]
     T11["��� Source builds"]
     T12["Cask support"]
@@ -500,7 +505,6 @@ graph TD
     T40["Go provider"]
     T41["Cargo provider"]
     T42["Independent hash verification…"]
-    T43["CI/CD pipeline"]
     T44["Advanced trust model"]
     T44_5["Manifest file locking"]
     T45["Shim-free build toolchain"]
@@ -525,7 +529,6 @@ graph TD
     T39 -.->|needs| T23
     T40 -.->|needs| T23
     T41 -.->|needs| T23
-    T42 -.->|needs| T43
     T51 -.->|needs| T13
     T52 -.->|needs| T33
 ```
