@@ -33,9 +33,10 @@ struct Package {
     };
     std::map<std::string, Archive> archives;
 
-    // Source build info (future).
+    // Source build info.
     std::optional<std::string> source_url;
     std::optional<std::string> source_sha256;
+    std::optional<std::string> ruby_source_path; // e.g. "Formula/t/tree.rb"
 
     // Linking control.
     bool keg_only = false;

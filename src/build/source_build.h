@@ -21,9 +21,10 @@ namespace fs = std::filesystem;
 /// 4. Install into the den store at store/<name>/<version>/
 ///
 /// Returns the store path of the installed package.
-fs::path build_from_source(const Config& config, const std::string& name, const std::string& version);
+fs::path build_from_source(const Config& config, const PackageIndex& idx,
+                           const std::string& name, const std::string& version);
 
-/// Extract build metadata from a formula using `brew cat` and parsing.
+/// Extract build metadata from a formula's Ruby source.
 struct BuildRecipe {
     std::string source_url;
     std::string source_sha256;
@@ -31,6 +32,10 @@ struct BuildRecipe {
     std::vector<std::string> build_steps;
 };
 
-BuildRecipe extract_build_recipe(const std::string& name);
+/// Fetch formula Ruby source via ruby_source_path from the index.
+/// Returns the formula text, or empty string on failure.
+std::string fetch_formula_source(const PackageIndex& idx, const std::string& name);
+
+BuildRecipe extract_build_recipe(const PackageIndex& idx, const std::string& name);
 
 } // namespace den

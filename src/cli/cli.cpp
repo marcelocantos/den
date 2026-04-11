@@ -124,7 +124,7 @@ void Cli::M::setup() {
             for (const auto& name : install_names) {
                 auto* pkg = idx.find(name);
                 std::string version = pkg ? pkg->version : "unknown";
-                auto dest = den::build_from_source(cfg, name, version);
+                auto dest = den::build_from_source(cfg, idx, name, version);
                 with_manifest(cfg.den_home, active, [&](Manifest& m) {
                     m.packages[name] = version;
                 });

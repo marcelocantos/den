@@ -9,7 +9,6 @@
 #include "../download/http.h"
 #include "../download/sha256.h"
 #include "../ruby/bundle.h"
-// No embedded Ruby VM — den shells out to the bundled Ruby binary.
 #include "../store/store.h"
 
 #include <spdlog/spdlog.h>
@@ -90,27 +89,48 @@ BuildRecipe parse_formula_source(const std::string& formula_output) {
 
 } // namespace
 
-BuildRecipe extract_build_recipe(const std::string& name) {
-    auto [rc, output] = run("brew cat " + name + " 2>/dev/null");
-    if (rc != 0) {
-        auto [rc2, json_out] = run("brew info --json=v1 " + name + " 2>/dev/null");
-        if (rc2 != 0)
-            throw UserError("cannot find formula for '" + name + "'");
-        BuildRecipe recipe;
-        std::smatch match;
-        std::regex url_re(R"RE("url"\s*:\s*"([^"]+)")RE");
-        std::regex sha_re(R"RE("checksum"\s*:\s*"([0-9a-f]{64})")RE");
-        if (std::regex_search(json_out, match, url_re))
-            recipe.source_url = match[1].str();
-        if (std::regex_search(json_out, match, sha_re))
-            recipe.source_sha256 = match[1].str();
-        return recipe;
+std::string fetch_formula_source(const PackageIndex& idx, const std::string& name) {
+    const auto* pkg = idx.find(name);
+    if (!pkg || !pkg->ruby_source_path) {
+        SPDLOG_DEBUG("no ruby_source_path for '{}' in index", name);
+        return "";
     }
-    return parse_formula_source(output);
+
+    auto url = "https://raw.githubusercontent.com/Homebrew/homebrew-core/master/" +
+               *pkg->ruby_source_path;
+    try {
+        auto source = fetch_url(url);
+        SPDLOG_INFO("fetched formula source for '{}' from GitHub ({} bytes)", name, source.size());
+        return source;
+    } catch (const std::exception& e) {
+        SPDLOG_WARN("failed to fetch formula source for '{}': {}", name, e.what());
+        return "";
+    }
 }
 
-fs::path build_from_source(const Config& config, const std::string& name,
-                           const std::string& version) {
+BuildRecipe extract_build_recipe(const PackageIndex& idx, const std::string& name) {
+    auto source = fetch_formula_source(idx, name);
+    if (!source.empty()) {
+        return parse_formula_source(source);
+    }
+
+    // Fallback: try brew info JSON for source URL/checksum.
+    auto [rc, json_out] = run("brew info --json=v1 " + name + " 2>/dev/null");
+    if (rc != 0)
+        throw UserError("cannot find formula for '" + name + "'");
+    BuildRecipe recipe;
+    std::smatch match;
+    std::regex url_re(R"RE("url"\s*:\s*"([^"]+)")RE");
+    std::regex sha_re(R"RE("checksum"\s*:\s*"([0-9a-f]{64})")RE");
+    if (std::regex_search(json_out, match, url_re))
+        recipe.source_url = match[1].str();
+    if (std::regex_search(json_out, match, sha_re))
+        recipe.source_sha256 = match[1].str();
+    return recipe;
+}
+
+fs::path build_from_source(const Config& config, const PackageIndex& idx,
+                           const std::string& name, const std::string& version) {
     auto dest = package_path(config.store, name, version);
     if (fs::is_directory(dest) && !fs::is_empty(dest)) {
         SPDLOG_INFO("{} {} already built", name, version);
@@ -119,22 +139,21 @@ fs::path build_from_source(const Config& config, const std::string& name,
 
     std::cout << "==> Building " << name << " " << version << " from source\n";
 
-    // Path A: Bundled Ruby subprocess (no Homebrew needed).
-    // Unpacks the Ruby binary + Homebrew library from den's embedded bundle,
-    // then runs den_build.rb as a subprocess.
-    {
+    // Fetch formula source from GitHub (no brew dependency).
+    auto formula_source = fetch_formula_source(idx, name);
+
+    // Path A: Bundled Ruby subprocess.
+    if (!formula_source.empty()) {
         auto ruby_dir = ensure_ruby_bundle(config.den_home);
         auto ruby_bin = ruby_dir / "ruby" / "bin" / "ruby";
-        auto script_path = ruby_dir / "den_build.rb"; // Included in the bundle.
+        auto script_path = ruby_dir / "den_build.rb";
 
-        auto cat_result = run("brew cat " + name + " 2>/dev/null");
-        if (cat_result.first == 0 && !cat_result.second.empty() && fs::exists(ruby_bin) &&
-            fs::exists(script_path)) {
+        if (fs::exists(ruby_bin) && fs::exists(script_path)) {
             auto formula_file = config.cache / "formulas" / (name + ".rb");
             fs::create_directories(formula_file.parent_path());
             {
                 std::ofstream f(formula_file);
-                f << cat_result.second;
+                f << formula_source;
             }
 
             auto homebrew_lib = ruby_dir / "homebrew";
@@ -160,49 +179,40 @@ fs::path build_from_source(const Config& config, const std::string& name,
         }
     }
 
-    // Path B: brew ruby subprocess (Homebrew fallback).
-    {
-        auto cat_result = run("brew cat " + name + " 2>/dev/null");
-        if (cat_result.first == 0 && !cat_result.second.empty()) {
-            auto formula_file = config.cache / "formulas" / (name + ".rb");
-            fs::create_directories(formula_file.parent_path());
-            {
-                std::ofstream f(formula_file);
-                f << cat_result.second;
-            }
+    // Path B: brew ruby subprocess (Homebrew fallback — only if formula
+    // source was fetched but bundled Ruby failed).
+    if (!formula_source.empty()) {
+        auto formula_file = config.cache / "formulas" / (name + ".rb");
+        // formula_file was already written in Path A; reuse it.
 
-            // Find den_build.rb — look relative to the den binary, or in known paths.
-            std::string build_script;
-            for (const auto& candidate :
-                 {"src/ruby/den_build.rb", "../share/den/den_build.rb",
-                  "/usr/local/share/den/den_build.rb"}) {
-                if (fs::exists(candidate)) {
-                    build_script = candidate;
-                    break;
-                }
+        std::string build_script;
+        for (const auto& candidate :
+             {"src/ruby/den_build.rb", "../share/den/den_build.rb",
+              "/usr/local/share/den/den_build.rb"}) {
+            if (fs::exists(candidate)) {
+                build_script = candidate;
+                break;
             }
+        }
 
-            if (!build_script.empty()) {
-                auto cmd = "brew ruby " + build_script + " " + formula_file.string() + " " +
-                           config.store.string() + " " + config.den_home.string();
-                SPDLOG_INFO("ruby build: {}", cmd);
-                auto [ruby_rc, ruby_output] = run(cmd);
+        if (!build_script.empty()) {
+            auto cmd = "brew ruby " + build_script + " " + formula_file.string() + " " +
+                       config.store.string() + " " + config.den_home.string();
+            SPDLOG_INFO("ruby build: {}", cmd);
+            auto [ruby_rc, ruby_output] = run(cmd);
 
-                if (ruby_rc == 0 && ruby_output.find("status=ok") != std::string::npos) {
-                    // Ruby build succeeded.
-                    std::cout << "==> Built " << name << " " << version << " (via formula)\n";
-                    return dest;
-                }
-                SPDLOG_WARN("ruby build failed (rc={}), falling back to parser", ruby_rc);
-                // Clean up failed attempt.
-                std::error_code ec;
-                fs::remove_all(dest, ec);
+            if (ruby_rc == 0 && ruby_output.find("status=ok") != std::string::npos) {
+                std::cout << "==> Built " << name << " " << version << " (via formula)\n";
+                return dest;
             }
+            SPDLOG_WARN("ruby build failed (rc={}), falling back to parser", ruby_rc);
+            std::error_code ec;
+            fs::remove_all(dest, ec);
         }
     }
 
     // Fallback: text-parser-based build.
-    auto recipe = extract_build_recipe(name);
+    auto recipe = extract_build_recipe(idx, name);
     if (recipe.source_url.empty())
         throw UserError("no source URL found for " + name);
 
@@ -265,37 +275,34 @@ fs::path build_from_source(const Config& config, const std::string& name,
     if (!library_path.empty())
         env["LIBRARY_PATH"] = library_path;
 
-    // Try formula-parsed build commands first (exact recipe from brew cat).
+    // Try formula-parsed build commands first.
     int rc = 0;
     bool used_formula = false;
-    {
-        auto cat_result = run("brew cat " + name + " 2>/dev/null");
-        if (cat_result.first == 0) {
-            auto parsed = parse_formula(cat_result.second, dest.string(), name);
+    if (!formula_source.empty()) {
+        auto parsed = parse_formula(formula_source, dest.string(), name);
 
-            // Apply env settings from formula.
-            for (const auto& e : parsed.env_settings) {
-                auto eq = e.find("+=");
-                if (eq != std::string::npos) {
-                    auto key = e.substr(0, eq);
-                    auto val = e.substr(eq + 2);
-                    if (env.count(key))
-                        env[key] += " " + val;
-                    else
-                        env[key] = val;
-                }
+        // Apply env settings from formula.
+        for (const auto& e : parsed.env_settings) {
+            auto eq = e.find("+=");
+            if (eq != std::string::npos) {
+                auto key = e.substr(0, eq);
+                auto val = e.substr(eq + 2);
+                if (env.count(key))
+                    env[key] += " " + val;
+                else
+                    env[key] = val;
             }
+        }
 
-            if (!parsed.build_commands.empty()) {
-                std::cout << "==> Building (formula: " << parsed.build_commands.size()
-                          << " commands)\n";
-                for (const auto& cmd : parsed.build_commands) {
-                    rc = run_in_dir(src_dir, cmd, env);
-                    if (rc != 0)
-                        break;
-                }
-                used_formula = true;
+        if (!parsed.build_commands.empty()) {
+            std::cout << "==> Building (formula: " << parsed.build_commands.size()
+                      << " commands)\n";
+            for (const auto& cmd : parsed.build_commands) {
+                rc = run_in_dir(src_dir, cmd, env);
+                if (rc != 0)
+                    break;
             }
+            used_formula = true;
         }
     }
 

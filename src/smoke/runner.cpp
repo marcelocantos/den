@@ -180,7 +180,7 @@ std::vector<SmokeResult> run_smoke_tests(const fs::path& test_defs_json,
         try {
             if (from_source) {
                 std::string version = pkg ? pkg->version : "unknown";
-                build_from_source(config, name, version);
+                build_from_source(config, idx, name, version);
                 // Update manifest so materialise works.
                 with_manifest(config.den_home, "/", [&](Manifest& m) {
                     m.packages[name] = version;

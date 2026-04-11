@@ -140,6 +140,11 @@ Package transform_formula(const json& f) {
         }
     }
 
+    // Ruby source path (for fetching formula without brew cat).
+    if (f.contains("ruby_source_path") && f["ruby_source_path"].is_string()) {
+        pkg.ruby_source_path = f["ruby_source_path"].get<std::string>();
+    }
+
     // Source URL.
     if (f.contains("urls") && f["urls"].contains("stable") && f["urls"]["stable"].contains("url")) {
         pkg.source_url = f["urls"]["stable"]["url"].get<std::string>();
@@ -214,6 +219,8 @@ json package_to_json(const Package& pkg) {
         j["source_url"] = *pkg.source_url;
     if (pkg.source_sha256)
         j["source_sha256"] = *pkg.source_sha256;
+    if (pkg.ruby_source_path)
+        j["ruby_source_path"] = *pkg.ruby_source_path;
 
     return j;
 }
@@ -259,6 +266,9 @@ Package package_from_json(const json& j) {
     }
     if (j.contains("source_sha256") && j["source_sha256"].is_string()) {
         pkg.source_sha256 = j["source_sha256"].get<std::string>();
+    }
+    if (j.contains("ruby_source_path") && j["ruby_source_path"].is_string()) {
+        pkg.ruby_source_path = j["ruby_source_path"].get<std::string>();
     }
 
     return pkg;
