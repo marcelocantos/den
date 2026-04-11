@@ -217,9 +217,31 @@
 ### 🎯T47 Linux bundled Ruby
 - **Value**: 5
 - **Cost**: 3
-- **Acceptance**: TODO
-- **Context**: The bundled Ruby binary is macOS arm64 only. On Linux, source builds fall back to the text parser, which can't handle complex formulas. Den needs to bundle (or lazy-download) Portable Ruby for Linux x86_64 and arm64 to enable source builds on Linux.  **Approach:** - Homebrew publishes Portable Ruby bottles for Linux x86_64. Use the same download-and-cache strategy as macOS. - The Ruby extraction script (`extract_formula.rb`) is platform-neutral — only the Ruby binary differs. - Consider lazy download on first use (aligned with 🎯T31) rather than bundling in the den binary.
-- **Status**: Identified
+- **Acceptance**:
+  - On Linux x86_64 and Linux arm64, `den` can source-build a complex formula (e.g. `openssl@3` or `readline`) via the Ruby extraction path, not the text-parser fallback.
+  - On first source build on Linux, den lazy-downloads Portable Ruby from the pinned `homebrew-portable-ruby` GitHub release, verifies it against a pinned SHA-256, extracts it under `~/.den/ruby/`, and reuses it on subsequent runs.
+  - Platform detection selects the correct asset per host arch: `arm64_linux.bottle.tar.gz` for Linux arm64, `x86_64_linux.bottle.tar.gz` for Linux x86_64.
+  - A CI job on Linux runs a source-build integration test that would fail if the text-parser fallback were still in use.
+  - macOS (arm64 + x86_64) continues to use the existing embedded-bundle path with no behavioural change — no regression on the macOS test matrix.
+- **Context**: The embedded Ruby bundle in `src/ruby/bundle_data.c` is macOS-only (originally vendored from `/opt/homebrew/Library/Homebrew/vendor/portable-ruby/4.0.2`). On Linux, `source_build.cpp` falls back first to `brew ruby` and ultimately to the text parser, which cannot handle complex formulas. This target closes the Linux gap.
+
+**Verified upstream availability (2026-04-11):** `Homebrew/homebrew-portable-ruby` release `3.4.5` publishes all four bottles we need:
+- `portable-ruby-3.4.5.arm64_big_sur.bottle.tar.gz` (macOS arm64, ~12 MB)
+- `portable-ruby-3.4.5.el_capitan.bottle.tar.gz` (macOS x86_64, ~12 MB)
+- `portable-ruby-3.4.5.arm64_linux.bottle.tar.gz` (Linux arm64, ~14 MB)
+- `portable-ruby-3.4.5.x86_64_linux.bottle.tar.gz` (Linux x86_64, ~14 MB)
+
+**Strategy: split, not unified.** Keep the existing macOS embedded-bundle path untouched (it works, zero-risk). Add a parallel lazy-download path for Linux that pulls from the pinned GitHub release on first source build. Unifying macOS onto the lazy-download path is a separate future target — don't bundle that work here.
+
+**Implementation sketch:**
+- Add `src/ruby/portable_ruby.cpp` with a `download_portable_ruby(platform)` helper that fetches the asset by pinned URL, verifies SHA-256, and extracts to `~/.den/ruby/`.
+- Pin version + SHA-256 per platform in a small header (e.g. `portable_ruby_manifest.h`). Upgrades are intentional, via a source change.
+- In `ensure_ruby_bundle()` (`src/ruby/bundle.cpp`), platform-branch: on macOS use the existing embedded path; on Linux call the new downloader.
+- No relocation needed on Linux — Portable Ruby bottles use relative rpaths (verify this during implementation; if wrong, relocate via `patchelf` which is already a Linux build dep, or use `LD_LIBRARY_PATH`).
+- `extract_formula.rb` is platform-neutral and needs no changes.
+
+**Out of scope:** Unifying macOS onto the lazy-download path; offline/air-gapped installs (addressed by 🎯T31); Windows Ruby.
+- **Status**: Converging
 - **Discovered**: 2026-04-09
 
 ### 🎯T48 Bottle relocation at scale
