@@ -350,14 +350,6 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-09
 
-### 🎯T50 Self-hosting
-- **Value**: 5
-- **Cost**: 2
-- **Acceptance**: TODO
-- **Context**: Den manages itself as a package. `den outdated` reports when a new den release is available. `den self-update` downloads the new binary from GitHub Releases, verifies the SHA256, and atomically replaces the running binary.  **Key constraint:** Den is pinned at the globally installed version in every environment. `den use den <version>` is an error — the only way to change den's version is `den self-update`, which updates the binary and every manifest atomically. This prevents different environments from running different den versions, which would risk manifest format mismatches and subtle bugs.  **Bootstrap:** `install.sh` for first install (can't use den before den exists). After that, den manages its own upgrades.  **Mechanism:** 1. Check latest release tag via GitHub Releases API 2. Compare against `DEN_VERSION` 3. Download platform-appropriate tarball to temp path 4. Verify SHA256 checksum 5. `rename(temp, target)` — atomic, no window where binary is missing 6. Update den's version in all manifests  **Future:** This is the seed of 🎯T23 (multi-provider) — den's own GitHub releases are the first non-Homebrew package source.
-- **Status**: Identified
-- **Discovered**: 2026-04-09
-
 ### 🎯T51 Safe automatic upgrades
 - **Value**: 5
 - **Cost**: 5
@@ -452,6 +444,20 @@
 - **Achieved**: 2026-04-11
 - **Actual-cost**: 2
 
+### 🎯T50 Self-hosting
+- **Value**: 5
+- **Cost**: 2
+- **Acceptance**:
+  - den self-update checks GitHub Releases, downloads, verifies SHA256, and atomically replaces the binary
+  - den outdated reports when a newer den release is available
+  - den status shows the current den version
+  - install.sh bootstraps den on a fresh system
+- **Context**: Den manages itself as a package. `den outdated` reports when a new den release is available. `den self-update` downloads the new binary from GitHub Releases, verifies the SHA256, and atomically replaces the running binary.  **Key constraint:** Den is pinned at the globally installed version in every environment. `den use den <version>` is an error — the only way to change den's version is `den self-update`, which updates the binary and every manifest atomically. This prevents different environments from running different den versions, which would risk manifest format mismatches and subtle bugs.  **Bootstrap:** `install.sh` for first install (can't use den before den exists). After that, den manages its own upgrades.  **Mechanism:** 1. Check latest release tag via GitHub Releases API 2. Compare against `DEN_VERSION` 3. Download platform-appropriate tarball to temp path 4. Verify SHA256 checksum 5. `rename(temp, target)` — atomic, no window where binary is missing 6. Update den's version in all manifests  **Future:** This is the seed of 🎯T23 (multi-provider) — den's own GitHub releases are the first non-Homebrew package source.
+- **Status**: Achieved
+- **Discovered**: 2026-04-09
+- **Achieved**: 2026-04-11
+- **Actual-cost**: 1
+
 ### 🎯T53 Upgrade activity is logged and queryable via `den log`
 - **Value**: 5
 - **Cost**: 3
@@ -515,7 +521,6 @@ graph TD
     T47["Linux bundled Ruby"]
     T48["Bottle relocation at scale"]
     T5["Tap management"]
-    T50["Self-hosting"]
     T51["Safe automatic upgrades"]
     T52["Restart services after upgrade"]
     T6["Dependency resolution"]

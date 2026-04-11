@@ -491,14 +491,19 @@ targets:
     discovered: 2026-04-09
   T50:
     name: Self-hosting
-    status: identified
+    status: achieved
     value: 5.0
     cost: 2.0
+    actual_cost: 1.0
     acceptance:
-    - TODO
+    - den self-update checks GitHub Releases, downloads, verifies SHA256, and atomically replaces the binary
+    - den outdated reports when a newer den release is available
+    - den status shows the current den version
+    - install.sh bootstraps den on a fresh system
     context: Den manages itself as a package. `den outdated` reports when a new den release is available. `den self-update` downloads the new binary from GitHub Releases, verifies the SHA256, and atomically replaces the running binary.  **Key constraint:** Den is pinned at the globally installed version in every environment. `den use den <version>` is an error — the only way to change den's version is `den self-update`, which updates the binary and every manifest atomically. This prevents different environments from running different den versions, which would risk manifest format mismatches and subtle bugs.  **Bootstrap:** `install.sh` for first install (can't use den before den exists). After that, den manages its own upgrades.  **Mechanism:** 1. Check latest release tag via GitHub Releases API 2. Compare against `DEN_VERSION` 3. Download platform-appropriate tarball to temp path 4. Verify SHA256 checksum 5. `rename(temp, target)` — atomic, no window where binary is missing 6. Update den's version in all manifests  **Future:** This is the seed of 🎯T23 (multi-provider) — den's own GitHub releases are the first non-Homebrew package source.
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-04-11
   T51:
     name: Safe automatic upgrades
     status: identified
