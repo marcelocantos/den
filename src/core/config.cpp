@@ -33,10 +33,9 @@ Config Config::detect() {
     c.macos_version = detect_macos_version();
 
     c.den_home = env_or("DEN_HOME", home_dir() / ".den");
-    c.store = c.den_home / "store";
     c.cache = c.den_home / "cache";
 
-    // Homebrew paths (read-only, for migration).
+    // Homebrew paths — den shares the Cellar with Homebrew.
 #ifdef __APPLE__
     c.homebrew_prefix =
         env_or("HOMEBREW_PREFIX", c.arch == Arch::Arm64 ? "/opt/homebrew" : "/usr/local");
@@ -44,6 +43,7 @@ Config Config::detect() {
     c.homebrew_prefix = env_or("HOMEBREW_PREFIX", "/home/linuxbrew/.linuxbrew");
 #endif
     c.homebrew_cellar = env_or("HOMEBREW_CELLAR", c.homebrew_prefix / "Cellar");
+    c.store = c.homebrew_cellar; // Shared Cellar — bottles pour at expected prefix
 
     return c;
 }

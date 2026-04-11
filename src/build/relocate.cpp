@@ -199,9 +199,10 @@ void relocate_bottle(const fs::path& package_dir, const std::string& name,
                      const std::string& version, const fs::path& store) {
     // @@HOMEBREW_CELLAR@@ in bottles is followed by /<name>/<version>,
     // so we replace it with the store path (not including name/version).
-    // Example: @@HOMEBREW_CELLAR@@/readline/8.3.3 → ~/.den/store/readline/8.3.3
+    // With shared Cellar (/opt/homebrew/Cellar), this is usually a no-op
+    // since placeholders resolve to the original paths.
     auto cellar_path = store.string();
-    auto prefix_path = store.parent_path().string(); // ~/.den
+    auto prefix_path = store.parent_path().string(); // /opt/homebrew
 
     auto text_count = relocate_text_placeholders(package_dir, prefix_path, cellar_path);
     auto dylib_count = fix_dylib_paths(package_dir, package_dir);

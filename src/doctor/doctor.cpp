@@ -62,8 +62,8 @@ void check_store(const Config& config, std::vector<Finding>& findings) {
     SPDLOG_DEBUG("check: store");
 
     if (!fs::exists(config.store)) {
-        warn(findings, "package store not initialised: " + config.store.string() +
-                           " (no packages installed yet)");
+        warn(findings, "Cellar does not exist: " + config.store.string() +
+                           " (install Homebrew or create it manually)");
     } else if (!fs::is_directory(config.store)) {
         error(findings, "store path exists but is not a directory: " + config.store.string());
     }

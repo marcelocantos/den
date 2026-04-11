@@ -15,12 +15,12 @@ namespace fs = std::filesystem;
 struct Config {
     // Den's own paths.
     fs::path den_home; // ~/.den/
-    fs::path store;    // ~/.den/store/  (replaces Cellar)
+    fs::path store;    // /opt/homebrew/Cellar (shared with Homebrew)
     fs::path cache;    // ~/.den/cache/
 
-    // Homebrew paths (read-only, used for migration).
+    // Homebrew paths.
     fs::path homebrew_prefix; // /opt/homebrew
-    fs::path homebrew_cellar; // /opt/homebrew/Cellar
+    fs::path homebrew_cellar; // /opt/homebrew/Cellar (same as store)
 
     // Platform.
     Arch arch;

@@ -788,11 +788,9 @@ void Cli::M::setup() {
         auto cfg = Config::detect();
         fs::path target(which_file);
 
-        // Try den store first, then Homebrew Cellar.
+        // Look up in the shared Cellar.
         auto try_lookup = [&](const fs::path& file) -> std::optional<InstalledPackage> {
-            auto result = which_package(cfg.store, file);
-            if (result) return result;
-            return which_package(cfg.homebrew_cellar, file);
+            return which_package(cfg.store, file);
         };
 
         // If it's an explicit path (contains a separator), just look it up directly.

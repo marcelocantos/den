@@ -5,8 +5,9 @@ everything — not just Python, but every package on your system.
 
 ## What den does
 
-- **Independent package store** — den manages its own store at
-  `~/.den/store/`, fully decoupled from Homebrew's Cellar.
+- **Shared Cellar** — den uses `/opt/homebrew/Cellar` directly, so
+  bottles pour at their expected prefix with zero relocation. Den and
+  Homebrew coexist on the same Cellar.
 - **Unified package model** — no formula/cask distinction. Just
   `den install firefox` or `den install ffmpeg`.
 - **Multi-version coinstallation** — install `python@3.11` and
@@ -79,8 +80,8 @@ den upgrade                 # upgrade everything
 Den consumes Homebrew's package ecosystem (the same archives, the same
 formulae API) but manages everything independently:
 
-- **Store** (`~/.den/store/`) holds installed package versions — not
-  shared with Homebrew.
+- **Shared Cellar** (`/opt/homebrew/Cellar/`) holds installed package
+  versions — shared with Homebrew, so bottles work without relocation.
 - **Manifests** declare what each environment contains. Child
   environments inherit from parents and override specific packages.
 - **Materialisation** resolves the manifest hierarchy and creates a
@@ -90,12 +91,13 @@ formulae API) but manages everything independently:
   active environment.
 
 ```
+/opt/homebrew/Cellar/         # shared package store
+├── tree/2.3.2/              # each version in its own directory
+├── ffmpeg/7.1.1/
+└── python@3.13/3.13.2/
+
 ~/.den/
 ├── bin/den                  # the binary
-├── store/                   # installed packages
-│   ├── tree/2.3.2/          # each version in its own directory
-│   ├── ffmpeg/7.1.1/
-│   └── python@3.13/3.13.2/
 ├── config.json              # settings
 ├── manifests/               # environment definitions
 │   ├── ROOT/
@@ -104,7 +106,7 @@ formulae API) but manages everything independently:
 │       └── manifest.json    # /ml (inherits from /)
 ├── envs/                    # materialised environments
 │   ├── ROOT/
-│   │   ├── bin/             # symlinks to store
+│   │   ├── bin/             # symlinks into Cellar
 │   │   ├── lib/
 │   │   ├── include/
 │   │   └── opt/

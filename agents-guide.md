@@ -6,10 +6,10 @@ binary.
 
 ## Key concepts
 
-- **Store**: Package storage at `~/.den/store/<name>/<version>/`.
-  Each version is a self-contained directory. Independent of
-  Homebrew's Cellar.
-- **Environment**: A named set of symlinks into the store.
+- **Cellar**: Shared package storage at `/opt/homebrew/Cellar/<name>/<version>/`.
+  Den uses the same Cellar as Homebrew — bottles pour at their expected
+  prefix with zero relocation.
+- **Environment**: A named set of symlinks into the Cellar.
   Environments use path-based naming (`/` is root, `/ml`,
   `/work/legacy`) with manifest-level inheritance.
 - **Manifest**: JSON file declaring which packages an environment
@@ -56,14 +56,16 @@ den smoke                    # run smoke tests
 ## File layout
 
 ```
+/opt/homebrew/Cellar/    # shared package store
+└── <name>/<ver>/        # each version self-contained
+
 ~/.den/
 ├── bin/den              # binary
-├── store/               # installed packages
-│   └── <name>/<ver>/    # each version self-contained
 ├── config.json          # settings
 ├── manifests/           # environment manifests
 ├── envs/                # materialised environments
 ├── cache/archives/      # content-addressed archive cache
+├── activity.json        # upgrade activity log
 ├── daemon.pid           # daemon process ID
 ├── daemon.log           # daemon log
 └── daemon_state.json    # pending upgrades

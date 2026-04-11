@@ -92,7 +92,6 @@ Snapshot as of v0.8.0.
 | Path | Stability | Notes |
 |---|---|---|
 | `bin/` | Stable | den binary |
-| `store/` | Stable | Installed packages (`store/<name>/<version>/`) |
 | `manifests/` | Stable | Environment manifest files |
 | `envs/` | Stable | Materialised environment directories |
 | `cache/archives/` | Stable | Content-addressed archive cache |
