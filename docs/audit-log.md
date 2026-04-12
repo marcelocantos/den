@@ -2,7 +2,7 @@
 
 ## 2026-04-12 — /release v0.10.0
 
-- **Commit**: `pending`
+- **Commit**: `fe0c6ef`
 - **Outcome**: Released v0.10.0 (darwin-aarch64, linux-x86_64, linux-aarch64). All 🎯T18 soundness work on the native formula parser: oracle test harness against a real homebrew-core corpus (#24), trailing-conditional refusal fix for silent-drop on lines like `system "x" if build.head?` (#24), unresolvable `#{…}` interpolation refusal catching wget's `#{Formula["openssl@3"].opt_prefix}` (🎯T57, #25), golden-file field-by-field oracle comparison against Ruby extraction (#26). 🎯T57 retired. 🎯T18 moved from identified to ~75% done (dependency extraction and installable-for-real CI still remaining).
 
 ## 2026-04-11 — /release v0.9.0
