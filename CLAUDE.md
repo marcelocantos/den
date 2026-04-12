@@ -26,6 +26,15 @@ delivery: merged to master, CI green
 
 profile: cli
 
+## Release
+
+homebrew_tap: disabled
+
+den replaces Homebrew, so distributing den via a Homebrew tap is
+circular. Binaries ship via GitHub Releases and the `install.sh`
+installer. The `/release` skill honours this directive and skips all
+tap-related phases.
+
 ## Architecture
 
 See `docs/targets.md` for the convergence roadmap.
