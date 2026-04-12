@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 4
 last_evaluated: a0e9822
 targets:
   T1:
@@ -111,7 +111,7 @@ targets:
     discovered: 2026-04-09
   T18:
     name: Native formula parser is sound for simple cases and refuses complex ones cleanly
-    status: identified
+    status: achieved
     value: 5.0
     cost: 8.0
     acceptance:
@@ -139,6 +139,7 @@ targets:
       **Out of scope:** extending the fast path to handle any new DSL constructs (follow-up, filed as separate targets when needed). Making the parser a general-purpose Ruby evaluator (never). Matching Ruby's extraction on fields den does not consume.
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-05-15
   T19:
     name: Performance
     status: identified
@@ -521,9 +522,10 @@ targets:
     achieved: 2026-04-11
   T48:
     name: Bottle relocation at scale
-    status: identified
+    status: set_aside
     value: 2.0
     cost: 2.0
+    set_aside_reason: 'Superseded by 🎯T49 (shared Cellar at /opt/homebrew, achieved). Per T48''s own context: "bottles pour at their expected prefix and no relocation is needed for package functionality. Relocation is only relevant for den-specific metadata files in `~/.den/`. This target''s urgency is greatly reduced." Park indefinitely; revisit only if the shared-Cellar decision is reversed.'
     acceptance:
     - TODO
     context: With 🎯T49 (shared Cellar at /opt/homebrew), bottles pour at their expected prefix and no relocation is needed for package functionality. Relocation is only relevant for den-specific metadata files in `~/.den/`. This target's urgency is greatly reduced.
@@ -691,6 +693,46 @@ targets:
     origin: forked from 🎯T18 on 2026-04-12
     discovered: 2026-04-12
     achieved: 2026-04-12
+  T58:
+    name: Native parser extracts formula dependencies on par with Ruby
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - 'The native parser (`src/build/formula_parser.cpp`) extracts `depends_on` declarations from SIMPLE-classified formulae, grouped by phase: build, runtime, optional, recommended, test.'
+    - The oracle harness (`tests/test_oracle.cpp`) compares parser-extracted deps against Ruby's extraction (via `scripts/update-oracle-golden.rb`) field-by-field. Mismatches fail the test.
+    - Golden JSON files under `tests/corpus/golden/` carry a `dependencies` field alongside the existing url/sha256/build_commands/env_settings.
+    - Any unrecognised `depends_on` form (conditional, optional spec without recognised key, etc.) downgrades the formula to COMPLEX with a `ComplexityMarker`.
+    context: |-
+      Carved out of 🎯T18 (retired 2026-05-15) as the larger of its two REMAINING items. Native parser already classifies and extracts URL/SHA256/build_commands/env_settings byte-identical to Ruby for SIMPLE entries; this target adds dependencies to that set.
+
+      Why it matters: dependency extraction is what the install path actually consumes. Without it, the native fast-path can classify a formula as SIMPLE but still need Ruby to figure out what to install first — which defeats the point of the fast path.
+
+      Out of scope: extending dep extraction to COMPLEX-classified entries (Ruby keeps owning that path, see [[project_bundled_ruby]]). Also out of scope: dep extraction for casks.
+    origin: manual
+    discovered: 2026-05-15
+  T59:
+    name: SIMPLE-classified formulae install end-to-end via den without Ruby
+    kind: verify
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - A subset of SIMPLE-baseline entries from `tests/corpus/simple_formulae.txt` actually build end-to-end via `den install --build-from-source`, using only the native parser's output and never spinning up a Ruby interpreter.
+    - Runs in CI on a cron schedule (not per-PR) because builds are slow. A scheduled GitHub Actions workflow under `.github/workflows/` invokes the suite and fails the run on any install failure.
+    - 'Failure modes captured: parser missing a needed field, parser misclassifying a non-trivial formula as SIMPLE, build environment gap that surfaces only at install time.'
+    - The chosen subset is documented (in the workflow file or a sibling text file) and small enough to complete within reasonable CI minutes — initially ~10 fast-building formulae, expandable later.
+    context: |-
+      Carved out of 🎯T18 (retired 2026-05-15) as its second REMAINING item. Field-by-field oracle comparison (PRs #24-#26) proves the native parser's output is *equivalent* to Ruby's; this target proves it is *sufficient* — that den can drive a real install from parser output alone, with no Ruby in the loop.
+
+      Verify-kind: this target validates that the upstream parser work (T18, T58, ...) actually produces a usable install. Acts as the checkpoint that the SIMPLE fast-path is real.
+
+      Out of scope: COMPLEX-classified entries (those go through the Ruby path by design). Also out of scope: casks.
+    verifies:
+    - T18
+    - T58
+    origin: manual
+    discovered: 2026-05-15
   T6:
     name: Dependency resolution
     status: achieved
@@ -703,6 +745,177 @@ targets:
     origin: manual
     discovered: 2026-04-09
     achieved: 2026-04-11
+  T60:
+    name: Multi-provider package management is wired end-to-end
+    kind: verify
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - '`den install` accepts at least one package from each implemented provider (Homebrew, plus the language-specific providers below) without provider-specific syntax leaking into the user-facing command.'
+    - Each provider's installs land in a per-provider area under the Cellar (or equivalent) and are picked up by environment composition via PATH the same way Homebrew kegs are.
+    - '`den list`, `den info`, and `den uninstall` work uniformly across providers.'
+    - 'Smoke tests cover one representative package per active provider end-to-end: install, list, run, uninstall.'
+    context: 'Acts as the shared checkpoint for the multi-provider work cluster: T23 (the trait), T38 (Python), T39 (Node), T40 (Go), T41 (Cargo). The cluster has been a tunnel because all four leaves are work targets with no downstream verification — this verify target gives the decision-maker a checkpoint to steer toward.'
+    verifies:
+    - T23
+    - T38
+    - T39
+    - T40
+    - T41
+    origin: manual
+    discovered: 2026-05-15
+  T61:
+    name: den's built-in supervisor manages services without launchctl
+    kind: verify
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - A representative service (e.g. postgres or redis) starts, runs, and stops via `den services start/stop/status` with no launchctl invocations in the path.
+    - '`den services list` reports live PIDs and uptime correctly; `den services logs <name> [-f]` tails the captured stdout/stderr.'
+    - Restart policies (always / on-failure / never) and graceful-shutdown ordering work as specified in T33.
+    - The daemon socket API (T34) exposes the supervisor state to other den processes and survives daemon restart.
+    - After an upgrade of a managed service binary, the supervisor either restarts cleanly or defers per the upgrade policy (T52).
+    context: 'Shared checkpoint for the supervisor work cluster: T33 (the supervisor itself), T34 (socket API on top), T52 (post-upgrade restart). All three are work-kind tunnels.'
+    verifies:
+    - T33
+    - T34
+    - T52
+    origin: manual
+    discovered: 2026-05-15
+  T62:
+    name: Semantic search returns relevant results across providers
+    kind: verify
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - '`den search <intent>` returns plausible packages for at least three intent-style queries (e.g. "http client", "json processor", "image resizer") under each configured search provider (keyword, embedding, llm).'
+    - The pre-baked embedding index ships in CI and is version-pinned to the embedding model used at query time (T25).
+    - '`den search --smart` overrides to the highest-configured provider and produces a curated, explained result set when an LLM provider is configured.'
+    - Switching providers via `den set search-provider <name>` is reflected in the next search without restart.
+    context: 'Shared checkpoint for the search work: T24 (the providers and CLI surface) and T25 (the CI pipeline that bakes the embedding index).'
+    verifies:
+    - T24
+    - T25
+    origin: manual
+    discovered: 2026-05-15
+  T63:
+    name: SAT solver handles real-world dependency conflicts
+    kind: verify
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - A test corpus of known-tricky dependency scenarios (multi-version coinstall, version-constrained conflicts, optional/recommended interactions across providers) all resolve correctly via the SAT-based solver.
+    - The greedy DFS resolver is removed once the SAT solver passes the corpus — no fallback path remains.
+    - 'Stability ratings (T30) bias the solver''s preference function: by default it prefers stable versions and surfaces a warning when forced onto an unstable candidate.'
+    - '`den deps --explain` shows why the solver chose a particular assignment (which clauses fired, which preferences applied).'
+    context: 'Shared checkpoint for the solver work: T29 (the SAT solver) and T30 (stability-rating preferences feeding into it).'
+    verifies:
+    - T29
+    - T30
+    origin: manual
+    discovered: 2026-05-15
+  T64:
+    name: den's trust model is independently verifiable beyond Homebrew's
+    kind: verify
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - The independent hash replica (T42) is published from a separate CDN and consulted on every install; an attacker would need to compromise both formulae.brew.sh AND den's GitHub repo to swap a bottle.
+    - 'The replica is built diff-based: only changed hashes are independently verified by downloading from GHCR and re-computing SHA256.'
+    - '`den install` cross-checks both sources and refuses the install when they disagree; falls back with a warning when one source is unreachable.'
+    - The advanced trust layers from T44 (whatever is in scope at the time) are wired into the install path and observable via `den doctor` or equivalent.
+    context: 'Shared checkpoint for the trust cluster: T42 (the independent hash replica + diff-based verification) and T44 (the broader trust-model layers above it).'
+    verifies:
+    - T42
+    - T44
+    origin: manual
+    discovered: 2026-05-15
+  T65:
+    name: Source-build path via Ruby is wired into `den install`
+    kind: verify
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - '`den install --build-from-source <pkg>` succeeds end-to-end on a representative core formula (Ruby path), on both macOS and Linux.'
+    - '`den install <pkg>` from a third-party tap (no JSON API) parses the tap''s Ruby DSL and installs successfully (T17 path).'
+    - Source builds on macOS work without the xcrun shim layer (T45) — SDK path and `/usr/bin/ld` are resolved directly, no Xcode CLT update nag fires during a clean build.
+    - Smoke tests cover at least one source build per platform on a regular cadence.
+    context: 'Shared checkpoint for the source-build cluster: T11 (source builds via Ruby), T17 (Ruby DSL parsing for non-API taps), T45 (shim-free toolchain on macOS). T11/T17 carry stale `depends_on: [T31]` from before T31 was retired in PR #19; the deps are treated as satisfied by bullseye but the framing should eventually be patched. See [[project_bundled_ruby]].'
+    verifies:
+    - T11
+    - T17
+    - T45
+    origin: manual
+    discovered: 2026-05-15
+  T66:
+    name: den correctly detects host configuration and Cellar state
+    kind: verify
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - '`den doctor` and `den config` report Xcode/CLT versions, SDK paths, and full Homebrew-config parity (T2) on macOS; equivalent host facts on Linux.'
+    - '`den list --cellar` reports disk usage per keg, which environments reference each keg, and orphaned/unreferenced kegs (T4).'
+    - Output is stable enough to diff between runs for regression detection.
+    context: 'Groups two host-introspection work targets: T2 (config/env detection) and T4 (Cellar inspection improvements).'
+    verifies:
+    - T2
+    - T4
+    origin: manual
+    discovered: 2026-05-15
+  T67:
+    name: den supports adding and using third-party Homebrew taps
+    kind: verify
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - '`den tap <user/repo>` clones the tap into the expected location and registers it in den''s config.'
+    - '`den install <pkg>` resolves a formula in a tapped repo (not on formulae.brew.sh) and installs it via the source-build path (T11/T17).'
+    - '`den tap --list` and `den tap --remove` work as expected; a removed tap''s formulae become unresolvable until re-tapped.'
+    context: Standalone checkpoint for T5 (tap management). Couples loosely to the source-build verify above (T17 in particular), since tap installs need Ruby DSL parsing.
+    verifies:
+    - T5
+    origin: manual
+    discovered: 2026-05-15
+  T68:
+    name: den is competitive with Homebrew on common operations
+    kind: verify
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - A benchmark suite measures `install`, `upgrade`, `list`, `info`, and `search` against a fresh Homebrew baseline on the same hardware.
+    - Results are recorded over time so regressions are visible across releases.
+    - '`den` is at least as fast as `brew` on every measured op, with at least one op meaningfully faster.'
+    context: Standalone checkpoint for T19 (performance). Open-ended by nature; the benchmark suite itself is the deliverable.
+    verifies:
+    - T19
+    origin: manual
+    discovered: 2026-05-15
+  T69:
+    name: Content-addressed Cellar with explicit bindings is live without regression
+    kind: verify
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - The Cellar layout is content-addressed (SHA256-keyed), with name/version becoming metadata pointers (T26).
+    - Existing installs migrate to the new layout transparently; `den list` and `den use` continue to work unchanged.
+    - 'Each formula''s binding spec (T28) is honoured at link time: `path:`, `env:`, `env-append:`, `alias:` directives produce the expected environment surface.'
+    - A regression smoke run on the popularity-tier-1 corpus passes after the migration.
+    context: 'Shared checkpoint for two architectural-layer work targets: T26 (content-addressed Cellar) and T28 (explicit bindings replacing link-everything-from-bin/). These pair naturally because both touch the Cellar→environment materialisation path.'
+    verifies:
+    - T26
+    - T28
+    origin: manual
+    discovered: 2026-05-15
   T7:
     name: Download caching
     status: achieved
@@ -715,6 +928,53 @@ targets:
     origin: manual
     discovered: 2026-04-09
     achieved: 2026-04-11
+  T70:
+    name: Opt-in telemetry produces transparent, actionable reports
+    kind: verify
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - '`den telemetry on` enables collection; default is off. `den telemetry show` displays the pending payload verbatim; `den telemetry send` prints the exact JSONL before transmitting.'
+    - Ruby-trigger categories from T32 (source_build_no_bottle, tap_formula_parse, post_install_hook, etc.) appear in collected payloads with no formula names or PII.
+    - A live aggregate dashboard (or comparable readout) answers at least one decision-grade question, e.g. "what fraction of installs need Ruby?"
+    context: Standalone checkpoint for T32 (opt-in telemetry). Verifies both the privacy guarantees and that the data is actually informative enough to drive decisions.
+    verifies:
+    - T32
+    origin: manual
+    discovered: 2026-05-15
+  T71:
+    name: brew-to-den migration succeeds end-to-end on a real Homebrew install
+    kind: verify
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - '`den migrate` on a pre-existing Homebrew install picks up all formulae, casks, taps, and `brew services`-managed services, and produces a working den environment.'
+    - The migration is non-destructive — Homebrew's state is untouched and `brew` continues to work.
+    - Re-running `den migrate` is idempotent; new brew installs since the last migration are picked up without disturbing existing den state.
+    - The post-migration health check (manifest packages resolve, binaries accessible via the den environment, services still running) passes on at least one real-world install.
+    context: Standalone checkpoint for T37 (full brew-to-den migration). End-to-end on a real install is the only meaningful test — synthetic fixtures will miss the gnarly edge cases that motivate this target.
+    verifies:
+    - T37
+    origin: manual
+    discovered: 2026-05-15
+  T72:
+    name: Daemon defers upgrades while managed binaries are in use
+    kind: verify
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - With a managed package's binary actively running (e.g. an open openssl-linked process), the background daemon detects the in-use files and defers the upgrade rather than replacing them.
+    - Detection works on both macOS (lsof) and Linux (`/proc/<pid>/maps`).
+    - Once the in-use process exits, the deferred upgrade applies on the next daemon tick or at user request via `den upgrade`.
+    - User-facing reporting (`den outdated`, `den daemon status`) makes deferred upgrades visible.
+    context: Standalone checkpoint for T51 (safe automatic upgrades). Critical user-trust property — automatic upgrades that yank the rug out from under running processes will get den uninstalled fast.
+    verifies:
+    - T51
+    origin: manual
+    discovered: 2026-05-15
   T8:
     name: Bottle pouring
     status: achieved
