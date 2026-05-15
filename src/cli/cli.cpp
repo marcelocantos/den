@@ -10,15 +10,15 @@
 #include "../core/config.h"
 #include "../core/error.h"
 #include "../daemon/daemon.h"
-#include "../selfupdate/selfupdate.h"
-#include "../smoke/runner.h"
 #include "../doctor/doctor.h"
 #include "../env/environment.h"
 #include "../env/manifest.h"
 #include "../index/index.h"
 #include "../migrate/migrate.h"
 #include "../platform/platform.h"
+#include "../selfupdate/selfupdate.h"
 #include "../settings/settings.h"
+#include "../smoke/runner.h"
 #include "../store/store.h"
 
 #include <CLI11.hpp>
@@ -125,9 +125,8 @@ void Cli::M::setup() {
                 auto* pkg = idx.find(name);
                 std::string version = pkg ? pkg->version : "unknown";
                 auto dest = den::build_from_source(cfg, idx, name, version);
-                with_manifest(cfg.den_home, active, [&](Manifest& m) {
-                    m.packages[name] = version;
-                });
+                with_manifest(cfg.den_home, active,
+                              [&](Manifest& m) { m.packages[name] = version; });
             }
             auto links = materialise(cfg.den_home, cfg.store, active, &idx);
             std::cout << "Materialised: " << links << " symlinks.\n";
@@ -543,9 +542,8 @@ void Cli::M::setup() {
         }
 
         // Update manifest to the requested version.
-        with_manifest(cfg.den_home, active, [&](Manifest& m) {
-            m.packages[use_name] = use_version;
-        });
+        with_manifest(cfg.den_home, active,
+                      [&](Manifest& m) { m.packages[use_name] = use_version; });
 
         auto links = materialise(cfg.den_home, cfg.store, active);
         std::cout << "Switched " << use_name << " to " << use_version << " (" << links
@@ -759,7 +757,8 @@ void Cli::M::setup() {
     log_cmd->add_flag("--json", log_json, "Output as JSON");
     log_cmd->callback([this] {
         auto cfg = Config::detect();
-        auto entries = read_activity(cfg.den_home, log_count > 0 ? static_cast<size_t>(log_count) : 0);
+        auto entries =
+            read_activity(cfg.den_home, log_count > 0 ? static_cast<size_t>(log_count) : 0);
         if (entries.empty()) {
             std::cout << "No upgrade activity recorded.\n";
             return;
@@ -785,9 +784,8 @@ void Cli::M::setup() {
             char buf[20] = {};
             if (lt)
                 std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", lt);
-            std::cout << buf << "  " << std::left << std::setw(24) << e.package
-                      << e.from_version << " -> " << e.to_version
-                      << "  (" << e.trigger << ")\n";
+            std::cout << buf << "  " << std::left << std::setw(24) << e.package << e.from_version
+                      << " -> " << e.to_version << "  (" << e.trigger << ")\n";
         }
     });
 
@@ -838,11 +836,11 @@ void Cli::M::setup() {
                 auto candidate = fs::path(dir) / which_file;
                 std::error_code ec;
                 if (fs::exists(candidate, ec)) {
-                    matches.push_back({candidate.string(),
-                                       try_lookup(candidate)});
+                    matches.push_back({candidate.string(), try_lookup(candidate)});
                 }
             }
-            if (end == std::string::npos) break;
+            if (end == std::string::npos)
+                break;
             start = end + 1;
         }
 
@@ -857,8 +855,7 @@ void Cli::M::setup() {
             max_path = std::max(max_path, m.path.size());
 
         for (const auto& m : matches) {
-            std::cout << std::left << std::setw(static_cast<int>(max_path + 2))
-                      << m.path;
+            std::cout << std::left << std::setw(static_cast<int>(max_path + 2)) << m.path;
             if (m.pkg) {
                 std::cout << m.pkg->name << " " << m.pkg->version;
             } else {
@@ -890,8 +887,7 @@ void Cli::M::setup() {
                 if (fs::exists(candidate)) {
                     // Check if loaded.
                     auto label = "homebrew.mxcl." + pkg.name;
-                    auto rc = std::system(
-                        ("launchctl list " + label + " >/dev/null 2>&1").c_str());
+                    auto rc = std::system(("launchctl list " + label + " >/dev/null 2>&1").c_str());
                     std::string status_str = (rc == 0) ? "running" : "stopped";
                     std::cout << std::left << std::setw(30) << pkg.name << " " << status_str
                               << "\n";
@@ -1018,7 +1014,8 @@ void Cli::M::setup() {
         auto results = run_smoke_tests(smoke_defs, cfg, smoke_max);
         int failed = 0;
         for (const auto& r : results)
-            if (!r.all_passed()) ++failed;
+            if (!r.all_passed())
+                ++failed;
         if (failed > 0) {
             std::exit(1);
         }

@@ -247,9 +247,9 @@ TEST_SUITE("formula_parser_oracle") {
             REQUIRE_MESSAGE(fs::exists(source_path), "formula source missing: " << source_path);
 
             auto golden_path = golden_dir / (name + ".json");
-            REQUIRE_MESSAGE(fs::exists(golden_path),
-                            "golden missing — rerun scripts/update-oracle-golden.rb: "
-                                << golden_path);
+            REQUIRE_MESSAGE(
+                fs::exists(golden_path),
+                "golden missing — rerun scripts/update-oracle-golden.rb: " << golden_path);
 
             auto source = read_file(source_path);
             auto p = parse_formula(source, "/ORACLE_PREFIX/" + name, name);
@@ -269,8 +269,7 @@ TEST_SUITE("formula_parser_oracle") {
             CHECK(p.source_url == golden.value("url", std::string{}));
             CHECK(p.source_sha256 == golden.value("sha256", std::string{}));
 
-            auto expected_commands =
-                golden.value("build_commands", std::vector<std::string>{});
+            auto expected_commands = golden.value("build_commands", std::vector<std::string>{});
             CHECK_MESSAGE(p.build_commands == expected_commands,
                           name << " build_commands diverged from golden");
             if (p.build_commands != expected_commands) {

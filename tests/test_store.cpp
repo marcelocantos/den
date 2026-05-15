@@ -3,8 +3,8 @@
 
 #include <doctest.h>
 
-#include "store/store.h"
 #include "store/link.h"
+#include "store/store.h"
 
 #include <filesystem>
 #include <fstream>
@@ -22,9 +22,12 @@ struct TmpDir {
     fs::path path;
 
     TmpDir() {
-        path = fs::temp_directory_path() / ("den_test_store_" + std::to_string(
-            std::hash<std::string>{}(std::to_string(reinterpret_cast<uintptr_t>(this)))
-            ^ static_cast<size_t>(std::chrono::steady_clock::now().time_since_epoch().count())));
+        path =
+            fs::temp_directory_path() /
+            ("den_test_store_" +
+             std::to_string(
+                 std::hash<std::string>{}(std::to_string(reinterpret_cast<uintptr_t>(this))) ^
+                 static_cast<size_t>(std::chrono::steady_clock::now().time_since_epoch().count())));
         fs::create_directories(path);
     }
 
@@ -49,10 +52,8 @@ TEST_SUITE("store::package_path") {
     }
 
     TEST_CASE("handles versioned formula names") {
-        CHECK(package_path("/s", "python@3.12", "3.12.3") ==
-              fs::path("/s/python@3.12/3.12.3"));
+        CHECK(package_path("/s", "python@3.12", "3.12.3") == fs::path("/s/python@3.12/3.12.3"));
     }
-
 }
 
 TEST_SUITE("store::is_installed") {
@@ -76,7 +77,6 @@ TEST_SUITE("store::is_installed") {
         std::ofstream(pkg) << "not a dir";
         CHECK_FALSE(is_installed(tmp.path, "tree", "2.1.1"));
     }
-
 }
 
 TEST_SUITE("store::list_installed") {
@@ -112,7 +112,6 @@ TEST_SUITE("store::list_installed") {
         auto pkgs = list_installed(tmp.path);
         CHECK(pkgs.size() == 1);
     }
-
 }
 
 TEST_SUITE("store::which_package") {
@@ -158,7 +157,6 @@ TEST_SUITE("store::which_package") {
         auto result = which_package(tmp.path, tmp.path / "no" / "such" / "file");
         CHECK_FALSE(result.has_value());
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -184,7 +182,6 @@ TEST_SUITE("link::is_valid_package_name") {
         CHECK_FALSE(is_valid_package_name(".hidden"));
         CHECK_FALSE(is_valid_package_name("-starts-with-dash"));
     }
-
 }
 
 TEST_SUITE("link::link_package") {
@@ -232,7 +229,6 @@ TEST_SUITE("link::link_package") {
         CHECK(count == 2);
         CHECK(fs::is_symlink(env / "share" / "man" / "man1" / "foo.1"));
     }
-
 }
 
 TEST_SUITE("link::unlink_package") {
@@ -256,7 +252,6 @@ TEST_SUITE("link::unlink_package") {
         CHECK_FALSE(fs::exists(env / "bin" / "foo"));
         CHECK_FALSE(fs::exists(env / "opt" / "mypkg"));
     }
-
 }
 
 TEST_SUITE("link::record_linked_version / linked_version") {
@@ -291,7 +286,6 @@ TEST_SUITE("link::record_linked_version / linked_version") {
         REQUIRE(ver.has_value());
         CHECK(*ver == "2.2.0");
     }
-
 }
 
 } // namespace test

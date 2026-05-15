@@ -27,16 +27,19 @@ struct SmokeResult {
     std::vector<CheckResult> checks;
 
     bool all_passed() const {
-        if (!installed) return false;
+        if (!installed)
+            return false;
         for (const auto& c : checks)
-            if (!c.passed) return false;
+            if (!c.passed)
+                return false;
         return true;
     }
 
     int pass_count() const {
         int n = 0;
         for (const auto& c : checks)
-            if (c.passed) ++n;
+            if (c.passed)
+                ++n;
         return n;
     }
 };
@@ -46,8 +49,7 @@ struct SmokeResult {
 /// then checks are executed against the installed package.
 /// If real_den_home is provided, uses its cached index;
 /// otherwise fetches a fresh index.
-std::vector<SmokeResult> run_smoke_tests(const fs::path& test_defs_json,
-                                         const Config& config,
+std::vector<SmokeResult> run_smoke_tests(const fs::path& test_defs_json, const Config& config,
                                          int max_packages = 0);
 
 } // namespace den

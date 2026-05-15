@@ -22,8 +22,8 @@ fs::path env_dir(const fs::path& den_home, const std::string& env_path);
 /// Keg-only packages get an opt/ symlink but are not linked into
 /// bin/, lib/, etc. (they shadow system tools).
 /// Returns the total number of symlinks created.
-uint32_t materialise(const fs::path& den_home, const fs::path& store,
-                     const std::string& env_path, const PackageIndex* idx = nullptr);
+uint32_t materialise(const fs::path& den_home, const fs::path& store, const std::string& env_path,
+                     const PackageIndex* idx = nullptr);
 
 /// Read the active environment path from den_home/active_env.
 /// Returns "/" if no active environment is set.

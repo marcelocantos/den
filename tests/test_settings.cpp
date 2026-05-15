@@ -18,9 +18,12 @@ struct TmpDir {
     fs::path path;
 
     TmpDir() {
-        path = fs::temp_directory_path() / ("den_test_settings_" + std::to_string(
-            std::hash<std::string>{}(std::to_string(reinterpret_cast<uintptr_t>(this)))
-            ^ static_cast<size_t>(std::chrono::steady_clock::now().time_since_epoch().count())));
+        path =
+            fs::temp_directory_path() /
+            ("den_test_settings_" +
+             std::to_string(
+                 std::hash<std::string>{}(std::to_string(reinterpret_cast<uintptr_t>(this))) ^
+                 static_cast<size_t>(std::chrono::steady_clock::now().time_since_epoch().count())));
         fs::create_directories(path);
     }
 
@@ -43,7 +46,6 @@ TEST_SUITE("settings::read_settings") {
         CHECK_FALSE(s.daemon.interval_secs.has_value());
         CHECK_FALSE(s.search.provider.has_value());
     }
-
 }
 
 TEST_SUITE("settings::write_read_round_trip") {
@@ -70,7 +72,6 @@ TEST_SUITE("settings::write_read_round_trip") {
         REQUIRE(s2.search.provider.has_value());
         CHECK(*s2.search.provider == "formulae.brew.sh");
     }
-
 }
 
 TEST_SUITE("settings::get_setting") {
@@ -89,7 +90,6 @@ TEST_SUITE("settings::get_setting") {
 
         CHECK_THROWS_AS(get_setting(tmp.path, "daemon.nonexistent"), std::invalid_argument);
     }
-
 }
 
 TEST_SUITE("settings::set_setting") {
@@ -141,11 +141,9 @@ TEST_SUITE("settings::set_setting") {
         TmpDir tmp;
         write_settings(tmp.path, Settings{});
 
-        CHECK_THROWS_AS(
-            set_setting(tmp.path, "daemon.auto_upgrade", "maybe"),
-            std::invalid_argument);
+        CHECK_THROWS_AS(set_setting(tmp.path, "daemon.auto_upgrade", "maybe"),
+                        std::invalid_argument);
     }
-
 }
 
 TEST_SUITE("settings::display_all_settings") {
@@ -160,7 +158,6 @@ TEST_SUITE("settings::display_all_settings") {
         CHECK(json_str.find("daemon") != std::string::npos);
         CHECK(json_str.find("auto_download") != std::string::npos);
     }
-
 }
 
 } // namespace test

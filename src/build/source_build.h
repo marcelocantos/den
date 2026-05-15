@@ -21,8 +21,8 @@ namespace fs = std::filesystem;
 /// 4. Install into the den store at store/<name>/<version>/
 ///
 /// Returns the store path of the installed package.
-fs::path build_from_source(const Config& config, const PackageIndex& idx,
-                           const std::string& name, const std::string& version);
+fs::path build_from_source(const Config& config, const PackageIndex& idx, const std::string& name,
+                           const std::string& version);
 
 /// Extract build metadata from a formula's Ruby source.
 struct BuildRecipe {
