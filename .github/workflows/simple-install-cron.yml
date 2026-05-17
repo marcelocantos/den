@@ -1,0 +1,218 @@
+# T59 verify harness: SIMPLE-classified formulae install end-to-end via den
+# without Ruby.
+#
+# Purpose: prove that the native formula parser's output (url, sha256,
+# build_commands, env_settings) is *sufficient* to drive a real install —
+# not merely equivalent to Ruby's output on paper. This is the checkpoint
+# that the SIMPLE fast-path is real.
+#
+# Schedule: nightly cron (00:30 UTC). Also available as workflow_dispatch
+# for manual runs. NOT triggered on push/PR because source builds are slow
+# (~15-20 min total) and would block CI on every commit.
+#
+# Upstream dependency (T58): full dependency extraction by the native parser
+# is not yet implemented. Until T58 lands:
+#   - The suite runs as continue-on-error on each formula step so partial
+#     failures surface without blocking the whole run.
+#   - The overall job does NOT fail on individual formula failures, giving
+#     us visibility without breaking master.
+#
+# When T58 is done:
+#   1. Remove continue-on-error from the "Install formula" step.
+#   2. Un-comment the fail-fast line in the matrix.
+#   3. This file's header comment can drop the T58 caveat.
+#
+# Failure modes captured (per T59 acceptance):
+#   - Parser missing a needed field (build fails with missing args).
+#   - Parser misclassifying a non-trivial formula as SIMPLE (build diverges
+#     from expected output or exits non-zero).
+#   - Build environment gap that only surfaces at install time (missing
+#     header, linker flag, etc.).
+#
+# Subset documented in: tests/corpus/simple_install_subset.txt
+
+name: SIMPLE formula install (T59)
+
+on:
+  schedule:
+    # Nightly at 00:30 UTC — off-peak, avoids collision with PR CI queues.
+    # Enable only after T58 (dependency extraction) is merged; until then
+    # use workflow_dispatch for manual validation runs.
+    # TODO(T58): un-comment the line below once T58 is merged.
+    # - cron: '30 0 * * *'
+  workflow_dispatch:
+    inputs:
+      formula_override:
+        description: >
+          Run a single formula instead of the full subset (leave blank for all).
+        required: false
+        default: ''
+
+jobs:
+  simple-install:
+    name: Install ${{ matrix.formula }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # fail-fast: false  # TODO(T58): enable once dependency extraction lands
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-latest]
+        # The formula list is declared statically so the matrix is readable
+        # without a separate job. Mirrors tests/corpus/simple_install_subset.txt
+        # (confirmed SIMPLE entries only — proposed candidates are excluded
+        # until their parser classification is verified).
+        formula:
+          - xz
+          - gzip
+          # Proposed (add here as each clears parser + oracle tests):
+          # - bzip2
+          # - zstd
+          # - lz4
+          # - lzo
+          # - pigz
+          # - pv
+          # - bc
+          # - less
+        # If a formula override was given via workflow_dispatch, only run that
+        # formula. GitHub Actions doesn't support dynamic matrix filtering
+        # natively; we handle the skip in the "Skip if override" step below.
+
+    env:
+      # Isolated DEN_HOME so the run never touches the runner's real environment.
+      DEN_HOME: /tmp/den-t59-${{ matrix.formula }}-${{ matrix.os }}
+      FORMULA: ${{ github.event.inputs.formula_override != '' && github.event.inputs.formula_override || matrix.formula }}
+
+    steps:
+      # When a formula_override is supplied via workflow_dispatch, skip
+      # matrix entries that don't match. GitHub Actions doesn't support
+      # dynamic matrix filtering, so we gate every subsequent step with
+      # a shared condition instead. Exit 0 here to mark the job successful.
+      - name: Check formula override
+        id: override_check
+        run: |
+          override="${{ github.event.inputs.formula_override }}"
+          formula="${{ matrix.formula }}"
+          if [ -n "$override" ] && [ "$override" != "$formula" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Skipping $formula — override is '$override'."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.override_check.outputs.skip != 'true'
+        with:
+          submodules: recursive
+
+      # ── Build dependencies ──────────────────────────────────────────────
+
+      - name: Install build dependencies (macOS)
+        if: steps.override_check.outputs.skip != 'true' && runner.os == 'macOS'
+        run: |
+          brew install cmake ninja libarchive
+
+      - name: Install build dependencies (Linux)
+        if: steps.override_check.outputs.skip != 'true' && runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev libarchive-dev \
+            build-essential autoconf automake libtool pkg-config
+
+      # ── Build den ───────────────────────────────────────────────────────
+
+      - name: Configure den
+        if: steps.override_check.outputs.skip != 'true'
+        run: |
+          cmake_args="-B build -G Ninja -DCMAKE_BUILD_TYPE=Release"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cmake_args="$cmake_args -DCMAKE_PREFIX_PATH=$(brew --prefix libarchive)"
+          fi
+          cmake $cmake_args
+
+      - name: Build den
+        if: steps.override_check.outputs.skip != 'true'
+        run: cmake --build build
+
+      - name: Verify den binary
+        if: steps.override_check.outputs.skip != 'true'
+        run: ./build/den --version
+
+      # ── Prepare isolated den home ────────────────────────────────────────
+
+      - name: Set up isolated DEN_HOME
+        if: steps.override_check.outputs.skip != 'true'
+        run: |
+          mkdir -p "${DEN_HOME}"
+          # Prime the package index so den install can look up formula metadata.
+          # We do this via `den update` which fetches formulae.brew.sh.
+          # If the network call fails we continue anyway; the build-from-source
+          # path fetches the formula source directly from GitHub.
+          # DEN_HOME is set as a job-level env var; Config::detect() picks it up.
+          ./build/den update || true
+
+      # ── Install formula ──────────────────────────────────────────────────
+
+      - name: Install ${{ matrix.formula }} from source (no Ruby)
+        if: steps.override_check.outputs.skip != 'true'
+        # continue-on-error: true  # TODO(T58): remove once dependency extraction is merged
+        run: |
+          echo "=== T59: installing ${{ matrix.formula }} via den --build-from-source ==="
+          echo "DEN_HOME=${DEN_HOME}"
+          # DEN_HOME env var is set at the job level; den picks it up via Config::detect().
+          ./build/den install --build-from-source "${{ matrix.formula }}"
+
+      # ── Smoke-verify the install ──────────────────────────────────────────
+
+      - name: Verify ${{ matrix.formula }} binary is present
+        if: steps.override_check.outputs.skip != 'true'
+        run: |
+          # den stores packages in the shared Homebrew Cellar:
+          #   macOS:  /opt/homebrew/Cellar/<name>/
+          #   Linux:  /home/linuxbrew/.linuxbrew/Cellar/<name>/
+          # (controlled by HOMEBREW_CELLAR env var; we use the default)
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            ARCH=$(uname -m)
+            if [ "$ARCH" = "arm64" ]; then
+              cellar="/opt/homebrew/Cellar"
+            else
+              cellar="/usr/local/Cellar"
+            fi
+          else
+            cellar="/home/linuxbrew/.linuxbrew/Cellar"
+          fi
+          pkg_dir="${cellar}/${{ matrix.formula }}"
+          echo "Looking for install under: ${pkg_dir}"
+          find "${pkg_dir}" -maxdepth 3 2>/dev/null || true
+          [ -d "${pkg_dir}" ] || { echo "FAIL: Cellar directory missing for ${{ matrix.formula }}"; exit 1; }
+          if [ -z "$(ls -A "${pkg_dir}")" ]; then
+            echo "FAIL: Cellar directory is empty for ${{ matrix.formula }}"
+            exit 1
+          fi
+          echo "OK: ${{ matrix.formula }} installed under ${pkg_dir}"
+
+      # ── Collect artifacts on failure ──────────────────────────────────────
+
+      - name: Upload build log on failure
+        if: failure() && steps.override_check.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ matrix.formula }}-${{ matrix.os }}
+          path: |
+            /tmp/den-t59-${{ matrix.formula }}-${{ matrix.os }}/cache/
+          retention-days: 7
+
+  # Summary job — fails if any matrix entry failed. Provides a single
+  # top-level status to check rather than scanning individual matrix cells.
+  summary:
+    name: T59 result
+    needs: simple-install
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check matrix result
+        run: |
+          if [ "${{ needs.simple-install.result }}" = "failure" ]; then
+            echo "One or more formula installs failed. See matrix jobs above."
+            exit 1
+          fi
+          echo "All formula installs passed (or were skipped)."

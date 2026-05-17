@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "comment": "Canonical intent-query → acceptable-package mapping for T62 search verification. Each intent must match at least one package from the 'acceptable' set in the top-N results.",
+  "top_n": 20,
+  "intents": [
+    {
+      "query": "http client",
+      "acceptable": ["curl", "wget", "httpie", "http-client", "libcurl"]
+    },
+    {
+      "query": "json processor",
+      "acceptable": ["jq", "yq", "gron", "jsonpp", "fx"]
+    },
+    {
+      "query": "image resizer",
+      "acceptable": ["imagemagick", "ffmpeg", "vips", "libvips", "graphicsmagick", "pngquant", "jpegoptim"]
+    }
+  ]
+}

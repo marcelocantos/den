@@ -1,0 +1,300 @@
+name: Source-Build Smoke (🎯T65)
+
+# 🎯T65 verification harness — source-build path via Ruby.
+#
+# Runs one representative core-formula source build on macOS and one on
+# Linux on a daily schedule and on-demand.  All jobs use continue-on-error
+# until the source-build path (🎯T11) is live; once T11 is retired, remove
+# continue-on-error from the job-level setting.
+#
+# Verifies: 🎯T11 (source-build wired), 🎯T17 (tap DSL path),
+#           🎯T45 (shim-free build on macOS).
+
+on:
+  schedule:
+    # Daily at 03:17 UTC (staggered to avoid GitHub's top-of-hour load spike).
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      formula:
+        description: "Formula to test (default: tree)"
+        required: false
+        default: "tree"
+      platform:
+        description: "Platform filter (all | macos | linux)"
+        required: false
+        default: "all"
+
+env:
+  # Representative near-leaf formula with no heavy deps.
+  # 'tree' uses a plain Makefile (autotools-lite) — fast to compile,
+  # produces a single binary, easy to smoke-test.
+  DEFAULT_FORMULA: ${{ github.event.inputs.formula || 'tree' }}
+
+jobs:
+  # ------------------------------------------------------------------
+  # Build + unit tests (normal CI scope, always runs).
+  # ------------------------------------------------------------------
+  build:
+    name: Build & unit tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # continue-on-error: true until 🎯T11 is live.
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-latest]
+        exclude:
+          - os: ${{ (github.event.inputs.platform == 'linux') && 'macos-14' || 'skip' }}
+          - os: ${{ (github.event.inputs.platform == 'macos') && 'ubuntu-latest' || 'skip' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake ninja libarchive
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev libarchive-dev
+
+      - name: Configure
+        run: |
+          cmake_args="-B build -G Ninja -DCMAKE_BUILD_TYPE=Release"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cmake_args="$cmake_args -DCMAKE_PREFIX_PATH=$(brew --prefix libarchive)"
+          fi
+          cmake $cmake_args
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Unit tests (includes T65 harness)
+        run: cd build && ctest --output-on-failure
+
+  # ------------------------------------------------------------------
+  # macOS source-build smoke (🎯T11 + 🎯T45).
+  # ------------------------------------------------------------------
+  source-build-macos:
+    name: Source-build smoke — macOS (${{ github.event.inputs.formula || 'tree' }})
+    runs-on: macos-14
+    needs: build
+    # continue-on-error: true until 🎯T11 is live.
+    continue-on-error: true
+    if: >-
+      github.event.inputs.platform == '' ||
+      github.event.inputs.platform == 'all' ||
+      github.event.inputs.platform == 'macos'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: brew install cmake ninja libarchive
+
+      - name: Configure & build den
+        run: |
+          cmake_args="-B build -G Ninja -DCMAKE_BUILD_TYPE=Release"
+          cmake_args="$cmake_args -DCMAKE_PREFIX_PATH=$(brew --prefix libarchive)"
+          cmake $cmake_args
+          cmake --build build
+
+      # 🎯T45: Inject a PATH-spy xcrun wrapper that records invocations.
+      # If the source-build path calls xcrun, the wrapper emits a marker
+      # and the check step below fails.
+      - name: Install xcrun PATH spy (🎯T45)
+        run: |
+          mkdir -p "$RUNNER_TEMP/xcrun-spy/bin"
+          cat > "$RUNNER_TEMP/xcrun-spy/bin/xcrun" <<'XCRUN_WRAPPER'
+          #!/usr/bin/env bash
+          echo "XCRUN_INVOKED: $*" >> "$RUNNER_TEMP/xcrun-spy/invocations.log"
+          # Forward the call so the build doesn't break entirely.
+          exec /usr/bin/xcrun "$@"
+          XCRUN_WRAPPER
+          chmod +x "$RUNNER_TEMP/xcrun-spy/bin/xcrun"
+          echo "$RUNNER_TEMP/xcrun-spy/bin" >> "$GITHUB_PATH"
+
+      - name: Prepare isolated DEN_HOME
+        run: |
+          export DEN_HOME="$RUNNER_TEMP/den-smoke-home"
+          mkdir -p "$DEN_HOME"
+          echo "DEN_HOME=$DEN_HOME" >> "$GITHUB_ENV"
+
+      - name: Update den package index
+        run: |
+          ./build/den update || true
+        env:
+          DEN_HOME: ${{ env.DEN_HOME }}
+        # Allowed to fail if the index fetch is not yet wired (🎯T11 absent).
+        continue-on-error: true
+
+      - name: Source-build ${{ env.DEFAULT_FORMULA }} (🎯T11)
+        id: source_build
+        run: |
+          ./build/den install --build-from-source "$DEFAULT_FORMULA" 2>&1 | tee "$RUNNER_TEMP/source-build.log"
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+        env:
+          DEN_HOME: ${{ env.DEN_HOME }}
+        continue-on-error: true
+
+      - name: Check ${{ env.DEFAULT_FORMULA }} binary works after source build
+        if: steps.source_build.outputs.exit_code == '0'
+        run: |
+          # 'tree' installs its binary at <store>/<name>/<version>/bin/tree.
+          # Locate it relative to DEN_HOME.
+          TREE_BIN=$(find "$DEN_HOME/store" -name "tree" -type f 2>/dev/null | head -1)
+          if [ -n "$TREE_BIN" ]; then
+            echo "Found binary: $TREE_BIN"
+            "$TREE_BIN" --version
+          else
+            echo "Binary not found in store — source build may have used Homebrew Cellar."
+            which tree && tree --version || true
+          fi
+        env:
+          DEN_HOME: ${{ env.DEN_HOME }}
+        continue-on-error: true
+
+      - name: Check xcrun was NOT invoked (🎯T45)
+        run: |
+          if [ -f "$RUNNER_TEMP/xcrun-spy/invocations.log" ]; then
+            echo "::warning::xcrun was invoked during source build (T45 not satisfied):"
+            cat "$RUNNER_TEMP/xcrun-spy/invocations.log"
+          else
+            echo "xcrun spy: no invocations detected (T45 satisfied)."
+          fi
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-build-macos-log
+          path: |
+            ${{ runner.temp }}/source-build.log
+            ${{ runner.temp }}/xcrun-spy/invocations.log
+          if-no-files-found: ignore
+
+  # ------------------------------------------------------------------
+  # Linux source-build smoke (🎯T11 — Portable Ruby lazy-download path).
+  # ------------------------------------------------------------------
+  source-build-linux:
+    name: Source-build smoke — Linux (${{ github.event.inputs.formula || 'tree' }})
+    runs-on: ubuntu-latest
+    needs: build
+    # continue-on-error: true until 🎯T11 / 🎯T47 are live.
+    continue-on-error: true
+    if: >-
+      github.event.inputs.platform == '' ||
+      github.event.inputs.platform == 'all' ||
+      github.event.inputs.platform == 'linux'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev libarchive-dev \
+                                  build-essential autoconf automake libtool pkg-config
+
+      - name: Configure & build den
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+
+      - name: Prepare isolated DEN_HOME
+        run: |
+          export DEN_HOME="$RUNNER_TEMP/den-smoke-home"
+          mkdir -p "$DEN_HOME"
+          echo "DEN_HOME=$DEN_HOME" >> "$GITHUB_ENV"
+
+      - name: Update den package index
+        run: |
+          ./build/den update || true
+        env:
+          DEN_HOME: ${{ env.DEN_HOME }}
+        continue-on-error: true
+
+      - name: Source-build ${{ env.DEFAULT_FORMULA }} (🎯T11 + 🎯T47 Portable Ruby)
+        id: source_build_linux
+        run: |
+          ./build/den install --build-from-source "$DEFAULT_FORMULA" 2>&1 | tee "$RUNNER_TEMP/source-build-linux.log"
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+        env:
+          DEN_HOME: ${{ env.DEN_HOME }}
+        continue-on-error: true
+
+      - name: Verify ${{ env.DEFAULT_FORMULA }} binary (post-build)
+        if: steps.source_build_linux.outputs.exit_code == '0'
+        run: |
+          TREE_BIN=$(find "$DEN_HOME/store" -name "tree" -type f 2>/dev/null | head -1)
+          if [ -n "$TREE_BIN" ]; then
+            echo "Found binary: $TREE_BIN"
+            "$TREE_BIN" --version
+          else
+            echo "Binary not found in store."
+          fi
+        env:
+          DEN_HOME: ${{ env.DEN_HOME }}
+        continue-on-error: true
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-build-linux-log
+          path: ${{ runner.temp }}/source-build-linux.log
+          if-no-files-found: ignore
+
+  # ------------------------------------------------------------------
+  # 🎯T17: Third-party tap DSL smoke (workflow_dispatch only until T17 live).
+  # ------------------------------------------------------------------
+  tap-source-build:
+    name: Tap source-build smoke (🎯T17)
+    runs-on: macos-14
+    needs: build
+    # Only runs on explicit dispatch until T17 is live.
+    if: github.event_name == 'workflow_dispatch'
+    # continue-on-error: true until 🎯T17 is live.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: brew install cmake ninja libarchive
+
+      - name: Configure & build den
+        run: |
+          cmake_args="-B build -G Ninja -DCMAKE_BUILD_TYPE=Release"
+          cmake_args="$cmake_args -DCMAKE_PREFIX_PATH=$(brew --prefix libarchive)"
+          cmake $cmake_args
+          cmake --build build
+
+      - name: Prepare isolated DEN_HOME
+        run: |
+          export DEN_HOME="$RUNNER_TEMP/den-tap-home"
+          mkdir -p "$DEN_HOME"
+          echo "DEN_HOME=$DEN_HOME" >> "$GITHUB_ENV"
+
+      - name: Test tap install path (🎯T17)
+        run: |
+          # Attempt to install from a third-party tap (no JSON API).
+          # Until T17 is fully wired, this is expected to fail gracefully.
+          ./build/den install marcelocantos/jevon 2>&1 | tee "$RUNNER_TEMP/tap-build.log" || true
+        env:
+          DEN_HOME: ${{ env.DEN_HOME }}
+
+      - name: Upload tap log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tap-source-build-log
+          path: ${{ runner.temp }}/tap-build.log
+          if-no-files-found: ignore

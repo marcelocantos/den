@@ -1,0 +1,77 @@
+name: Benchmark (den vs brew)
+
+on:
+  schedule:
+    # Weekly: every Monday at 06:00 UTC
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "hyperfine repetitions per op"
+        required: false
+        default: "10"
+
+jobs:
+  bench:
+    name: Benchmark
+    runs-on: macos-14
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          brew install cmake ninja libarchive hyperfine jq
+
+      - name: Configure
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix libarchive)"
+
+      - name: Build den
+        run: cmake --build build
+
+      - name: Verify den binary
+        run: ./build/den --version
+
+      - name: Fetch den index
+        run: |
+          ./build/den update || echo "WARNING: den update failed; info/search ops will be skipped"
+
+      - name: Run benchmark
+        run: |
+          RUNS="${{ github.event.inputs.runs || '10' }}"
+          scripts/bench/compare-brew.sh \
+            --output-dir bench-output \
+            --runs "${RUNS}"
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results-${{ github.run_id }}
+          path: bench-output/
+          retention-days: 90
+
+      - name: Post summary
+        if: always()
+        run: |
+          JSONFILE="$(ls bench-output/bench-*.json 2>/dev/null | sort | tail -1)"
+          if [[ -z "${JSONFILE}" ]]; then
+            echo "No benchmark output file found." >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          {
+            echo "## Benchmark results — den vs brew"
+            echo ""
+            echo "| op | tool | mean (s) | stddev (s) | min (s) | max (s) |"
+            echo "|----|------|----------|------------|---------|---------|"
+            jq -r '.[] | "| \(.op) | \(.tool) | \(.mean_s) | \(.stddev_s) | \(.min_s) | \(.max_s) |"' \
+              "${JSONFILE}" 2>/dev/null || echo "| — | — | (parse error) | — | — | — |"
+            echo ""
+            echo "Full results: artifact \`bench-results-${{ github.run_id }}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
