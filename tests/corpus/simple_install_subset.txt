@@ -1,0 +1,45 @@
+# SIMPLE-formula install subset for the T59 end-to-end CI suite.
+#
+# Criteria for inclusion:
+#   1. Formula appears in tests/corpus/simple_formulae.txt (native parser
+#      classifies it as SIMPLE, url/sha256/build_commands match Ruby golden).
+#   2. Build is fast: autotools or plain make, no compile-heavy dependencies,
+#      expected wall time < 3 minutes on a standard CI runner.
+#   3. No mandatory external library dependencies (self-contained or
+#      depends only on other formulae also in this list).
+#   4. Builds successfully on both macOS (arm64) and Linux (x86_64/arm64).
+#
+# How to expand:
+#   1. Verify candidate classifies as SIMPLE: run
+#        ctest --test-dir build -R formula_parser_oracle
+#      with the candidate added to tests/corpus/simple_formulae.txt.
+#   2. Add to this file.
+#   3. Run the workflow manually (workflow_dispatch) to confirm CI passes.
+#
+# Current status (as of initial T59 harness):
+#   - xz and gzip are confirmed SIMPLE with golden files and oracle tests.
+#   - Remaining candidates below are proposed based on known formula
+#     characteristics; each must be validated against the parser once
+#     T58 (dependency extraction) is complete. CI is marked
+#     continue-on-error until that validation is done.
+#   - When T58 lands and dependency extraction is available, remove
+#     continue-on-error from the workflow and enable the cron schedule.
+#
+# Expected runtime: ~15-20 minutes total for all entries on a cold runner
+# (dominated by download + compile time, not the den harness itself).
+
+# --- confirmed SIMPLE (golden files present, oracle tests pass) ---
+xz
+gzip
+
+# --- proposed candidates (build characteristics match criteria; parser
+#     classification to be verified against corpus once T58 provides
+#     dependency extraction) ---
+bzip2
+zstd
+lz4
+lzo
+pigz
+pv
+bc
+less
