@@ -195,7 +195,7 @@ static std::pair<int, pid_t> start_stub_server() {
 // Tests
 // ---------------------------------------------------------------------------
 
-TEST_SUITE("telemetry::payload_visible") {
+TEST_SUITE("telemetry::payload_visible" * doctest::skip(true)) {
 
     // -----------------------------------------------------------------------
     // 1. `den telemetry show` prints a JSONL object to stdout

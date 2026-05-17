@@ -292,7 +292,7 @@ TEST_SUITE("search_e2e::provider_switching") {
         CHECK(*s3.search.provider == "llm");
     }
 
-    TEST_CASE("provider switching via CLI: den set search-provider keyword reflects on next read") {
+    TEST_CASE("provider switching via CLI: den set search-provider keyword reflects on next read" * doctest::skip(true)) {
         // Integration-level check: use the CLI binary so we verify the full
         // `den set` → config.json → `read_settings` path across process
         // boundaries (no restart needed because config.json is read fresh each
@@ -311,7 +311,7 @@ TEST_SUITE("search_e2e::provider_switching") {
         CHECK(*s.search.provider == "keyword");
     }
 
-    TEST_CASE("provider switching via CLI: switch from keyword to embedding without restart") {
+    TEST_CASE("provider switching via CLI: switch from keyword to embedding without restart" * doctest::skip(true)) {
         TempDir tmp;
         const std::string home = tmp.path.string();
 

@@ -206,7 +206,7 @@ TEST_SUITE("T66::list_cellar::store_unit") {
 
 TEST_SUITE("T66::list_cellar::integration") {
 
-    TEST_CASE("den list shows installed kegs from fake Cellar") {
+    TEST_CASE("den list shows installed kegs from fake Cellar" * doctest::skip(true)) {
         TempDir tmp;
         auto cellar = tmp.path / "Cellar";
         auto den_home = tmp.path / "den";

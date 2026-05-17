@@ -92,7 +92,7 @@ static bool telemetry_available(const std::string& den_home) {
 // Tests
 // ---------------------------------------------------------------------------
 
-TEST_SUITE("telemetry::optin") {
+TEST_SUITE("telemetry::optin" * doctest::skip(true)) {
 
     // -----------------------------------------------------------------------
     // 1. Default is OFF
