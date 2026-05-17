@@ -202,8 +202,21 @@ targets:
     value: 13.0
     cost: 21.0
     acceptance:
-    - TODO
-    context: 'den becomes a universal frontend for multiple package managers. A `PackageProvider` trait abstracts install/resolve/bin-dir per ecosystem. Providers:'
+    - A `PackageProvider` abstract interface (in src/provider/ or co-located in src/core/) defines the operations every provider must support — install, uninstall, list_installed, binary_paths, provider_name — with the contract documented in the header.
+    - The existing Homebrew install/uninstall/list paths are refactored into a concrete `PackageProvider` implementation. The CLI layer (src/cli/) no longer branches on "is this Homebrew?" — it dispatches through the interface.
+    - '`den install <name>` resolves a provider via explicit `--provider <name>` → manifest hint → name-pattern hint → default (Homebrew). The resolution helper lives in a single module and is independently testable.'
+    - The manifest schema accepts provider-scoped entries (top-level keys per provider, e.g. `pip`, `npm`, `cargo`, `go`) alongside formulae. Reading and writing provider entries is generic; per-provider schema details are owned by the provider that produces them.
+    - Environment composition (PATH, env vars, aliases) treats provider-installed binaries identically to Homebrew kegs. Providers declare their bindings via the same mechanism as 🎯T28 (or the link-everything-from-bin/ predecessor if T28 has not yet landed).
+    - At least one non-Homebrew provider is wired end-to-end as a minimal stub — registration, dispatch, manifest read/write, error propagation all exercised — to prove the seams are usable from outside core. The stub may return "not implemented" for the actual install/build work; what matters is that adding a new provider does not require touching core or CLI code.
+    - Existing Homebrew install/list/uninstall smoke tests pass unchanged.
+    context: |-
+      den becomes a universal frontend for multiple package managers. A `PackageProvider` abstract interface (C++) abstracts install/uninstall/list/binary-locations per ecosystem so that the CLI, manifest, and environment-composition layers are provider-agnostic.
+
+      Providers in scope downstream: Homebrew (the current implementation, refactored into the new shape), pip ([[T38]]), npm ([[T39]]), Go ([[T40]]), Cargo ([[T41]]). Each downstream provider depends on this target landing first.
+
+      T23 itself is **infrastructure work** — the interface, the dispatch, the manifest plumbing, the env composition. Concrete provider implementations are T38–T41. End-to-end verification of the full cluster is [[T60]].
+
+      The seam test (one stubbed non-Homebrew provider exercised end-to-end) is the cheapest way to prove the abstraction is real. Without it, "we have an interface" usually means "we have an interface that only Homebrew can satisfy."
     origin: manual
     discovered: 2026-04-09
   T24:
