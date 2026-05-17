@@ -1,0 +1,319 @@
+# Dependency scenario corpus for the SAT-based solver (🎯T63).
+#
+# Each scenario is a self-contained in-memory dependency graph with an
+# expected resolution.  Scenarios are consumed by tests/test_sat_solver_corpus.cpp.
+#
+# Schema per scenario:
+#   name:        Human-readable label (used in test output).
+#   packages:    Map of package_name -> list of candidate versions.
+#                Each candidate has:
+#                  version:    semver string
+#                  stability:  stable | testing | developer | buggy | insecure  (default: stable)
+#                  depends_on: list of  "pkg [op version]"  constraints
+#                              op is one of: >=  <=  ==  !=
+#                  conflicts:  list of package names this version is mutually exclusive with
+#                  optional:   list of "pkg [op version]" soft deps (provider hints)
+#                  recommended:list of "pkg [op version]" preferred soft deps
+#   request:     list of top-level install requests  "pkg [op version]"
+#   expected:    map of pkg -> chosen version  (what the solver MUST select)
+#   expect_warn: list of substrings that must appear in solver warnings
+#                (e.g. "unstable" when forced onto a non-stable candidate)
+#   expect_unsat: true if the scenario is expected to be UNSATISFIABLE
+#
+# Stability preference order (highest to lowest): stable > testing > developer > buggy > insecure.
+# The solver MUST prefer stable candidates all else equal.
+#
+# NOTE: All list values must use multi-line "- item" format.
+# Inline arrays are not supported by the minimal YAML parser in the test harness.
+
+scenarios:
+
+  # ── 1. Trivial: single package, single version ─────────────────────────────
+  - name: trivial_single
+    packages:
+      curl:
+        - version: "8.6.0"
+    request:
+      - "curl"
+    expected:
+      curl: "8.6.0"
+
+  # ── 2. Simple linear chain: A depends on B depends on C ────────────────────
+  - name: linear_dep_chain
+    packages:
+      openssl:
+        - version: "3.3.0"
+      libssh:
+        - version: "0.10.6"
+          depends_on:
+            - "openssl >= 3.0.0"
+      curl:
+        - version: "8.6.0"
+          depends_on:
+            - "libssh >= 0.10.0"
+            - "openssl >= 3.0.0"
+    request:
+      - "curl"
+    expected:
+      curl:    "8.6.0"
+      libssh:  "0.10.6"
+      openssl: "3.3.0"
+
+  # ── 3. Multi-version coinstallation: python@3.11 and python@3.12 ───────────
+  #    Both can coexist because they are distinct packages (versioned names).
+  - name: multi_version_coinstall
+    packages:
+      python@3.11:
+        - version: "3.11.9"
+      python@3.12:
+        - version: "3.12.3"
+      myapp:
+        - version: "1.0.0"
+          depends_on:
+            - "python@3.11 >= 3.11.0"
+      mylib:
+        - version: "2.0.0"
+          depends_on:
+            - "python@3.12 >= 3.12.0"
+    request:
+      - "myapp"
+      - "mylib"
+    expected:
+      myapp:       "1.0.0"
+      mylib:       "2.0.0"
+      python@3.11: "3.11.9"
+      python@3.12: "3.12.3"
+
+  # ── 4. Version-constrained conflict: two packages need incompatible libfoo ──
+  #    pkgA needs libfoo >= 2.0, pkgB needs libfoo <= 1.9 — UNSAT.
+  - name: version_conflict_unsat
+    packages:
+      libfoo:
+        - version: "1.9.0"
+        - version: "2.0.0"
+      pkgA:
+        - version: "1.0.0"
+          depends_on:
+            - "libfoo >= 2.0.0"
+      pkgB:
+        - version: "1.0.0"
+          depends_on:
+            - "libfoo <= 1.9.0"
+    request:
+      - "pkgA"
+      - "pkgB"
+    expect_unsat: true
+
+  # ── 5. Conflict resolved by version choice ─────────────────────────────────
+  #    libbar has two versions.  pkgX needs >= 2.0, pkgY accepts anything.
+  #    Solver should pick libbar 2.0 to satisfy both.
+  - name: constraint_resolution
+    packages:
+      libbar:
+        - version: "1.5.0"
+        - version: "2.0.0"
+      pkgX:
+        - version: "1.0.0"
+          depends_on:
+            - "libbar >= 2.0.0"
+      pkgY:
+        - version: "1.0.0"
+          depends_on:
+            - "libbar >= 1.0.0"
+    request:
+      - "pkgX"
+      - "pkgY"
+    expected:
+      pkgX:   "1.0.0"
+      pkgY:   "1.0.0"
+      libbar: "2.0.0"
+
+  # ── 6. Explicit conflicts_with field ───────────────────────────────────────
+  #    openssl and libressl conflict directly; choosing one blocks the other.
+  - name: direct_conflict_unsat
+    packages:
+      openssl:
+        - version: "3.3.0"
+          conflicts:
+            - "libressl"
+      libressl:
+        - version: "3.9.0"
+          conflicts:
+            - "openssl"
+      curl:
+        - version: "8.6.0"
+          depends_on:
+            - "openssl >= 3.0.0"
+      wget:
+        - version: "1.24.0"
+          depends_on:
+            - "libressl >= 3.8.0"
+    request:
+      - "curl"
+      - "wget"
+    expect_unsat: true
+
+  # ── 7. Stability bias: stable wins over testing ────────────────────────────
+  #    Two versions of libz: 1.3.1 (stable) and 1.4.0-rc1 (testing).
+  #    No explicit constraint — solver must prefer stable.
+  - name: stability_prefer_stable
+    packages:
+      libz:
+        - version: "1.3.1"
+          stability: stable
+        - version: "1.4.0-rc1"
+          stability: testing
+      myapp:
+        - version: "1.0.0"
+          depends_on:
+            - "libz >= 1.3.0"
+    request:
+      - "myapp"
+    expected:
+      myapp: "1.0.0"
+      libz:  "1.3.1"
+
+  # ── 8. Stability forced unstable emits warning ─────────────────────────────
+  #    Only a testing-stability version satisfies the constraint.
+  #    Solver must pick it and emit a warning containing "unstable".
+  - name: stability_forced_unstable_warns
+    packages:
+      libz:
+        - version: "1.3.1"
+          stability: stable
+        - version: "1.4.0-rc1"
+          stability: testing
+      myapp:
+        - version: "1.0.0"
+          depends_on:
+            - "libz >= 1.4.0"
+    request:
+      - "myapp"
+    expected:
+      myapp: "1.0.0"
+      libz:  "1.4.0-rc1"
+    expect_warn:
+      - "unstable"
+
+  # ── 9. Diamond dependency: shared transitive dep at compatible version ──────
+  #    A -> {B, C}, B -> D >= 1.0, C -> D >= 1.1.  D 1.2 satisfies both.
+  - name: diamond_shared_dep
+    packages:
+      libD:
+        - version: "1.0.0"
+        - version: "1.1.0"
+        - version: "1.2.0"
+      libB:
+        - version: "1.0.0"
+          depends_on:
+            - "libD >= 1.0.0"
+      libC:
+        - version: "1.0.0"
+          depends_on:
+            - "libD >= 1.1.0"
+      appA:
+        - version: "1.0.0"
+          depends_on:
+            - "libB >= 1.0.0"
+            - "libC >= 1.0.0"
+    request:
+      - "appA"
+    expected:
+      appA: "1.0.0"
+      libB: "1.0.0"
+      libC: "1.0.0"
+      libD: "1.2.0"
+
+  # ── 10. Optional (soft) dependency: solver picks it up if available ─────────
+  #    pkg with optional dep on giflib; giflib is in the index so it should
+  #    be included.  This verifies optional/recommended wiring.
+  - name: optional_dep_included_when_available
+    packages:
+      giflib:
+        - version: "5.2.2"
+      imagemagick:
+        - version: "7.1.1"
+          optional:
+            - "giflib >= 5.0.0"
+    request:
+      - "imagemagick"
+    expected:
+      imagemagick: "7.1.1"
+      giflib:      "5.2.2"
+
+  # ── 11. Recommended dep preferred over optional ────────────────────────────
+  #    Two soft backends: one optional (slower), one recommended (faster).
+  #    Both in index; solver must pull in at least the recommended one.
+  - name: recommended_dep_preferred
+    packages:
+      pcre:
+        - version: "8.45"
+      pcre2:
+        - version: "10.43"
+      grep:
+        - version: "3.11"
+          optional:
+            - "pcre >= 8.0"
+          recommended:
+            - "pcre2 >= 10.0"
+    request:
+      - "grep"
+    expected:
+      grep:  "3.11"
+      pcre2: "10.43"
+
+  # ── 12. Exact-version pinning ───────────────────────────────────────────────
+  #    Request pins an exact version; solver must honour it.
+  - name: exact_version_pin
+    packages:
+      python@3.12:
+        - version: "3.12.2"
+        - version: "3.12.3"
+    request:
+      - "python@3.12 == 3.12.2"
+    expected:
+      python@3.12: "3.12.2"
+
+  # ── 13. Transitive conflict via backtracking ────────────────────────────────
+  #    libssl has two versions.  pkgM prefers the newer one, but pkgN needs
+  #    an old-format lib that conflicts with the new libssl.
+  #    Solver must backtrack and pick old libssl.
+  - name: transitive_backtrack
+    packages:
+      libssl:
+        - version: "1.1.1"
+        - version: "3.3.0"
+      pkgN:
+        - version: "1.0.0"
+          depends_on:
+            - "libssl <= 1.1.1"
+      pkgM:
+        - version: "1.0.0"
+          depends_on:
+            - "libssl >= 1.0.0"
+    request:
+      - "pkgM"
+      - "pkgN"
+    expected:
+      pkgM:   "1.0.0"
+      pkgN:   "1.0.0"
+      libssl: "1.1.1"
+
+  # ── 14. Cross-provider interaction: two providers supply the same capability
+  #    pkgA depends on "ssl-provider" fulfilled by either openssl or libressl.
+  #    The solver picks whichever satisfies constraints; here only openssl qualifies.
+  - name: provider_choice
+    packages:
+      openssl:
+        - version: "3.3.0"
+      libressl:
+        - version: "2.9.0"
+      pkgA:
+        - version: "1.0.0"
+          depends_on:
+            - "openssl >= 3.0.0"
+    request:
+      - "pkgA"
+    expected:
+      pkgA:    "1.0.0"
+      openssl: "3.3.0"
