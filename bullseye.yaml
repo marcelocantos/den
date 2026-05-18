@@ -1,4 +1,4 @@
-schema_version: 4
+schema_version: 5
 last_evaluated: a0e9822
 targets:
   T1:
@@ -219,6 +219,115 @@ targets:
       The seam test (one stubbed non-Homebrew provider exercised end-to-end) is the cheapest way to prove the abstraction is real. Without it, "we have an interface" usually means "we have an interface that only Homebrew can satisfy."
     origin: manual
     discovered: 2026-04-09
+  T23.1:
+    name: PackageProvider abstract interface defines the per-provider operation surface
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - An abstract class `PackageProvider` lives in `src/provider/package_provider.h` and declares install, uninstall, list_installed, is_installed (default impl), binary_paths, provider_name, and accepts.
+    - Each method has a documented contract covering inputs, outputs, error semantics (throw `den::Error` subclasses), and the boundary between provider and CLI responsibilities (provider owns its storage and bookkeeping; CLI owns manifest updates and env materialisation).
+    - 'Threading expectations are stated: calls may be serialised across threads; a single invocation is not required to be reentrant.'
+    - The header and its companion .cpp build cleanly via CMake (`cmake --build build --target den`).
+    context: |-
+      Sub-target 1/6 of [[T23]]. The interface is the contract everything else in the multi-provider stack codes against — refactoring the Homebrew path ([[T23.2]]), resolution dispatch ([[T23.3]]), manifest schema ([[T23.4]]), env composition ([[T23.5]]), and a stub seam test ([[T23.6]]) all assume this exists.
+
+      No implementations land in this sub-target; it is pure contract definition.
+    origin: manual
+    discovered: 2026-05-18
+  T23.2:
+    name: Homebrew install/uninstall/list refactored to implement PackageProvider
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - A concrete `HomebrewProvider` class in `src/provider/homebrew_provider.{h,cpp}` implements `PackageProvider`, wrapping the existing install/uninstall/list flow (currently flat free functions in `src/cli/install.{h,cpp}` and friends).
+    - '`src/cli/cli.cpp` dispatches `install`, `uninstall`, `upgrade`, `list`, and `use` through a `PackageProvider*` rather than calling Homebrew code directly. No branch in the CLI layer asks "is this Homebrew?".'
+    - All pre-existing Homebrew install/list/uninstall/upgrade integration tests pass unchanged.
+    context: |-
+      Sub-target 2/6 of [[T23]]. Depends on [[T23.1]] (the interface to implement against).
+
+      This is the largest sub-target by diff size — touching the install hot path. The contract is that observable Homebrew behaviour is *unchanged*; only the internal dispatch shape moves.
+    depends_on:
+    - T23.1
+    origin: manual
+    discovered: 2026-05-18
+  T23.3:
+    name: Provider resolution dispatch routes installs to the right provider
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - 'A single resolution module (e.g. `src/provider/resolution.{h,cpp}`) picks a `PackageProvider*` for a given install request, in this precedence: explicit `--provider <name>` flag → manifest hint → name-pattern hint (via each provider''s `accepts()`) → default (Homebrew).'
+    - '`den install <name>` calls into the resolution helper; the CLI layer no longer hard-codes Homebrew as the implicit provider.'
+    - 'Resolution is independently unit-testable: a test exercises each precedence layer in isolation with stub providers.'
+    context: |-
+      Sub-target 3/6 of [[T23]]. Depends on [[T23.2]] — needs at least one concrete provider (Homebrew) registered to dispatch to.
+
+      The CLI now does `provider = resolve_provider(name, flags, manifest)` then `provider->install(...)`. Pure mechanical, but it's where the polymorphism becomes user-visible.
+    depends_on:
+    - T23.2
+    origin: manual
+    discovered: 2026-05-18
+  T23.4:
+    name: Manifest schema accepts provider-scoped entries alongside formulae
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - '`Manifest` (in `src/env/manifest.h`) gains a per-provider sub-map: provider_name → (package_name → version). The existing flat `packages` field is read on input as Homebrew entries for backward compatibility, and Homebrew entries are written into the per-provider key on output.'
+    - Manifest reader/writer round-trips entries from a non-Homebrew provider correctly (e.g. a `pip` block survives read → modify → write).
+    - '`auto_deps` becomes per-provider too, so transitive deps from one provider don''t accidentally prune packages from another.'
+    - All existing manifest tests pass; new tests cover read/write of a provider-scoped block and the legacy-flat-field fallback.
+    context: |-
+      Sub-target 4/6 of [[T23]]. Depends on [[T23.1]] (provider_name is the manifest key).
+
+      This is a data-shape change — existing manifests must still load. Treat the legacy `packages: {...}` field as syntactic sugar for `homebrew: {...}` when reading; emit only the per-provider form on writing.
+    depends_on:
+    - T23.1
+    origin: manual
+    discovered: 2026-05-18
+  T23.5:
+    name: Environment composition treats provider binaries uniformly with Homebrew kegs
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - '`materialise()` (in `src/env/environment.cpp`) iterates the resolved manifest per-provider and calls `provider->binary_paths(installed_pkg)` to discover what to surface in the env''s `bin/`.'
+    - Binaries from any provider show up in the env's PATH via the same symlink mechanism as Homebrew kegs — no provider-specific code paths in `materialise()`.
+    - Versioned-family handling (e.g. `python@3.11` vs `python@3.12`) continues to work for Homebrew-provided versions; provider-defined version coexistence is left for future targets.
+    - Existing materialise tests pass; new tests cover a synthetic provider whose `binary_paths()` returns multiple bin directories and verify they all end up symlinked.
+    context: |-
+      Sub-target 5/6 of [[T23]]. Depends on [[T23.2]] (Homebrew provider exists) and [[T23.4]] (manifest carries per-provider data).
+
+      The current `materialise()` reads `Manifest.packages` directly and walks the store. After this sub-target, it asks each provider where its bin/ directories live and links uniformly.
+    depends_on:
+    - T23.2
+    - T23.4
+    origin: manual
+    discovered: 2026-05-18
+  T23.6:
+    name: A stub non-Homebrew provider proves the seams are usable from outside core
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - 'A minimal stub provider (likely Cargo or Go, picking the cheapest of T40/T41) is registered in the provider registry and exercises every seam: `accepts()`, `install()`, `uninstall()`, `list_installed()`, `binary_paths()`, manifest read/write, and resolution dispatch via `--provider <name>`.'
+    - '`install()` and `uninstall()` may return a `den::Error` with a clear "not implemented" message — what matters is that the dispatch path and error propagation work without touching any code in `src/cli/` or `src/core/`.'
+    - 'An end-to-end test invokes `den install --provider <stub> foo`, observes a stub-emitted message in stderr (or whatever the agreed surface is), confirms the manifest gets a `<stub>: { foo: ... }` entry, and verifies uninstall removes it.'
+    - Adding this provider required NO changes to CLI dispatch, manifest schema code, or env composition — only its own files plus a registry registration line.
+    context: |-
+      Sub-target 6/6 of [[T23]]. Depends on [[T23.3]] (resolution), [[T23.4]] (manifest schema), [[T23.5]] (env composition).
+
+      This is the seam test for the entire abstraction. Without it, "we have an interface" usually means "we have an interface that only Homebrew can satisfy." The stub doesn't need to actually install anything — it just has to exercise every surface the abstraction exposes to outside code.
+
+      When this sub-target retires, [[T23]] is itself effectively complete and can be retired.
+    depends_on:
+    - T23.3
+    - T23.4
+    - T23.5
+    origin: manual
+    discovered: 2026-05-18
   T24:
     name: Semantic search
     status: identified
@@ -726,7 +835,6 @@ targets:
     discovered: 2026-05-15
   T59:
     name: SIMPLE-classified formulae install end-to-end via den without Ruby
-    kind: verify
     status: identified
     value: 0.0
     cost: 0.0
@@ -741,9 +849,6 @@ targets:
       Verify-kind: this target validates that the upstream parser work (T18, T58, ...) actually produces a usable install. Acts as the checkpoint that the SIMPLE fast-path is real.
 
       Out of scope: COMPLEX-classified entries (those go through the Ruby path by design). Also out of scope: casks.
-    verifies:
-    - T18
-    - T58
     origin: manual
     discovered: 2026-05-15
   T6:
@@ -760,7 +865,6 @@ targets:
     achieved: 2026-04-11
   T60:
     name: Multi-provider package management is wired end-to-end
-    kind: verify
     status: identified
     value: 0.0
     cost: 0.0
@@ -770,17 +874,10 @@ targets:
     - '`den list`, `den info`, and `den uninstall` work uniformly across providers.'
     - 'Smoke tests cover one representative package per active provider end-to-end: install, list, run, uninstall.'
     context: 'Acts as the shared checkpoint for the multi-provider work cluster: T23 (the trait), T38 (Python), T39 (Node), T40 (Go), T41 (Cargo). The cluster has been a tunnel because all four leaves are work targets with no downstream verification — this verify target gives the decision-maker a checkpoint to steer toward.'
-    verifies:
-    - T23
-    - T38
-    - T39
-    - T40
-    - T41
     origin: manual
     discovered: 2026-05-15
   T61:
     name: den's built-in supervisor manages services without launchctl
-    kind: verify
     status: identified
     value: 0.0
     cost: 0.0
@@ -791,15 +888,10 @@ targets:
     - The daemon socket API (T34) exposes the supervisor state to other den processes and survives daemon restart.
     - After an upgrade of a managed service binary, the supervisor either restarts cleanly or defers per the upgrade policy (T52).
     context: 'Shared checkpoint for the supervisor work cluster: T33 (the supervisor itself), T34 (socket API on top), T52 (post-upgrade restart). All three are work-kind tunnels.'
-    verifies:
-    - T33
-    - T34
-    - T52
     origin: manual
     discovered: 2026-05-15
   T62:
     name: Semantic search returns relevant results across providers
-    kind: verify
     status: identified
     value: 0.0
     cost: 0.0
@@ -809,14 +901,10 @@ targets:
     - '`den search --smart` overrides to the highest-configured provider and produces a curated, explained result set when an LLM provider is configured.'
     - Switching providers via `den set search-provider <name>` is reflected in the next search without restart.
     context: 'Shared checkpoint for the search work: T24 (the providers and CLI surface) and T25 (the CI pipeline that bakes the embedding index).'
-    verifies:
-    - T24
-    - T25
     origin: manual
     discovered: 2026-05-15
   T63:
     name: SAT solver handles real-world dependency conflicts
-    kind: verify
     status: identified
     value: 0.0
     cost: 0.0
@@ -826,14 +914,10 @@ targets:
     - 'Stability ratings (T30) bias the solver''s preference function: by default it prefers stable versions and surfaces a warning when forced onto an unstable candidate.'
     - '`den deps --explain` shows why the solver chose a particular assignment (which clauses fired, which preferences applied).'
     context: 'Shared checkpoint for the solver work: T29 (the SAT solver) and T30 (stability-rating preferences feeding into it).'
-    verifies:
-    - T29
-    - T30
     origin: manual
     discovered: 2026-05-15
   T64:
     name: den's trust model is independently verifiable beyond Homebrew's
-    kind: verify
     status: identified
     value: 0.0
     cost: 0.0
@@ -843,14 +927,10 @@ targets:
     - '`den install` cross-checks both sources and refuses the install when they disagree; falls back with a warning when one source is unreachable.'
     - The advanced trust layers from T44 (whatever is in scope at the time) are wired into the install path and observable via `den doctor` or equivalent.
     context: 'Shared checkpoint for the trust cluster: T42 (the independent hash replica + diff-based verification) and T44 (the broader trust-model layers above it).'
-    verifies:
-    - T42
-    - T44
     origin: manual
     discovered: 2026-05-15
   T65:
     name: Source-build path via Ruby is wired into `den install`
-    kind: verify
     status: identified
     value: 0.0
     cost: 0.0
@@ -860,15 +940,10 @@ targets:
     - Source builds on macOS work without the xcrun shim layer (T45) — SDK path and `/usr/bin/ld` are resolved directly, no Xcode CLT update nag fires during a clean build.
     - Smoke tests cover at least one source build per platform on a regular cadence.
     context: 'Shared checkpoint for the source-build cluster: T11 (source builds via Ruby), T17 (Ruby DSL parsing for non-API taps), T45 (shim-free toolchain on macOS). T11/T17 carry stale `depends_on: [T31]` from before T31 was retired in PR #19; the deps are treated as satisfied by bullseye but the framing should eventually be patched. See [[project_bundled_ruby]].'
-    verifies:
-    - T11
-    - T17
-    - T45
     origin: manual
     discovered: 2026-05-15
   T66:
     name: den correctly detects host configuration and Cellar state
-    kind: verify
     status: identified
     value: 0.0
     cost: 0.0
@@ -877,14 +952,10 @@ targets:
     - '`den list --cellar` reports disk usage per keg, which environments reference each keg, and orphaned/unreferenced kegs (T4).'
     - Output is stable enough to diff between runs for regression detection.
     context: 'Groups two host-introspection work targets: T2 (config/env detection) and T4 (Cellar inspection improvements).'
-    verifies:
-    - T2
-    - T4
     origin: manual
     discovered: 2026-05-15
   T67:
     name: den supports adding and using third-party Homebrew taps
-    kind: verify
     status: identified
     value: 0.0
     cost: 0.0
@@ -893,13 +964,10 @@ targets:
     - '`den install <pkg>` resolves a formula in a tapped repo (not on formulae.brew.sh) and installs it via the source-build path (T11/T17).'
     - '`den tap --list` and `den tap --remove` work as expected; a removed tap''s formulae become unresolvable until re-tapped.'
     context: Standalone checkpoint for T5 (tap management). Couples loosely to the source-build verify above (T17 in particular), since tap installs need Ruby DSL parsing.
-    verifies:
-    - T5
     origin: manual
     discovered: 2026-05-15
   T68:
     name: den is competitive with Homebrew on common operations
-    kind: verify
     status: identified
     value: 0.0
     cost: 0.0
@@ -908,13 +976,10 @@ targets:
     - Results are recorded over time so regressions are visible across releases.
     - '`den` is at least as fast as `brew` on every measured op, with at least one op meaningfully faster.'
     context: Standalone checkpoint for T19 (performance). Open-ended by nature; the benchmark suite itself is the deliverable.
-    verifies:
-    - T19
     origin: manual
     discovered: 2026-05-15
   T69:
     name: Content-addressed Cellar with explicit bindings is live without regression
-    kind: verify
     status: identified
     value: 0.0
     cost: 0.0
@@ -924,9 +989,6 @@ targets:
     - 'Each formula''s binding spec (T28) is honoured at link time: `path:`, `env:`, `env-append:`, `alias:` directives produce the expected environment surface.'
     - A regression smoke run on the popularity-tier-1 corpus passes after the migration.
     context: 'Shared checkpoint for two architectural-layer work targets: T26 (content-addressed Cellar) and T28 (explicit bindings replacing link-everything-from-bin/). These pair naturally because both touch the Cellar→environment materialisation path.'
-    verifies:
-    - T26
-    - T28
     origin: manual
     discovered: 2026-05-15
   T7:
@@ -943,7 +1005,6 @@ targets:
     achieved: 2026-04-11
   T70:
     name: Opt-in telemetry produces transparent, actionable reports
-    kind: verify
     status: identified
     value: 0.0
     cost: 0.0
@@ -952,13 +1013,10 @@ targets:
     - Ruby-trigger categories from T32 (source_build_no_bottle, tap_formula_parse, post_install_hook, etc.) appear in collected payloads with no formula names or PII.
     - A live aggregate dashboard (or comparable readout) answers at least one decision-grade question, e.g. "what fraction of installs need Ruby?"
     context: Standalone checkpoint for T32 (opt-in telemetry). Verifies both the privacy guarantees and that the data is actually informative enough to drive decisions.
-    verifies:
-    - T32
     origin: manual
     discovered: 2026-05-15
   T71:
     name: brew-to-den migration succeeds end-to-end on a real Homebrew install
-    kind: verify
     status: identified
     value: 0.0
     cost: 0.0
@@ -968,13 +1026,10 @@ targets:
     - Re-running `den migrate` is idempotent; new brew installs since the last migration are picked up without disturbing existing den state.
     - The post-migration health check (manifest packages resolve, binaries accessible via the den environment, services still running) passes on at least one real-world install.
     context: Standalone checkpoint for T37 (full brew-to-den migration). End-to-end on a real install is the only meaningful test — synthetic fixtures will miss the gnarly edge cases that motivate this target.
-    verifies:
-    - T37
     origin: manual
     discovered: 2026-05-15
   T72:
     name: Daemon defers upgrades while managed binaries are in use
-    kind: verify
     status: identified
     value: 0.0
     cost: 0.0
@@ -984,8 +1039,6 @@ targets:
     - Once the in-use process exits, the deferred upgrade applies on the next daemon tick or at user request via `den upgrade`.
     - User-facing reporting (`den outdated`, `den daemon status`) makes deferred upgrades visible.
     context: Standalone checkpoint for T51 (safe automatic upgrades). Critical user-trust property — automatic upgrades that yank the rug out from under running processes will get den uninstalled fast.
-    verifies:
-    - T51
     origin: manual
     discovered: 2026-05-15
   T8:
