@@ -27,8 +27,8 @@
 
 #include <doctest.h>
 
-#include "build/source_build.h"
 #include "build/formula_parser.h"
+#include "build/source_build.h"
 #include "index/package.h"
 
 #include <string>

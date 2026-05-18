@@ -476,8 +476,7 @@ ParsedFormula parse_formula(const std::string& brew_cat_output, const std::strin
                 // formula-path tokens would still appear literal), so we
                 // simply refuse if the value contains any interpolation.
                 if (val.find("#{") != std::string::npos) {
-                    result.complexity_markers.push_back(
-                        {"interpolation", ll.start_line, trimmed});
+                    result.complexity_markers.push_back({"interpolation", ll.start_line, trimmed});
                     result.complexity = FormulaComplexity::Complex;
                     continue;
                 }
@@ -505,8 +504,7 @@ ParsedFormula parse_formula(const std::string& brew_cat_output, const std::strin
             // `#{Formula["openssl@3"].opt_prefix}`). Passing it through as
             // a literal shell token is a silent-drop soundness bug.
             if (cmd.find("#{") != std::string::npos) {
-                result.complexity_markers.push_back(
-                    {"interpolation", ll.start_line, trimmed});
+                result.complexity_markers.push_back({"interpolation", ll.start_line, trimmed});
                 result.complexity = FormulaComplexity::Complex;
                 continue;
             }
@@ -529,8 +527,7 @@ ParsedFormula parse_formula(const std::string& brew_cat_output, const std::strin
                 // surviving interpolation (`#{pkgshare}`, `#{buildpath}`,
                 // etc.) must refuse rather than exec `mkdir -p "#{…}"`.
                 if (dir.find("#{") != std::string::npos) {
-                    result.complexity_markers.push_back(
-                        {"interpolation", ll.start_line, trimmed});
+                    result.complexity_markers.push_back({"interpolation", ll.start_line, trimmed});
                     result.complexity = FormulaComplexity::Complex;
                     continue;
                 }

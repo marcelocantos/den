@@ -64,10 +64,8 @@ static std::string run_den(const std::string& args, const std::string& den_home)
     // tolerates a missing store for read-only queries.
     const std::string prefix = den_home + "/brew";
     const std::string cellar = prefix + "/Cellar";
-    std::string cmd = "DEN_HOME=" + den_home +
-                      " HOMEBREW_PREFIX=" + prefix +
-                      " HOMEBREW_CELLAR=" + cellar +
-                      " ./den " + args + " 2>&1";
+    std::string cmd = "DEN_HOME=" + den_home + " HOMEBREW_PREFIX=" + prefix +
+                      " HOMEBREW_CELLAR=" + cellar + " ./den " + args + " 2>&1";
 
     FILE* pipe = ::popen(cmd.c_str(), "r");
     if (!pipe) {
@@ -148,7 +146,8 @@ TEST_SUITE("cli::integration") {
         // Must be parseable-looking JSON (starts with '{').
         bool starts_with_brace = false;
         for (char c : out) {
-            if (c == ' ' || c == '\n' || c == '\r' || c == '\t') continue;
+            if (c == ' ' || c == '\n' || c == '\r' || c == '\t')
+                continue;
             starts_with_brace = (c == '{');
             break;
         }

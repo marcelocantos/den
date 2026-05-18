@@ -20,8 +20,8 @@
 
 #include <doctest.h>
 
-#include "migrate/migrate.h"
 #include "core/config.h"
+#include "migrate/migrate.h"
 
 #include <cstdlib>
 #include <filesystem>

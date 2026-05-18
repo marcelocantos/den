@@ -34,8 +34,8 @@ std::string base_name(const std::string& name) {
 
 } // namespace
 
-uint32_t materialise(const fs::path& den_home, const fs::path& store,
-                     const std::string& env_path, const PackageIndex* idx) {
+uint32_t materialise(const fs::path& den_home, const fs::path& store, const std::string& env_path,
+                     const PackageIndex* idx) {
     auto resolved = resolve(den_home, env_path);
     auto manifest = read_manifest(den_home, env_path);
     auto dir = env_dir(den_home, env_path);
@@ -55,7 +55,8 @@ uint32_t materialise(const fs::path& den_home, const fs::path& store,
             }
         }
         for (const auto& [base, members] : families) {
-            if (members.size() <= 1) continue;
+            if (members.size() <= 1)
+                continue;
 
             // Prefer explicit installs over auto-deps.
             std::vector<std::string> explicit_members;
@@ -72,8 +73,8 @@ uint32_t materialise(const fs::path& den_home, const fs::path& store,
             for (const auto& m : members) {
                 if (m != winner) {
                     skip_versioned.insert(m);
-                    SPDLOG_INFO("{}  skipped (versioned family '{}', linking {} instead)",
-                                m, base, winner);
+                    SPDLOG_INFO("{}  skipped (versioned family '{}', linking {} instead)", m, base,
+                                winner);
                 }
             }
         }
@@ -96,9 +97,11 @@ uint32_t materialise(const fs::path& den_home, const fs::path& store,
             fs::create_directories(opt_dir);
             auto opt_link = opt_dir / name;
             std::error_code ec;
-            if (fs::is_symlink(opt_link, ec)) fs::remove(opt_link, ec);
+            if (fs::is_symlink(opt_link, ec))
+                fs::remove(opt_link, ec);
             fs::create_symlink(pkg_path, opt_link, ec);
-            if (!ec) ++total;
+            if (!ec)
+                ++total;
             record_linked_version(dir, name, version);
             continue;
         }

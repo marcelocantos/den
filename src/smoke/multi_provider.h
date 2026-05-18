@@ -32,7 +32,7 @@ struct ProviderSmokeResult {
     std::string provider;     // e.g. "homebrew", "python", "node", "go", "cargo"
     std::string package_name; // e.g. "jq", "black", "prettier", "golangci-lint", "ripgrep"
     SmokeStatus status = SmokeStatus::Skip;
-    std::string note;         // failure message or skip reason
+    std::string note; // failure message or skip reason
 };
 
 struct MultiProviderSmokeResult {
@@ -40,13 +40,15 @@ struct MultiProviderSmokeResult {
 
     bool all_pass() const {
         for (const auto& r : providers)
-            if (r.status != SmokeStatus::Pass) return false;
+            if (r.status != SmokeStatus::Pass)
+                return false;
         return !providers.empty();
     }
 
     bool any_fail() const {
         for (const auto& r : providers)
-            if (r.status == SmokeStatus::Fail) return true;
+            if (r.status == SmokeStatus::Fail)
+                return true;
         return false;
     }
 };

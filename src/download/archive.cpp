@@ -64,9 +64,8 @@ ExtractResult extract_archive(const fs::path& archive_path, const fs::path& dest
     // contain internal symlinks (e.g. .brew/ directory) that are safe.
     // Our own is_path_unsafe check handles traversal attacks.
     ArchivePtr disk(archive_write_disk_new(), archive_read_free);
-    archive_write_disk_set_options(disk.get(),
-                                  ARCHIVE_EXTRACT_TIME | ARCHIVE_EXTRACT_PERM |
-                                      ARCHIVE_EXTRACT_SECURE_NODOTDOT);
+    archive_write_disk_set_options(disk.get(), ARCHIVE_EXTRACT_TIME | ARCHIVE_EXTRACT_PERM |
+                                                   ARCHIVE_EXTRACT_SECURE_NODOTDOT);
 
     ExtractResult result;
     std::string common_root;

@@ -154,7 +154,7 @@ TEST_SUITE("T66::output_stability") {
 
         // Known-volatile prefixes in daemon status output.
         const std::vector<std::string> volatile_prefixes = {
-            "Last check:",  // e.g. "Last check: 3s ago"
+            "Last check:", // e.g. "Last check: 3s ago"
         };
 
         const auto raw1 = run_den("daemon status", home);

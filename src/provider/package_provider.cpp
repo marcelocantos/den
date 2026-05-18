@@ -15,4 +15,4 @@ bool PackageProvider::is_installed(const Config& config, std::string_view name,
     return false;
 }
 
-}  // namespace den
+} // namespace den

@@ -22,8 +22,8 @@
 
 #include <doctest.h>
 
-#include "doctor/doctor.h"
 #include "core/config.h"
+#include "doctor/doctor.h"
 
 #include <filesystem>
 #include <fstream>
@@ -47,7 +47,8 @@ struct TmpDir {
     TmpDir() {
         std::string tmpl = (fs::temp_directory_path() / "den_dt_XXXXXX").string();
         char* result = ::mkdtemp(tmpl.data());
-        if (!result) throw std::runtime_error("mkdtemp failed");
+        if (!result)
+            throw std::runtime_error("mkdtemp failed");
         path = result;
     }
     ~TmpDir() {
@@ -62,8 +63,8 @@ struct TmpDir {
 static Config make_isolated_config(const fs::path& home) {
     Config cfg;
     cfg.den_home = home;
-    cfg.store    = home / "Cellar";
-    cfg.cache    = home / "cache";
+    cfg.store = home / "Cellar";
+    cfg.cache = home / "cache";
     cfg.homebrew_prefix = home / "brew";
     cfg.homebrew_cellar = home / "brew" / "Cellar";
     cfg.arch = Arch::Arm64;
@@ -77,14 +78,14 @@ static Config make_isolated_config(const fs::path& home) {
 // ---------------------------------------------------------------------------
 
 enum class ReplicaStatus {
-    Active,     // replica CDN reachable and in sync
-    Degraded,   // replica unreachable; falling back to Homebrew-only
-    Unknown,    // never synced
+    Active,   // replica CDN reachable and in sync
+    Degraded, // replica unreachable; falling back to Homebrew-only
+    Unknown,  // never synced
 };
 
 struct TrustReport {
     bool homebrew_source_active = true;
-    bool replica_source_active  = false; // becomes true once 🎯T42 ships
+    bool replica_source_active = false; // becomes true once 🎯T42 ships
     ReplicaStatus replica_status = ReplicaStatus::Unknown;
     std::optional<std::string> last_replica_sync_iso8601; // nullopt = never synced
     std::vector<std::string> active_advanced_layers;      // empty until 🎯T44
@@ -95,8 +96,8 @@ static std::vector<Finding> findings_from_trust_report(const TrustReport& report
     std::vector<Finding> findings;
 
     if (!report.homebrew_source_active) {
-        findings.push_back({Severity::Error,
-                            "trust: Homebrew hash source (formulae.brew.sh) is inactive"});
+        findings.push_back(
+            {Severity::Error, "trust: Homebrew hash source (formulae.brew.sh) is inactive"});
     }
 
     if (!report.replica_source_active) {
@@ -112,20 +113,19 @@ static std::vector<Finding> findings_from_trust_report(const TrustReport& report
             // No finding — healthy state.
             break;
         case ReplicaStatus::Degraded:
-            findings.push_back({Severity::Warning,
-                                "trust: replica CDN unreachable — last sync: " +
-                                    report.last_replica_sync_iso8601.value_or("never")});
+            findings.push_back(
+                {Severity::Warning, "trust: replica CDN unreachable — last sync: " +
+                                        report.last_replica_sync_iso8601.value_or("never")});
             break;
         case ReplicaStatus::Unknown:
-            findings.push_back({Severity::Warning,
-                                "trust: replica has never synced"});
+            findings.push_back({Severity::Warning, "trust: replica has never synced"});
             break;
         }
     }
 
     if (report.active_advanced_layers.empty() && report.replica_source_active) {
-        findings.push_back({Severity::Warning,
-                            "trust: no advanced trust layers active (🎯T44 not yet wired)"});
+        findings.push_back(
+            {Severity::Warning, "trust: no advanced trust layers active (🎯T44 not yet wired)"});
     }
 
     return findings;
@@ -169,15 +169,14 @@ TEST_SUITE("doctor_trust::trust_report_to_findings") {
     TEST_CASE("pre-T42 baseline: replica inactive → warning finding emitted") {
         TrustReport report;
         report.homebrew_source_active = true;
-        report.replica_source_active  = false;
-        report.replica_status         = ReplicaStatus::Unknown;
+        report.replica_source_active = false;
+        report.replica_status = ReplicaStatus::Unknown;
 
         auto findings = findings_from_trust_report(report);
         // Must emit at least one warning about the inactive replica.
         bool found_replica_warning = false;
         for (const auto& f : findings) {
-            if (f.severity == Severity::Warning &&
-                f.message.find("replica") != std::string::npos) {
+            if (f.severity == Severity::Warning && f.message.find("replica") != std::string::npos) {
                 found_replica_warning = true;
             }
         }
@@ -187,10 +186,10 @@ TEST_SUITE("doctor_trust::trust_report_to_findings") {
     TEST_CASE("full-strength: both sources active and replica healthy → no trust findings") {
         TrustReport report;
         report.homebrew_source_active = true;
-        report.replica_source_active  = true;
-        report.replica_status         = ReplicaStatus::Active;
+        report.replica_source_active = true;
+        report.replica_status = ReplicaStatus::Active;
         report.last_replica_sync_iso8601 = "2026-05-17T00:00:00Z";
-        report.active_advanced_layers    = {"sigstore"};
+        report.active_advanced_layers = {"sigstore"};
 
         auto findings = findings_from_trust_report(report);
         for (const auto& f : findings) {
@@ -202,9 +201,9 @@ TEST_SUITE("doctor_trust::trust_report_to_findings") {
 
     TEST_CASE("degraded replica: active but CDN unreachable → warning with last-sync timestamp") {
         TrustReport report;
-        report.homebrew_source_active    = true;
-        report.replica_source_active     = true;
-        report.replica_status            = ReplicaStatus::Degraded;
+        report.homebrew_source_active = true;
+        report.replica_source_active = true;
+        report.replica_status = ReplicaStatus::Degraded;
         report.last_replica_sync_iso8601 = "2026-05-10T12:00:00Z";
 
         auto findings = findings_from_trust_report(report);
@@ -221,8 +220,8 @@ TEST_SUITE("doctor_trust::trust_report_to_findings") {
     TEST_CASE("homebrew source inactive → error finding") {
         TrustReport report;
         report.homebrew_source_active = false;
-        report.replica_source_active  = true;
-        report.replica_status         = ReplicaStatus::Active;
+        report.replica_source_active = true;
+        report.replica_status = ReplicaStatus::Active;
         report.last_replica_sync_iso8601 = "2026-05-17T00:00:00Z";
 
         auto findings = findings_from_trust_report(report);
@@ -238,9 +237,9 @@ TEST_SUITE("doctor_trust::trust_report_to_findings") {
 
     TEST_CASE("replica active but no advanced layers → T44 gap warning") {
         TrustReport report;
-        report.homebrew_source_active    = true;
-        report.replica_source_active     = true;
-        report.replica_status            = ReplicaStatus::Active;
+        report.homebrew_source_active = true;
+        report.replica_source_active = true;
+        report.replica_status = ReplicaStatus::Active;
         report.last_replica_sync_iso8601 = "2026-05-17T00:00:00Z";
         // active_advanced_layers intentionally left empty
 
@@ -260,8 +259,7 @@ TEST_SUITE("doctor_trust::trust_report_to_findings") {
     // -----------------------------------------------------------------------
 
     // 🎯T42/T44: doctor() does not yet call check_trust_model().
-    TEST_CASE("doctor() emits trust section in output (🎯T42 + T44 gap)" *
-              doctest::skip(true)) {
+    TEST_CASE("doctor() emits trust section in output (🎯T42 + T44 gap)" * doctest::skip(true)) {
         // When T42+T44 are implemented, doctor() must:
         //   - Call a check_trust_model(config, findings) helper.
         //   - Report which hash sources are active.
@@ -271,8 +269,7 @@ TEST_SUITE("doctor_trust::trust_report_to_findings") {
     }
 
     // 🎯T42: CLI integration test requires real replica state.
-    TEST_CASE("den doctor CLI output contains trust section (🎯T42 gap)" *
-              doctest::skip(true)) {
+    TEST_CASE("den doctor CLI output contains trust section (🎯T42 gap)" * doctest::skip(true)) {
         // When T42 is implemented, running `den doctor` should print a block like:
         //   [trust] replica: active, last sync: 2026-05-17T00:00:00Z
         //   [trust] sources: formulae.brew.sh + den-replica-cdn

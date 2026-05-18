@@ -22,9 +22,12 @@ struct TmpDir {
     fs::path path;
 
     TmpDir() {
-        path = fs::temp_directory_path() / ("den_test_env_" + std::to_string(
-            std::hash<std::string>{}(std::to_string(reinterpret_cast<uintptr_t>(this)))
-            ^ static_cast<size_t>(std::chrono::steady_clock::now().time_since_epoch().count())));
+        path =
+            fs::temp_directory_path() /
+            ("den_test_env_" +
+             std::to_string(
+                 std::hash<std::string>{}(std::to_string(reinterpret_cast<uintptr_t>(this))) ^
+                 static_cast<size_t>(std::chrono::steady_clock::now().time_since_epoch().count())));
         fs::create_directories(path);
     }
 
@@ -47,7 +50,6 @@ TEST_SUITE("environment::env_dir") {
         auto dir = env_dir("/home/den", "/ml");
         CHECK(dir == fs::path("/home/den/envs/ml"));
     }
-
 }
 
 TEST_SUITE("environment::active_env_path") {
@@ -70,7 +72,6 @@ TEST_SUITE("environment::active_env_path") {
         set_active_env(tmp.path, "/work");
         CHECK(active_env_path(tmp.path) == "/work");
     }
-
 }
 
 TEST_SUITE("environment::materialise") {
@@ -152,7 +153,6 @@ TEST_SUITE("environment::materialise") {
 
         CHECK(fs::read_symlink(eDir / "bin" / "tree") == pkg2 / "bin" / "tree");
     }
-
 }
 
 } // namespace test

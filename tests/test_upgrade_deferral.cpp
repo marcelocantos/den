@@ -21,23 +21,23 @@
 // --------------------------------------------------------------------------
 
 #if __has_include("daemon/inuse.h")
-#  include "daemon/inuse.h"
-#  define HAS_INUSE_DETECTOR 1
+#include "daemon/inuse.h"
+#define HAS_INUSE_DETECTOR 1
 #elif __has_include("daemon/file_inuse.h")
-#  include "daemon/file_inuse.h"
-#  define HAS_INUSE_DETECTOR 1
+#include "daemon/file_inuse.h"
+#define HAS_INUSE_DETECTOR 1
 #else
-#  define HAS_INUSE_DETECTOR 0
+#define HAS_INUSE_DETECTOR 0
 #endif
 
 // The deferral path is expected to add a run_upgrade_pass() (or equivalent)
 // function that accepts a Cellar root and the daemon state, applies available
 // upgrades, and records deferrals when files are in use.
 #if __has_include("daemon/upgrade_pass.h")
-#  include "daemon/upgrade_pass.h"
-#  define HAS_UPGRADE_PASS 1
+#include "daemon/upgrade_pass.h"
+#define HAS_UPGRADE_PASS 1
 #else
-#  define HAS_UPGRADE_PASS 0
+#define HAS_UPGRADE_PASS 0
 #endif
 
 #include "daemon/daemon.h"
@@ -47,10 +47,10 @@
 #include <string>
 
 #if !defined(_WIN32)
-#  include <fcntl.h>
-#  include <sys/types.h>
-#  include <sys/wait.h>
-#  include <unistd.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 namespace den {
@@ -82,7 +82,7 @@ struct DeferralTmpDir {
 
 // Build a minimal fake keg under <cellar>/<name>/<version>/ with one binary.
 static fs::path make_fake_keg(const fs::path& cellar, const std::string& name,
-                               const std::string& version) {
+                              const std::string& version) {
     fs::path keg = cellar / name / version / "bin";
     fs::create_directories(keg);
     fs::path bin = keg / name;
@@ -129,7 +129,9 @@ TEST_SUITE("upgrade_deferral") {
         if (child == 0) {
             ::close(sync_pipe[1]);
             int fd = ::open(held_file.c_str(), O_RDONLY);
-            if (fd < 0) { ::_exit(1); }
+            if (fd < 0) {
+                ::_exit(1);
+            }
             char buf;
             (void)::read(sync_pipe[0], &buf, 1);
             ::close(fd);
@@ -167,7 +169,9 @@ TEST_SUITE("upgrade_deferral") {
         // The applied list should contain the openssl upgrade.
         bool applied_openssl = false;
         for (const auto& a : result2.applied) {
-            if (a.name == "openssl") { applied_openssl = true; }
+            if (a.name == "openssl") {
+                applied_openssl = true;
+            }
         }
         CHECK(applied_openssl);
 #endif
@@ -197,7 +201,9 @@ TEST_SUITE("upgrade_deferral") {
         CHECK(result.deferred.empty());
         bool applied_tree = false;
         for (const auto& a : result.applied) {
-            if (a.name == "tree") { applied_tree = true; }
+            if (a.name == "tree") {
+                applied_tree = true;
+            }
         }
         CHECK(applied_tree);
 #endif
@@ -229,7 +235,9 @@ TEST_SUITE("upgrade_deferral") {
         if (child == 0) {
             ::close(sync_pipe[1]);
             int fd = ::open(held_file.c_str(), O_RDONLY);
-            if (fd < 0) { ::_exit(1); }
+            if (fd < 0) {
+                ::_exit(1);
+            }
             char buf;
             (void)::read(sync_pipe[0], &buf, 1);
             ::close(fd);
@@ -258,7 +266,9 @@ TEST_SUITE("upgrade_deferral") {
             return;
         }
         for (const auto& d : loaded.deferred) {
-            if (d.name == "curl") { has_deferred_curl = true; }
+            if (d.name == "curl") {
+                has_deferred_curl = true;
+            }
         }
         CHECK(has_deferred_curl);
 

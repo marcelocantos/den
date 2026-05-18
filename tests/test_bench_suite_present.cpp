@@ -34,7 +34,7 @@ TEST_SUITE("bench_suite_present") {
         auto script = repo_root() / "scripts" / "bench" / "compare-brew.sh";
         REQUIRE(fs::exists(script));
 
-        struct stat st {};
+        struct stat st{};
         REQUIRE(::stat(script.c_str(), &st) == 0);
         // Owner-execute bit must be set.
         CHECK_MESSAGE((st.st_mode & S_IXUSR) != 0,
@@ -49,8 +49,7 @@ TEST_SUITE("bench_suite_present") {
 
     TEST_CASE("bench workflow file exists") {
         auto wf = repo_root() / ".github" / "workflows" / "bench.yml";
-        CHECK_MESSAGE(fs::exists(wf),
-                      "bench workflow missing: ", wf.string());
+        CHECK_MESSAGE(fs::exists(wf), "bench workflow missing: ", wf.string());
     }
 
 } // TEST_SUITE

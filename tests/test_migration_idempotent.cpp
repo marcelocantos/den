@@ -12,8 +12,8 @@
 
 #include <doctest.h>
 
-#include "migrate/migrate.h"
 #include "core/config.h"
+#include "migrate/migrate.h"
 
 #include <cstdlib>
 #include <filesystem>
@@ -66,8 +66,8 @@ static void write_receipt(const fs::path& keg_path, bool on_request) {
 }
 
 // Add a keg to the Cellar with a minimal receipt.
-static void add_keg(const fs::path& cellar, const std::string& name,
-                    const std::string& version, bool on_request = true) {
+static void add_keg(const fs::path& cellar, const std::string& name, const std::string& version,
+                    bool on_request = true) {
     const fs::path keg = cellar / name / version;
     fs::create_directories(keg / "bin");
     std::ofstream(keg / "bin" / name) << "#!/bin/sh\n";
@@ -229,7 +229,8 @@ TEST_SUITE("migration::idempotent") {
         // curl appears exactly once.
         int curl_count = 0;
         for (const auto& a : auto_after_second) {
-            if (a == "curl") ++curl_count;
+            if (a == "curl")
+                ++curl_count;
         }
         CHECK(curl_count == 1);
     }

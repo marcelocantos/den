@@ -109,7 +109,7 @@ TEST_SUITE("shim_free_build") {
         CHECK(contains_xcrun("/usr/bin/xcrun --sdk macosx clang"));
         CHECK(!contains_xcrun("not_xcrun_related"));
         CHECK(!contains_xcrun("xcrunner --version")); // trailing non-boundary
-        CHECK(!contains_xcrun("myxcrun")); // leading non-boundary
+        CHECK(!contains_xcrun("myxcrun"));            // leading non-boundary
         CHECK(!contains_xcrun("make install"));
     }
 

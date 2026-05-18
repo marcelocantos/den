@@ -94,9 +94,9 @@ TEST_SUITE("T66::doctor_output" * doctest::skip(true)) {
     // -----------------------------------------------------------------------
     TEST_CASE("doctor produces a summary (findings or all-clear)") {
         const auto out = run_den_fresh("doctor");
-        const bool has_findings  = out.find("finding(s)") != std::string::npos;
-        const bool all_passed    = out.find("All checks passed") != std::string::npos;
-        const bool your_system   = out.find("Your system is ready") != std::string::npos;
+        const bool has_findings = out.find("finding(s)") != std::string::npos;
+        const bool all_passed = out.find("All checks passed") != std::string::npos;
+        const bool your_system = out.find("Your system is ready") != std::string::npos;
         CHECK((has_findings || all_passed || your_system));
     }
 
@@ -134,8 +134,8 @@ TEST_SUITE("T66::doctor_output" * doctest::skip(true)) {
     // -----------------------------------------------------------------------
     TEST_CASE("config arch is a recognised architecture string") {
         const auto out = run_den_fresh("config");
-        const bool arm64   = out.find("aarch64") != std::string::npos;
-        const bool x86_64  = out.find("x86_64")  != std::string::npos;
+        const bool arm64 = out.find("aarch64") != std::string::npos;
+        const bool x86_64 = out.find("x86_64") != std::string::npos;
         CHECK((arm64 || x86_64));
     }
 
@@ -172,9 +172,9 @@ TEST_SUITE("T66::doctor_output" * doctest::skip(true)) {
     TEST_CASE("SKIP: den config reports CLT version [T2 gap]") {
         MESSAGE("SKIP — Command Line Tools version not yet reported. Upstream gap: T2.");
         const auto out = run_den_fresh("config");
-        const bool has_clt = out.find("clt_version")          != std::string::npos ||
-                             out.find("cltools_version")       != std::string::npos ||
-                             out.find("Command Line Tools")    != std::string::npos;
+        const bool has_clt = out.find("clt_version") != std::string::npos ||
+                             out.find("cltools_version") != std::string::npos ||
+                             out.find("Command Line Tools") != std::string::npos;
         if (has_clt) {
             MESSAGE("T2 gap closed — remove the SKIP marker in test_doctor_output.cpp");
         }
@@ -186,9 +186,9 @@ TEST_SUITE("T66::doctor_output" * doctest::skip(true)) {
     TEST_CASE("SKIP: den config reports SDK path [T2 gap]") {
         MESSAGE("SKIP — SDK path not yet reported. Upstream gap: T2.");
         const auto out = run_den_fresh("config");
-        const bool has_sdk = out.find("sdk_path")    != std::string::npos ||
-                             out.find("sdk:")         != std::string::npos ||
-                             out.find("MacOSX.sdk")   != std::string::npos;
+        const bool has_sdk = out.find("sdk_path") != std::string::npos ||
+                             out.find("sdk:") != std::string::npos ||
+                             out.find("MacOSX.sdk") != std::string::npos;
         if (has_sdk) {
             MESSAGE("T2 gap closed — remove the SKIP marker in test_doctor_output.cpp");
         }

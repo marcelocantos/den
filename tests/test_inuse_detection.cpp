@@ -20,13 +20,13 @@
 // When the in-use detector is implemented it should expose a header at one
 // of these paths.  We probe at compile time and set HAS_INUSE_DETECTOR.
 #if __has_include("daemon/inuse.h")
-#  include "daemon/inuse.h"
-#  define HAS_INUSE_DETECTOR 1
+#include "daemon/inuse.h"
+#define HAS_INUSE_DETECTOR 1
 #elif __has_include("daemon/file_inuse.h")
-#  include "daemon/file_inuse.h"
-#  define HAS_INUSE_DETECTOR 1
+#include "daemon/file_inuse.h"
+#define HAS_INUSE_DETECTOR 1
 #else
-#  define HAS_INUSE_DETECTOR 0
+#define HAS_INUSE_DETECTOR 0
 #endif
 
 #include <filesystem>
@@ -34,10 +34,10 @@
 #include <string>
 
 #if !defined(_WIN32)
-#  include <fcntl.h>
-#  include <sys/types.h>
-#  include <sys/wait.h>
-#  include <unistd.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 namespace den {
@@ -89,7 +89,10 @@ TEST_SUITE("inuse_detection") {
         fs::path keg = cellar_root / "openssl" / "3.2.0" / "lib";
         fs::create_directories(keg);
         fs::path target_file = keg / "libssl.dylib";
-        { std::ofstream f(target_file); f << "fake library\n"; }
+        {
+            std::ofstream f(target_file);
+            f << "fake library\n";
+        }
 
         // Fork a child that opens the file and blocks until we signal it.
         // Parent↔child synchronisation via a pipe: parent writes one byte
@@ -104,7 +107,9 @@ TEST_SUITE("inuse_detection") {
             // Child: open the target file, signal readiness, wait for parent.
             ::close(sync_pipe[1]); // close write end
             int fd = ::open(target_file.c_str(), O_RDONLY);
-            if (fd < 0) { ::_exit(1); }
+            if (fd < 0) {
+                ::_exit(1);
+            }
             // Signal parent: file is now open.
             // (child is ready when it successfully opened the file.)
             // We block until parent closes the write end (EOF on read).
@@ -149,7 +154,10 @@ TEST_SUITE("inuse_detection") {
 #else
         InuseTmpDir tmp;
         fs::path idle_file = tmp.path / "idle.dylib";
-        { std::ofstream f(idle_file); f << "idle\n"; }
+        {
+            std::ofstream f(idle_file);
+            f << "idle\n";
+        }
 
         CHECK_FALSE(den::is_file_in_use(idle_file));
 #endif
@@ -182,8 +190,14 @@ TEST_SUITE("inuse_detection") {
         fs::create_directories(keg);
         fs::path lib_a = keg / "libcurl.dylib";
         fs::path lib_b = keg / "libcurl.4.dylib";
-        { std::ofstream f(lib_a); f << "a\n"; }
-        { std::ofstream f(lib_b); f << "b\n"; }
+        {
+            std::ofstream f(lib_a);
+            f << "a\n";
+        }
+        {
+            std::ofstream f(lib_b);
+            f << "b\n";
+        }
 
         int sync_pipe[2];
         REQUIRE(::pipe(sync_pipe) == 0);
@@ -194,7 +208,9 @@ TEST_SUITE("inuse_detection") {
         if (child == 0) {
             ::close(sync_pipe[1]);
             int fd = ::open(lib_a.c_str(), O_RDONLY);
-            if (fd < 0) { ::_exit(1); }
+            if (fd < 0) {
+                ::_exit(1);
+            }
             char buf;
             (void)::read(sync_pipe[0], &buf, 1);
             ::close(fd);
@@ -210,7 +226,9 @@ TEST_SUITE("inuse_detection") {
         CHECK(!held.empty());
         bool found_a = false;
         for (const auto& p : held) {
-            if (p == lib_a) { found_a = true; }
+            if (p == lib_a) {
+                found_a = true;
+            }
         }
         CHECK(found_a);
 

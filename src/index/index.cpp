@@ -72,8 +72,8 @@ Package transform_formula(const json& f) {
     pkg.homepage = json_string(f, "homepage");
     pkg.license = json_string(f, "license");
     pkg.artifact_type = ArtifactType::Binary;
-    pkg.deprecated = f.contains("deprecated") && f["deprecated"].is_boolean() &&
-                     f["deprecated"].get<bool>();
+    pkg.deprecated =
+        f.contains("deprecated") && f["deprecated"].is_boolean() && f["deprecated"].get<bool>();
     pkg.disabled =
         f.contains("disabled") && f["disabled"].is_boolean() && f["disabled"].get<bool>();
 
@@ -167,8 +167,8 @@ Package transform_cask(const json& c) {
     pkg.description = json_string(c, "desc");
     pkg.homepage = json_string(c, "homepage");
     pkg.artifact_type = ArtifactType::App;
-    pkg.deprecated = c.contains("deprecated") && c["deprecated"].is_boolean() &&
-                     c["deprecated"].get<bool>();
+    pkg.deprecated =
+        c.contains("deprecated") && c["deprecated"].is_boolean() && c["deprecated"].get<bool>();
     pkg.disabled =
         c.contains("disabled") && c["disabled"].is_boolean() && c["disabled"].get<bool>();
 

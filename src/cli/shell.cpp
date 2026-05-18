@@ -90,7 +90,9 @@ void emit_posix_init(const Config& config, const std::string& shell) {
     // as well, but we need den itself to be findable first.
     std::cout << "# den shell integration (" << shell
               << ")\n"
-                 "export PATH=" << den_bin << ":\"$PATH\"\n"
+                 "export PATH="
+              << den_bin
+              << ":\"$PATH\"\n"
                  "\n"
                  "den() {\n"
                  "  if [ \"$1\" = \"env\" ] && [ \"$2\" = \"use\" ]; then\n"
@@ -112,7 +114,9 @@ void emit_posix_init(const Config& config, const std::string& shell) {
 void emit_fish_init(const Config& config) {
     std::cout
         << "# den shell integration (fish)\n"
-           "set -gx PATH " << fish_quote(config.den_home / "bin") << " $PATH\n"
+           "set -gx PATH "
+        << fish_quote(config.den_home / "bin")
+        << " $PATH\n"
            "\n"
            "function den\n"
            "    if test (count $argv) -ge 2 -a \"$argv[1]\" = \"env\" -a \"$argv[2]\" = \"use\"\n"

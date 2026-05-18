@@ -120,7 +120,7 @@ MultiProviderSmokeResult run_multi_provider_smoke() {
             "🎯T39",
             "prettier",
             "prettier --version",
-            ".",  // any semver digit string
+            ".", // any semver digit string
         },
         {
             "go",
@@ -154,19 +154,24 @@ void print_multi_provider_smoke_result(const MultiProviderSmokeResult& result) {
     int passed = 0, failed = 0, skipped = 0;
     for (const auto& r : result.providers) {
         auto status_idx = static_cast<int>(r.status);
-        std::cout << "  [" << kLabel[status_idx] << "] "
-                  << r.provider << " :: " << r.package_name;
+        std::cout << "  [" << kLabel[status_idx] << "] " << r.provider << " :: " << r.package_name;
         if (!r.note.empty())
             std::cout << "  (" << r.note << ")";
         std::cout << "\n";
         switch (r.status) {
-        case SmokeStatus::Pass:   ++passed;  break;
-        case SmokeStatus::Fail:   ++failed;  break;
-        case SmokeStatus::Skip:   ++skipped; break;
+        case SmokeStatus::Pass:
+            ++passed;
+            break;
+        case SmokeStatus::Fail:
+            ++failed;
+            break;
+        case SmokeStatus::Skip:
+            ++skipped;
+            break;
         }
     }
-    std::cout << "\n  " << passed << " passed, " << failed << " failed, "
-              << skipped << " skipped\n";
+    std::cout << "\n  " << passed << " passed, " << failed << " failed, " << skipped
+              << " skipped\n";
     if (passed == static_cast<int>(result.providers.size()))
         std::cout << "  All providers PASS.\n";
     else if (failed > 0)

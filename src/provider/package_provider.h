@@ -45,7 +45,7 @@ struct InstallResult {
 /// single provider call is not required to be reentrant. Provider
 /// implementations may rely on the calling code to serialise.
 class PackageProvider {
-   public:
+  public:
     virtual ~PackageProvider() = default;
 
     /// Short, stable identifier — "homebrew", "pip", "npm", "cargo", "go".
@@ -109,4 +109,4 @@ class PackageProvider {
 /// Type-erased smart pointer used throughout the codebase.
 using PackageProviderPtr = std::shared_ptr<PackageProvider>;
 
-}  // namespace den
+} // namespace den

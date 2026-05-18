@@ -30,7 +30,8 @@ std::pair<int, std::string> run_cmd(const std::string& cmd) {
     std::string output;
     std::array<char, 4096> buf{};
     FILE* pipe = popen((cmd + " 2>&1").c_str(), "r");
-    if (!pipe) return {-1, "popen failed"};
+    if (!pipe)
+        return {-1, "popen failed"};
     while (fgets(buf.data(), buf.size(), pipe)) {
         output += buf.data();
     }
@@ -40,16 +41,15 @@ std::pair<int, std::string> run_cmd(const std::string& cmd) {
 }
 
 /// Run a check that executes a command relative to the package prefix.
-CheckResult run_cmd_check(const fs::path& pkg_prefix, const std::string& cmd,
-                          int expect_exit, const std::string& expect_stdout) {
+CheckResult run_cmd_check(const fs::path& pkg_prefix, const std::string& cmd, int expect_exit,
+                          const std::string& expect_stdout) {
     CheckResult r;
     r.description = cmd;
 
     // Resolve the command relative to the package prefix.
     // The first word of cmd is the binary path.
     std::string full_cmd = cmd;
-    if (cmd.substr(0, 4) == "bin/" || cmd.substr(0, 4) == "lib/" ||
-        cmd.substr(0, 6) == "sbin/") {
+    if (cmd.substr(0, 4) == "bin/" || cmd.substr(0, 4) == "lib/" || cmd.substr(0, 6) == "sbin/") {
         full_cmd = (pkg_prefix / cmd.substr(0, cmd.find(' '))).string();
         auto space = cmd.find(' ');
         if (space != std::string::npos) {
@@ -83,8 +83,8 @@ CheckResult run_cmd_check(const fs::path& pkg_prefix, const std::string& cmd,
 }
 
 /// Run a check that executes a command in a fresh temp directory.
-CheckResult run_tmpdir_check(const fs::path& pkg_prefix, const std::string& cmd,
-                             int expect_exit, const std::string& expect_stdout) {
+CheckResult run_tmpdir_check(const fs::path& pkg_prefix, const std::string& cmd, int expect_exit,
+                             const std::string& expect_stdout) {
     // Create a temp directory for this check.
     auto tmpdir = fs::temp_directory_path() / ("den-smoke-" + std::to_string(std::rand()));
     fs::create_directories(tmpdir);
@@ -104,8 +104,7 @@ CheckResult run_tmpdir_check(const fs::path& pkg_prefix, const std::string& cmd,
         r.passed = false;
         r.output = "expected exit " + std::to_string(expect_exit) + ", got " +
                    std::to_string(exit_code) + "\n" + output;
-    } else if (!expect_stdout.empty() &&
-               output.find(expect_stdout) == std::string::npos) {
+    } else if (!expect_stdout.empty() && output.find(expect_stdout) == std::string::npos) {
         r.passed = false;
         r.output = "expected stdout containing '" + expect_stdout + "', got:\n" + output;
     } else {
@@ -124,8 +123,7 @@ CheckResult check_file_exists(const fs::path& pkg_prefix, const std::string& rel
     r.description = "file_exists: " + rel_path;
     auto full = pkg_prefix / rel_path;
     // Also check with .tbd extension (macOS stubs).
-    r.passed = fs::exists(full) ||
-               fs::exists(fs::path(full.string() + ".tbd"));
+    r.passed = fs::exists(full) || fs::exists(fs::path(full.string() + ".tbd"));
     if (!r.passed) {
         r.output = "not found: " + full.string();
     }
@@ -134,8 +132,7 @@ CheckResult check_file_exists(const fs::path& pkg_prefix, const std::string& rel
 
 } // namespace
 
-std::vector<SmokeResult> run_smoke_tests(const fs::path& test_defs_json,
-                                         const Config& config,
+std::vector<SmokeResult> run_smoke_tests(const fs::path& test_defs_json, const Config& config,
                                          int max_packages) {
     // Load test definitions.
     std::ifstream f(test_defs_json);
@@ -158,7 +155,8 @@ std::vector<SmokeResult> run_smoke_tests(const fs::path& test_defs_json,
     int count = 0;
 
     for (const auto& test : tests) {
-        if (max_packages > 0 && count >= max_packages) break;
+        if (max_packages > 0 && count >= max_packages)
+            break;
         ++count;
 
         std::string name = test["name"];
@@ -182,9 +180,8 @@ std::vector<SmokeResult> run_smoke_tests(const fs::path& test_defs_json,
                 std::string version = pkg ? pkg->version : "unknown";
                 build_from_source(config, idx, name, version);
                 // Update manifest so materialise works.
-                with_manifest(config.den_home, "/", [&](Manifest& m) {
-                    m.packages[name] = version;
-                });
+                with_manifest(config.den_home, "/",
+                              [&](Manifest& m) { m.packages[name] = version; });
                 materialise(config.den_home, config.store, "/");
             } else {
                 install_packages(config, idx, {name});
@@ -200,8 +197,7 @@ std::vector<SmokeResult> run_smoke_tests(const fs::path& test_defs_json,
         // Determine the package prefix in the store.
         auto pkg_prefix = config.store / name / pkg->version;
         if (!fs::is_directory(pkg_prefix)) {
-            SPDLOG_ERROR("{}: installed but prefix not found at {}", name,
-                         pkg_prefix.string());
+            SPDLOG_ERROR("{}: installed but prefix not found at {}", name, pkg_prefix.string());
             result.installed = false;
             results.push_back(std::move(result));
             continue;
@@ -213,8 +209,7 @@ std::vector<SmokeResult> run_smoke_tests(const fs::path& test_defs_json,
                 std::string cmd = check["cmd"];
                 int expect_exit = check.value("expect_exit", 0);
                 std::string expect_stdout = check.value("expect_stdout", "");
-                result.checks.push_back(
-                    run_cmd_check(pkg_prefix, cmd, expect_exit, expect_stdout));
+                result.checks.push_back(run_cmd_check(pkg_prefix, cmd, expect_exit, expect_stdout));
             } else if (check.contains("cmd_in_tmpdir")) {
                 std::string cmd = check["cmd_in_tmpdir"];
                 int expect_exit = check.value("expect_exit", 0);

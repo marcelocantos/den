@@ -10,8 +10,8 @@
 
 #include <doctest.h>
 
-#include "migrate/migrate.h"
 #include "core/config.h"
+#include "migrate/migrate.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -196,7 +196,8 @@ TEST_SUITE("migration::non_destructive") {
         // Count directories before.
         int dir_count_before = 0;
         for (const auto& entry : fs::recursive_directory_iterator(cellar)) {
-            if (entry.is_directory()) ++dir_count_before;
+            if (entry.is_directory())
+                ++dir_count_before;
         }
 
         Config cfg;
@@ -208,7 +209,8 @@ TEST_SUITE("migration::non_destructive") {
         // Count directories after.
         int dir_count_after = 0;
         for (const auto& entry : fs::recursive_directory_iterator(cellar)) {
-            if (entry.is_directory()) ++dir_count_after;
+            if (entry.is_directory())
+                ++dir_count_after;
         }
 
         CHECK(dir_count_before == dir_count_after);

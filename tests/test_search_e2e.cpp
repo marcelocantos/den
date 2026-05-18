@@ -70,10 +70,8 @@ struct TempDir {
 static std::string run_den(const std::string& args, const std::string& den_home) {
     const std::string prefix = den_home + "/brew";
     const std::string cellar = prefix + "/Cellar";
-    std::string cmd = "DEN_HOME=" + den_home +
-                      " HOMEBREW_PREFIX=" + prefix +
-                      " HOMEBREW_CELLAR=" + cellar +
-                      " ./den " + args + " 2>&1";
+    std::string cmd = "DEN_HOME=" + den_home + " HOMEBREW_PREFIX=" + prefix +
+                      " HOMEBREW_CELLAR=" + cellar + " ./den " + args + " 2>&1";
 
     FILE* pipe = ::popen(cmd.c_str(), "r");
     if (!pipe)
@@ -97,8 +95,7 @@ static std::string run_den(const std::string& args, const std::string& den_home)
 // exercise the same logic without requiring the full CLI binary or a network
 // round-trip.  When a real search API is extracted into its own translation
 // unit (T24), replace this with a direct call to that function.
-static std::vector<std::string> keyword_search(const PackageIndex& idx,
-                                               const std::string& query) {
+static std::vector<std::string> keyword_search(const PackageIndex& idx, const std::string& query) {
     std::string query_lower = query;
     std::transform(query_lower.begin(), query_lower.end(), query_lower.begin(), ::tolower);
 
@@ -160,7 +157,7 @@ static PackageIndex build_test_index() {
 
 // Return true if at least one name from 'acceptable' appears in 'results'.
 static bool any_acceptable(const std::vector<std::string>& results,
-                            const std::unordered_set<std::string>& acceptable) {
+                           const std::unordered_set<std::string>& acceptable) {
     for (const auto& r : results)
         if (acceptable.count(r))
             return true;
@@ -176,7 +173,8 @@ TEST_SUITE("search_e2e::keyword_provider") {
     TEST_CASE("intent 'http client' returns at least one expected package") {
         auto idx = build_test_index();
         auto results = keyword_search(idx, "http client");
-        const std::unordered_set<std::string> acceptable = {"curl", "wget", "httpie", "http-client"};
+        const std::unordered_set<std::string> acceptable = {"curl", "wget", "httpie",
+                                                            "http-client"};
         CHECK_MESSAGE(any_acceptable(results, acceptable),
                       "keyword search for 'http client' did not return any of: "
                       "curl, wget, httpie, http-client");
@@ -231,9 +229,8 @@ TEST_SUITE("search_e2e::embedding_provider") {
     TEST_CASE("SKIP: embedding provider — T25 not yet implemented") {
         // Upstream gap: no EmbeddingIndex / embedding search function exists.
         // This test will become a real check once T24 + T25 ship.
-        WARN_MESSAGE(false,
-                     "T62 embedding provider test is skipped: "
-                     "T25 (embedding index CI pipeline) is not yet implemented");
+        WARN_MESSAGE(false, "T62 embedding provider test is skipped: "
+                            "T25 (embedding index CI pipeline) is not yet implemented");
     }
 
 } // TEST_SUITE search_e2e::embedding_provider
@@ -248,9 +245,8 @@ TEST_SUITE("search_e2e::llm_provider") {
     // wiring and LLM integration).  When T24 ships, add real assertions here.
 
     TEST_CASE("SKIP: LLM provider — T24 not yet implemented") {
-        WARN_MESSAGE(false,
-                     "T62 LLM provider test is skipped: "
-                     "T24 (search provider implementations) is not yet implemented");
+        WARN_MESSAGE(false, "T62 LLM provider test is skipped: "
+                            "T24 (search provider implementations) is not yet implemented");
     }
 
 } // TEST_SUITE search_e2e::llm_provider
@@ -292,7 +288,8 @@ TEST_SUITE("search_e2e::provider_switching") {
         CHECK(*s3.search.provider == "llm");
     }
 
-    TEST_CASE("provider switching via CLI: den set search-provider keyword reflects on next read" * doctest::skip(true)) {
+    TEST_CASE("provider switching via CLI: den set search-provider keyword reflects on next read" *
+              doctest::skip(true)) {
         // Integration-level check: use the CLI binary so we verify the full
         // `den set` → config.json → `read_settings` path across process
         // boundaries (no restart needed because config.json is read fresh each
@@ -311,7 +308,8 @@ TEST_SUITE("search_e2e::provider_switching") {
         CHECK(*s.search.provider == "keyword");
     }
 
-    TEST_CASE("provider switching via CLI: switch from keyword to embedding without restart" * doctest::skip(true)) {
+    TEST_CASE("provider switching via CLI: switch from keyword to embedding without restart" *
+              doctest::skip(true)) {
         TempDir tmp;
         const std::string home = tmp.path.string();
 
