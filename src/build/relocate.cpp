@@ -179,10 +179,9 @@ uint32_t fix_dylib_paths(const fs::path& dir, const fs::path& prefix) {
 #ifdef __APPLE__
         if (is_dylib) {
             auto basename = entry.path().filename().string();
-            std::system(
-                ("install_name_tool -id @rpath/" + basename + " " + entry.path().string() +
-                 " 2>/dev/null")
-                    .c_str());
+            std::system(("install_name_tool -id @rpath/" + basename + " " + entry.path().string() +
+                         " 2>/dev/null")
+                            .c_str());
         }
 
         // Add rpath for this package's lib.

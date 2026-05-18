@@ -64,16 +64,13 @@ struct RunResult {
     int exit_code;
 };
 
-static RunResult run_den_env(const std::string& extra_env,
-                              const std::string& args,
-                              const std::string& den_home) {
+static RunResult run_den_env(const std::string& extra_env, const std::string& args,
+                             const std::string& den_home) {
     const std::string prefix = den_home + "/brew";
     const std::string cellar = prefix + "/Cellar";
-    const std::string cmd = "DEN_HOME=" + den_home +
-                            " HOMEBREW_PREFIX=" + prefix +
+    const std::string cmd = "DEN_HOME=" + den_home + " HOMEBREW_PREFIX=" + prefix +
                             " HOMEBREW_CELLAR=" + cellar +
-                            (extra_env.empty() ? "" : " " + extra_env) +
-                            " ./den " + args + " 2>&1";
+                            (extra_env.empty() ? "" : " " + extra_env) + " ./den " + args + " 2>&1";
 
     FILE* pipe = ::popen(cmd.c_str(), "r");
     if (!pipe)
@@ -135,7 +132,9 @@ static std::pair<int, pid_t> start_stub_server() {
         "s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n"
         "s.bind(('127.0.0.1', 0))\n"
         "port = s.getsockname()[1]\n"
-        "open('" + std::string(port_file_tmpl) + "', 'w').write(str(port))\n"
+        "open('" +
+        std::string(port_file_tmpl) +
+        "', 'w').write(str(port))\n"
         "sys.stdout.flush()\n"
         "s.listen(1)\n"
         "conn, _ = s.accept()\n"

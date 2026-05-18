@@ -42,13 +42,12 @@ struct CasTmpDir {
     fs::path path;
 
     CasTmpDir() {
-        path = fs::temp_directory_path() /
-               ("den_test_cas_" +
-                std::to_string(
-                    std::hash<std::string>{}(
-                        std::to_string(reinterpret_cast<uintptr_t>(this))) ^
-                    static_cast<size_t>(
-                        std::chrono::steady_clock::now().time_since_epoch().count())));
+        path =
+            fs::temp_directory_path() /
+            ("den_test_cas_" +
+             std::to_string(
+                 std::hash<std::string>{}(std::to_string(reinterpret_cast<uintptr_t>(this))) ^
+                 static_cast<size_t>(std::chrono::steady_clock::now().time_since_epoch().count())));
         fs::create_directories(path);
     }
 

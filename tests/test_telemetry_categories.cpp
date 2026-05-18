@@ -72,10 +72,8 @@ struct RunResult {
 static RunResult run_den(const std::string& args, const std::string& den_home) {
     const std::string prefix = den_home + "/brew";
     const std::string cellar = prefix + "/Cellar";
-    const std::string cmd = "DEN_HOME=" + den_home +
-                            " HOMEBREW_PREFIX=" + prefix +
-                            " HOMEBREW_CELLAR=" + cellar +
-                            " ./den " + args + " 2>&1";
+    const std::string cmd = "DEN_HOME=" + den_home + " HOMEBREW_PREFIX=" + prefix +
+                            " HOMEBREW_CELLAR=" + cellar + " ./den " + args + " 2>&1";
 
     FILE* pipe = ::popen(cmd.c_str(), "r");
     if (!pipe)
@@ -112,12 +110,8 @@ static std::string extract_jsonl_line(const std::string& output) {
 // All Ruby-trigger category keys defined in T32.
 static const std::vector<std::string>& ruby_trigger_keys() {
     static const std::vector<std::string> keys = {
-        "source_build_no_bottle",
-        "source_build_user_requested",
-        "source_build_bottle_failed",
-        "tap_formula_parse",
-        "tap_formula_dynamic",
-        "post_install_hook",
+        "source_build_no_bottle", "source_build_user_requested", "source_build_bottle_failed",
+        "tap_formula_parse",      "tap_formula_dynamic",         "post_install_hook",
         "cask_preflight",
     };
     return keys;
@@ -255,11 +249,12 @@ TEST_SUITE("telemetry::categories" * doctest::skip(true)) {
 
         // If ruby_triggers is populated, source_build_user_requested should appear.
         if (line.find("\"ruby_triggers\"") != std::string::npos &&
-            line.find("\"ruby_triggers\":{}" ) == std::string::npos &&
+            line.find("\"ruby_triggers\":{}") == std::string::npos &&
             line.find("\"ruby_triggers\": {}") == std::string::npos) {
             CHECK(line.find("\"source_build_user_requested\"") != std::string::npos);
         } else {
-            MESSAGE("NOTE: ruby_triggers empty — build did not fire a trigger (expected in sandboxed env)");
+            MESSAGE("NOTE: ruby_triggers empty — build did not fire a trigger (expected in "
+                    "sandboxed env)");
             CHECK(true);
         }
     }
@@ -324,7 +319,8 @@ TEST_SUITE("telemetry::categories" * doctest::skip(true)) {
             const std::string username = home_path.filename().string();
             if (!username.empty() && username != "/") {
                 const std::string user_token = "\"" + username + "\"";
-                const std::string user_err = "Username '" + username + "' found in telemetry payload";
+                const std::string user_err =
+                    "Username '" + username + "' found in telemetry payload";
                 CHECK_MESSAGE(line.find(user_token) == std::string::npos, user_err.c_str());
             }
         }

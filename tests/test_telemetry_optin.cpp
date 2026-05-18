@@ -60,10 +60,8 @@ struct RunResult {
 static RunResult run_den(const std::string& args, const std::string& den_home) {
     const std::string prefix = den_home + "/brew";
     const std::string cellar = prefix + "/Cellar";
-    const std::string cmd = "DEN_HOME=" + den_home +
-                            " HOMEBREW_PREFIX=" + prefix +
-                            " HOMEBREW_CELLAR=" + cellar +
-                            " ./den " + args + " 2>&1";
+    const std::string cmd = "DEN_HOME=" + den_home + " HOMEBREW_PREFIX=" + prefix +
+                            " HOMEBREW_CELLAR=" + cellar + " ./den " + args + " 2>&1";
 
     FILE* pipe = ::popen(cmd.c_str(), "r");
     if (!pipe)

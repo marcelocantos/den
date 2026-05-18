@@ -4,8 +4,8 @@
 #include "install.h"
 
 #include "../activity/activity.h"
-#include "../core/error.h"
 #include "../build/relocate.h"
+#include "../core/error.h"
 #include "../daemon/daemon.h"
 #include "../download/archive.h"
 #include "../download/fetch.h"
@@ -104,7 +104,7 @@ bool install_one(const Config& config, const Package& pkg) {
     auto best = best_archive_tag(config.arch, config.macos_version, available_tags);
     if (!best) {
         throw UserError("no archive available for " + pkg.name + " " + pkg.version +
-                         " on this platform");
+                        " on this platform");
     }
 
     const auto& archive = pkg.archives.at(*best);
@@ -186,7 +186,8 @@ void install_packages(const Config& config, const PackageIndex& idx,
         // Reverse check: does anything installed conflict with this?
         for (const auto& [installed_name, _] : manifest.packages) {
             const auto* installed_pkg = idx.find(installed_name);
-            if (!installed_pkg) continue;
+            if (!installed_pkg)
+                continue;
             for (const auto& conflict : installed_pkg->conflicts_with) {
                 if (conflict == name) {
                     throw UserError("cannot install '" + name + "': conflicts with '" +

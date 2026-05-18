@@ -17,17 +17,17 @@
 
 // Feature probes — formatters expected from 🎯T51.
 #if __has_include("cli/outdated.h")
-#  include "cli/outdated.h"
-#  define HAS_OUTDATED_FORMATTER 1
+#include "cli/outdated.h"
+#define HAS_OUTDATED_FORMATTER 1
 #else
-#  define HAS_OUTDATED_FORMATTER 0
+#define HAS_OUTDATED_FORMATTER 0
 #endif
 
 #if __has_include("cli/daemon_status.h")
-#  include "cli/daemon_status.h"
-#  define HAS_DAEMON_STATUS_FORMATTER 1
+#include "cli/daemon_status.h"
+#define HAS_DAEMON_STATUS_FORMATTER 1
 #else
-#  define HAS_DAEMON_STATUS_FORMATTER 0
+#define HAS_DAEMON_STATUS_FORMATTER 0
 #endif
 
 #include "daemon/daemon.h"
@@ -82,11 +82,10 @@ TEST_SUITE("outdated_reports_deferral") {
         CHECK(output.find("curl") != std::string::npos);
 
         // Must indicate deferral — any of these strings are acceptable.
-        bool mentions_deferred =
-            output.find("deferred") != std::string::npos ||
-            output.find("in use")   != std::string::npos ||
-            output.find("in-use")   != std::string::npos ||
-            output.find("DEFERRED") != std::string::npos;
+        bool mentions_deferred = output.find("deferred") != std::string::npos ||
+                                 output.find("in use") != std::string::npos ||
+                                 output.find("in-use") != std::string::npos ||
+                                 output.find("DEFERRED") != std::string::npos;
         CHECK(mentions_deferred);
 #endif
     }
@@ -108,11 +107,10 @@ TEST_SUITE("outdated_reports_deferral") {
 
         CHECK(output.find("curl") != std::string::npos);
 
-        bool mentions_deferred =
-            output.find("deferred") != std::string::npos ||
-            output.find("in use")   != std::string::npos ||
-            output.find("in-use")   != std::string::npos ||
-            output.find("DEFERRED") != std::string::npos;
+        bool mentions_deferred = output.find("deferred") != std::string::npos ||
+                                 output.find("in use") != std::string::npos ||
+                                 output.find("in-use") != std::string::npos ||
+                                 output.find("DEFERRED") != std::string::npos;
         CHECK(mentions_deferred);
 #endif
     }
@@ -148,8 +146,8 @@ TEST_SUITE("outdated_reports_deferral") {
 
         // Write and read back using a temp dir.
         namespace fs = std::filesystem;
-        fs::path tmp = fs::temp_directory_path() /
-                       ("den_test_deferred_rt_" + std::to_string(::getpid()));
+        fs::path tmp =
+            fs::temp_directory_path() / ("den_test_deferred_rt_" + std::to_string(::getpid()));
         fs::create_directories(tmp);
 
         write_daemon_state(tmp, state);

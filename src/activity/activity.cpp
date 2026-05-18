@@ -19,11 +19,8 @@ fs::path activity_path(const fs::path& den_home) {
 
 nlohmann::json entry_to_json(const ActivityEntry& e) {
     return {
-        {"timestamp", e.timestamp},
-        {"package", e.package},
-        {"from", e.from_version},
-        {"to", e.to_version},
-        {"trigger", e.trigger},
+        {"timestamp", e.timestamp}, {"package", e.package}, {"from", e.from_version},
+        {"to", e.to_version},       {"trigger", e.trigger},
     };
 }
 
@@ -44,8 +41,7 @@ ActivityEntry json_to_entry(const nlohmann::json& j) {
 
 } // namespace
 
-void record_activity(const fs::path& den_home,
-                     const std::vector<ActivityEntry>& entries) {
+void record_activity(const fs::path& den_home, const std::vector<ActivityEntry>& entries) {
     if (entries.empty())
         return;
 
@@ -114,10 +110,9 @@ std::vector<ActivityEntry> read_activity(const fs::path& den_home, size_t max) {
     }
 
     // Sort most recent first.
-    std::sort(result.begin(), result.end(),
-              [](const ActivityEntry& a, const ActivityEntry& b) {
-                  return a.timestamp > b.timestamp;
-              });
+    std::sort(result.begin(), result.end(), [](const ActivityEntry& a, const ActivityEntry& b) {
+        return a.timestamp > b.timestamp;
+    });
 
     if (max > 0 && result.size() > max)
         result.resize(max);

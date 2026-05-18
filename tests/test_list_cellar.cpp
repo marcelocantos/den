@@ -65,7 +65,7 @@ struct TempDir {
 // tmp.path/brew/Cellar.
 // ---------------------------------------------------------------------------
 static std::string run_den(const std::string& args, const fs::path& den_home,
-                            const fs::path& cellar) {
+                           const fs::path& cellar) {
     const std::string prefix = cellar.parent_path().string();
     std::string cmd = "DEN_HOME=" + den_home.string() + " HOMEBREW_PREFIX=" + prefix +
                       " HOMEBREW_CELLAR=" + cellar.string() + " ./den " + args + " 2>&1";
@@ -110,8 +110,8 @@ static void build_fake_cellar(const fs::path& cellar, const fs::path& den_home) 
     // envA references tree@2.1.1 and curl@8.5.0.
     // envB references tree@2.2.0 and curl@8.5.0.
     // orphan@1.0.0 is referenced by neither.
-    for (const auto& [env_name, pkgs] :
-         std::initializer_list<std::pair<std::string, std::vector<std::pair<std::string, std::string>>>>{
+    for (const auto& [env_name, pkgs] : std::initializer_list<
+             std::pair<std::string, std::vector<std::pair<std::string, std::string>>>>{
              {"envA", {{"tree", "2.1.1"}, {"curl", "8.5.0"}}},
              {"envB", {{"tree", "2.2.0"}, {"curl", "8.5.0"}}},
          }) {

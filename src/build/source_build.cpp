@@ -96,8 +96,8 @@ std::string fetch_formula_source(const PackageIndex& idx, const std::string& nam
         return "";
     }
 
-    auto url = "https://raw.githubusercontent.com/Homebrew/homebrew-core/master/" +
-               *pkg->ruby_source_path;
+    auto url =
+        "https://raw.githubusercontent.com/Homebrew/homebrew-core/master/" + *pkg->ruby_source_path;
     try {
         auto source = fetch_url(url);
         SPDLOG_INFO("fetched formula source for '{}' from GitHub ({} bytes)", name, source.size());
@@ -129,8 +129,8 @@ BuildRecipe extract_build_recipe(const PackageIndex& idx, const std::string& nam
     return recipe;
 }
 
-fs::path build_from_source(const Config& config, const PackageIndex& idx,
-                           const std::string& name, const std::string& version) {
+fs::path build_from_source(const Config& config, const PackageIndex& idx, const std::string& name,
+                           const std::string& version) {
     auto dest = package_path(config.store, name, version);
     if (fs::is_directory(dest) && !fs::is_empty(dest)) {
         SPDLOG_INFO("{} {} already built", name, version);
@@ -186,9 +186,8 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
         // formula_file was already written in Path A; reuse it.
 
         std::string build_script;
-        for (const auto& candidate :
-             {"src/ruby/den_build.rb", "../share/den/den_build.rb",
-              "/usr/local/share/den/den_build.rb"}) {
+        for (const auto& candidate : {"src/ruby/den_build.rb", "../share/den/den_build.rb",
+                                      "/usr/local/share/den/den_build.rb"}) {
             if (fs::exists(candidate)) {
                 build_script = candidate;
                 break;
@@ -346,7 +345,7 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
     if (rc != 0) {
         fs::remove_all(dest, ec);
         throw UserError("build failed for " + name + " " + version + " (exit " +
-                         std::to_string(rc) + ")");
+                        std::to_string(rc) + ")");
     }
 
     fs::remove_all(build_dir, ec);

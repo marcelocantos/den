@@ -35,8 +35,8 @@ namespace trust_test {
 
 /// Result of a cross-source hash check.
 enum class TrustDecision {
-    Proceed,   // both sources agree
-    Refuse,    // sources disagree — hard error
+    Proceed,     // both sources agree
+    Refuse,      // sources disagree — hard error
     WarnProceed, // one source unreachable — degraded trust, proceed with warning
 };
 
@@ -51,8 +51,7 @@ using MaybeHash = std::optional<std::string>;
 /// Pure cross-check logic, dependency-injected so it is testable without
 /// network access.  The real implementation calls formulae.brew.sh and the
 /// den replica CDN; tests supply controlled mock values.
-TrustCheckResult cross_check_hashes(const MaybeHash& homebrew_hash,
-                                    const MaybeHash& replica_hash) {
+TrustCheckResult cross_check_hashes(const MaybeHash& homebrew_hash, const MaybeHash& replica_hash) {
     // Neither source reachable: cannot verify anything.
     if (!homebrew_hash && !replica_hash) {
         return {TrustDecision::Refuse,
@@ -65,8 +64,7 @@ TrustCheckResult cross_check_hashes(const MaybeHash& homebrew_hash,
             return {TrustDecision::Proceed, "hashes agree"};
         }
         return {TrustDecision::Refuse,
-                "hash mismatch: formulae.brew.sh=" + *homebrew_hash +
-                    " replica=" + *replica_hash};
+                "hash mismatch: formulae.brew.sh=" + *homebrew_hash + " replica=" + *replica_hash};
     }
 
     // Exactly one reachable: degraded-trust fallback.
@@ -89,8 +87,10 @@ TEST_SUITE("trust_model::cross_check_hashes") {
     }
 
     TEST_CASE("disagreement: hashes differ → refuse install") {
-        const MaybeHash homebrew_hash = "aaaa0000bbbb1111cccc2222dddd3333eeee4444ffff5555aaaa0000bbbb1111";
-        const MaybeHash replica_hash  = "1111aaaa2222bbbb3333cccc4444dddd5555eeee6666ffff1111aaaa2222bbbb";
+        const MaybeHash homebrew_hash =
+            "aaaa0000bbbb1111cccc2222dddd3333eeee4444ffff5555aaaa0000bbbb1111";
+        const MaybeHash replica_hash =
+            "1111aaaa2222bbbb3333cccc4444dddd5555eeee6666ffff1111aaaa2222bbbb";
         auto result = cross_check_hashes(homebrew_hash, replica_hash);
         CHECK(result.decision == TrustDecision::Refuse);
         CHECK(result.message.find("mismatch") != std::string::npos);
@@ -100,8 +100,9 @@ TEST_SUITE("trust_model::cross_check_hashes") {
     }
 
     TEST_CASE("fallback: replica unreachable → warn and proceed") {
-        const MaybeHash homebrew_hash = "abc123def456abc123def456abc123def456abc123def456abc123def456abcd";
-        const MaybeHash replica_hash  = std::nullopt;
+        const MaybeHash homebrew_hash =
+            "abc123def456abc123def456abc123def456abc123def456abc123def456abcd";
+        const MaybeHash replica_hash = std::nullopt;
         auto result = cross_check_hashes(homebrew_hash, replica_hash);
         CHECK(result.decision == TrustDecision::WarnProceed);
         CHECK(result.message.find("replica") != std::string::npos);
@@ -109,7 +110,8 @@ TEST_SUITE("trust_model::cross_check_hashes") {
 
     TEST_CASE("fallback: formulae.brew.sh unreachable → warn and proceed") {
         const MaybeHash homebrew_hash = std::nullopt;
-        const MaybeHash replica_hash  = "abc123def456abc123def456abc123def456abc123def456abc123def456abcd";
+        const MaybeHash replica_hash =
+            "abc123def456abc123def456abc123def456abc123def456abc123def456abcd";
         auto result = cross_check_hashes(homebrew_hash, replica_hash);
         CHECK(result.decision == TrustDecision::WarnProceed);
         CHECK(result.message.find("formulae.brew.sh") != std::string::npos);
@@ -127,8 +129,7 @@ TEST_SUITE("trust_model::cross_check_hashes") {
     // -----------------------------------------------------------------------
 
     // 🎯T42: cross_check_hashes not yet wired into install_one().
-    TEST_CASE("real install path invokes cross_check_hashes (🎯T42 gap)" *
-              doctest::skip(true)) {
+    TEST_CASE("real install path invokes cross_check_hashes (🎯T42 gap)" * doctest::skip(true)) {
         // When T42 is implemented:
         //   - install_one() must call cross_check_hashes() before extracting.
         //   - A TrustDecision::Refuse must throw or return early.
@@ -137,8 +138,7 @@ TEST_SUITE("trust_model::cross_check_hashes") {
     }
 
     // 🎯T44: advanced trust layers not yet wired into install path.
-    TEST_CASE("advanced trust layers wired into install path (🎯T44 gap)" *
-              doctest::skip(true)) {
+    TEST_CASE("advanced trust layers wired into install path (🎯T44 gap)" * doctest::skip(true)) {
         // When T44 is implemented:
         //   - Sigstore / SLSA provenance attestation should be verified.
         //   - Trust policy should be configurable in config.json.

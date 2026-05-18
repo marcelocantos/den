@@ -77,7 +77,8 @@ struct TmpDir {
     TmpDir() {
         std::string tmpl = (fs::temp_directory_path() / "den_rdv_XXXXXX").string();
         char* result = ::mkdtemp(tmpl.data());
-        if (!result) throw std::runtime_error("mkdtemp failed");
+        if (!result)
+            throw std::runtime_error("mkdtemp failed");
         path = result;
     }
     ~TmpDir() {
@@ -93,7 +94,8 @@ static fs::path write_mock_bottle(const TmpDir& tmp, const std::string& filename
                                   const std::string& content) {
     fs::path p = tmp.path / filename;
     std::ofstream f(p, std::ios::binary);
-    if (!f) throw std::runtime_error("cannot create mock bottle: " + p.string());
+    if (!f)
+        throw std::runtime_error("cannot create mock bottle: " + p.string());
     f << content;
     return p;
 }

@@ -42,13 +42,12 @@ struct BindTmpDir {
     fs::path path;
 
     BindTmpDir() {
-        path = fs::temp_directory_path() /
-               ("den_test_bind_" +
-                std::to_string(
-                    std::hash<std::string>{}(
-                        std::to_string(reinterpret_cast<uintptr_t>(this))) ^
-                    static_cast<size_t>(
-                        std::chrono::steady_clock::now().time_since_epoch().count())));
+        path =
+            fs::temp_directory_path() /
+            ("den_test_bind_" +
+             std::to_string(
+                 std::hash<std::string>{}(std::to_string(reinterpret_cast<uintptr_t>(this))) ^
+                 static_cast<size_t>(std::chrono::steady_clock::now().time_since_epoch().count())));
         fs::create_directories(path);
     }
 
@@ -137,7 +136,8 @@ TEST_SUITE("binding_spec [T28]") {
         // Assert the side-car file exists and contains the variable.
         bool var_found = false;
         for (const auto& entry : fs::recursive_directory_iterator(env / ".den")) {
-            if (!entry.is_regular_file()) continue;
+            if (!entry.is_regular_file())
+                continue;
             std::ifstream f(entry.path());
             std::string content((std::istreambuf_iterator<char>(f)),
                                 std::istreambuf_iterator<char>());
@@ -165,7 +165,8 @@ TEST_SUITE("binding_spec [T28]") {
 
         bool append_found = false;
         for (const auto& entry : fs::recursive_directory_iterator(env / ".den")) {
-            if (!entry.is_regular_file()) continue;
+            if (!entry.is_regular_file())
+                continue;
             std::ifstream f(entry.path());
             std::string content((std::istreambuf_iterator<char>(f)),
                                 std::istreambuf_iterator<char>());
@@ -182,7 +183,7 @@ TEST_SUITE("binding_spec [T28]") {
         BindTmpDir tmp;
         auto keg1 = tmp.make_keg("openssl");
         auto keg2 = tmp.make_keg("libffi");
-        auto env  = tmp.make_env();
+        auto env = tmp.make_env();
 
         const std::string spec1 =
             "bindings:\n  - env-append: PKG_CONFIG_PATH={keg}/lib/pkgconfig\n";
@@ -195,10 +196,11 @@ TEST_SUITE("binding_spec [T28]") {
         // Both keg paths should appear in the side-car for PKG_CONFIG_PATH.
         std::string full_content;
         for (const auto& entry : fs::recursive_directory_iterator(env / ".den")) {
-            if (!entry.is_regular_file()) continue;
+            if (!entry.is_regular_file())
+                continue;
             std::ifstream f(entry.path());
-            full_content += std::string((std::istreambuf_iterator<char>(f)),
-                                        std::istreambuf_iterator<char>());
+            full_content +=
+                std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
         }
         CHECK(full_content.find("openssl") != std::string::npos);
         CHECK(full_content.find("libffi") != std::string::npos);
@@ -223,10 +225,9 @@ TEST_SUITE("binding_spec [T28]") {
         // The alias must ultimately resolve to the python3 binary.
         auto target = fs::read_symlink(env / "bin" / "py3");
         // Either a direct link to the keg binary or to the env/bin/python3 link.
-        bool points_to_python3 =
-            (target == keg / "bin" / "python3") ||
-            (target == fs::path("python3")) ||
-            (target == env / "bin" / "python3");
+        bool points_to_python3 = (target == keg / "bin" / "python3") ||
+                                 (target == fs::path("python3")) ||
+                                 (target == env / "bin" / "python3");
         CHECK(points_to_python3);
     }
 
@@ -235,8 +236,7 @@ TEST_SUITE("binding_spec [T28]") {
         auto keg = tmp.make_keg("python");
         auto env = tmp.make_env();
 
-        const std::string spec_yaml =
-            "bindings:\n  - alias: ghost -> does_not_exist\n";
+        const std::string spec_yaml = "bindings:\n  - alias: ghost -> does_not_exist\n";
         auto spec = parse_binding_spec(spec_yaml);
 
         // Implementations may throw or silently skip; either is acceptable, but
@@ -262,12 +262,11 @@ TEST_SUITE("binding_spec [T28]") {
         auto keg = tmp.make_keg("mylib");
         auto env = tmp.make_env();
 
-        const std::string spec_yaml =
-            "bindings:\n"
-            "  - path: bin/mylib\n"
-            "  - env: MYLIB_ROOT={keg}\n"
-            "  - env-append: PKG_CONFIG_PATH={keg}/lib/pkgconfig\n"
-            "  - alias: ml -> mylib\n";
+        const std::string spec_yaml = "bindings:\n"
+                                      "  - path: bin/mylib\n"
+                                      "  - env: MYLIB_ROOT={keg}\n"
+                                      "  - env-append: PKG_CONFIG_PATH={keg}/lib/pkgconfig\n"
+                                      "  - alias: ml -> mylib\n";
         auto spec = parse_binding_spec(spec_yaml);
         apply_bindings(spec, keg, env);
 
@@ -276,10 +275,11 @@ TEST_SUITE("binding_spec [T28]") {
 
         std::string all;
         for (const auto& entry : fs::recursive_directory_iterator(env / ".den")) {
-            if (!entry.is_regular_file()) continue;
+            if (!entry.is_regular_file())
+                continue;
             std::ifstream f(entry.path());
-            all += std::string((std::istreambuf_iterator<char>(f)),
-                               std::istreambuf_iterator<char>());
+            all +=
+                std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
         }
         CHECK(all.find("MYLIB_ROOT") != std::string::npos);
         CHECK(all.find("PKG_CONFIG_PATH") != std::string::npos);

@@ -69,10 +69,8 @@ struct TempDir {
 static std::pair<int, std::string> run_den(const std::string& args, const fs::path& den_home) {
     const std::string prefix = den_home.string() + "/brew";
     const std::string cellar = prefix + "/Cellar";
-    std::string cmd = "DEN_HOME=" + den_home.string() +
-                      " HOMEBREW_PREFIX=" + prefix +
-                      " HOMEBREW_CELLAR=" + cellar +
-                      " ./den " + args + " 2>&1";
+    std::string cmd = "DEN_HOME=" + den_home.string() + " HOMEBREW_PREFIX=" + prefix +
+                      " HOMEBREW_CELLAR=" + cellar + " ./den " + args + " 2>&1";
 
     FILE* pipe = ::popen(cmd.c_str(), "r");
     if (!pipe) {
@@ -108,9 +106,8 @@ static std::string den_out(const std::string& args, const fs::path& den_home) {
 TEST_SUITE("multi_provider::homebrew") {
 
     // T23 not yet implemented — skip all homebrew provider uniformity tests.
-    TEST_CASE("jq: install / list / run / uninstall via uniform den command"
-              * doctest::skip(true)
-              * doctest::description("Blocked on 🎯T23 (PackageProvider trait)")) {
+    TEST_CASE("jq: install / list / run / uninstall via uniform den command" * doctest::skip(true) *
+              doctest::description("Blocked on 🎯T23 (PackageProvider trait)")) {
         TempDir tmp;
 
         // install — plain package name, no "homebrew:" prefix.
@@ -138,14 +135,13 @@ TEST_SUITE("multi_provider::homebrew") {
         CHECK(list_after.find("jq") == std::string::npos);
     }
 
-    TEST_CASE("info and uninstall accept plain package name with no provider prefix"
-              * doctest::skip(true)
-              * doctest::description("Blocked on 🎯T23 (PackageProvider trait)")) {
+    TEST_CASE("info and uninstall accept plain package name with no provider prefix" *
+              doctest::skip(true) *
+              doctest::description("Blocked on 🎯T23 (PackageProvider trait)")) {
         // Acceptance: T60 requires that provider-specific syntax does NOT leak
         // into the user-facing command.  This test verifies that `den info jq`
         // produces output without requiring the user to type "homebrew:jq".
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -157,9 +153,8 @@ TEST_SUITE("multi_provider::homebrew") {
 // ---------------------------------------------------------------------------
 TEST_SUITE("multi_provider::python") {
 
-    TEST_CASE("black: install / list / run / uninstall"
-              * doctest::skip(true)
-              * doctest::description("Blocked on 🎯T38 (Python provider), requires 🎯T23 first")) {
+    TEST_CASE("black: install / list / run / uninstall" * doctest::skip(true) *
+              doctest::description("Blocked on 🎯T38 (Python provider), requires 🎯T23 first")) {
         TempDir tmp;
 
         // install — plain package name.
@@ -185,20 +180,17 @@ TEST_SUITE("multi_provider::python") {
         CHECK(list_after.find("black") == std::string::npos);
     }
 
-    TEST_CASE("Python packages land in per-env lib/python3.X/site-packages"
-              * doctest::skip(true)
-              * doctest::description("Blocked on 🎯T38 (Python provider)")) {
+    TEST_CASE("Python packages land in per-env lib/python3.X/site-packages" * doctest::skip(true) *
+              doctest::description("Blocked on 🎯T38 (Python provider)")) {
         // When T38 lands, Python packages must be in the env-local site-packages,
         // not in the Homebrew Cellar. Verifies per-provider area invariant.
     }
 
-    TEST_CASE("Python packages PATH-compose with Homebrew kegs"
-              * doctest::skip(true)
-              * doctest::description("Blocked on 🎯T38 (Python provider)")) {
+    TEST_CASE("Python packages PATH-compose with Homebrew kegs" * doctest::skip(true) *
+              doctest::description("Blocked on 🎯T38 (Python provider)")) {
         // `den init` must export a PATH where both Homebrew binaries and
         // Python-provider binaries are accessible from the same shell.
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -209,9 +201,8 @@ TEST_SUITE("multi_provider::python") {
 // ---------------------------------------------------------------------------
 TEST_SUITE("multi_provider::node") {
 
-    TEST_CASE("prettier: install / list / run / uninstall"
-              * doctest::skip(true)
-              * doctest::description("Blocked on 🎯T39 (Node/npm provider), requires 🎯T23 first")) {
+    TEST_CASE("prettier: install / list / run / uninstall" * doctest::skip(true) *
+              doctest::description("Blocked on 🎯T39 (Node/npm provider), requires 🎯T23 first")) {
         TempDir tmp;
 
         auto [install_rc, install_out] = run_den("install prettier", tmp.path);
@@ -240,13 +231,11 @@ TEST_SUITE("multi_provider::node") {
         CHECK(list_after.find("prettier") == std::string::npos);
     }
 
-    TEST_CASE("Node packages land in per-env lib/node_modules"
-              * doctest::skip(true)
-              * doctest::description("Blocked on 🎯T39 (Node/npm provider)")) {
+    TEST_CASE("Node packages land in per-env lib/node_modules" * doctest::skip(true) *
+              doctest::description("Blocked on 🎯T39 (Node/npm provider)")) {
         // Packages installed via the npm provider must be isolated per
         // environment, not in a global node_modules directory.
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -259,9 +248,8 @@ TEST_SUITE("multi_provider::node") {
 // ---------------------------------------------------------------------------
 TEST_SUITE("multi_provider::go") {
 
-    TEST_CASE("golangci-lint: install / list / run / uninstall"
-              * doctest::skip(true)
-              * doctest::description("Blocked on 🎯T40 (Go provider), requires 🎯T23 first")) {
+    TEST_CASE("golangci-lint: install / list / run / uninstall" * doctest::skip(true) *
+              doctest::description("Blocked on 🎯T40 (Go provider), requires 🎯T23 first")) {
         TempDir tmp;
 
         auto [install_rc, install_out] = run_den("install golangci-lint", tmp.path);
@@ -283,13 +271,11 @@ TEST_SUITE("multi_provider::go") {
         CHECK(list_after.find("golangci-lint") == std::string::npos);
     }
 
-    TEST_CASE("Go binaries land in env-local GOBIN"
-              * doctest::skip(true)
-              * doctest::description("Blocked on 🎯T40 (Go provider)")) {
+    TEST_CASE("Go binaries land in env-local GOBIN" * doctest::skip(true) *
+              doctest::description("Blocked on 🎯T40 (Go provider)")) {
         // `go install` must write to an environment-local GOBIN, not ~/go/bin.
         // Verifies per-provider isolation.
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -301,9 +287,8 @@ TEST_SUITE("multi_provider::go") {
 // ---------------------------------------------------------------------------
 TEST_SUITE("multi_provider::cargo") {
 
-    TEST_CASE("ripgrep: install / list / run / uninstall"
-              * doctest::skip(true)
-              * doctest::description("Blocked on 🎯T41 (Cargo provider), requires 🎯T23 first")) {
+    TEST_CASE("ripgrep: install / list / run / uninstall" * doctest::skip(true) *
+              doctest::description("Blocked on 🎯T41 (Cargo provider), requires 🎯T23 first")) {
         TempDir tmp;
 
         // Crate name is "ripgrep"; the installed binary is "rg".
@@ -327,13 +312,11 @@ TEST_SUITE("multi_provider::cargo") {
         CHECK(list_after.find("ripgrep") == std::string::npos);
     }
 
-    TEST_CASE("Cargo binaries land in env-local CARGO_INSTALL_ROOT"
-              * doctest::skip(true)
-              * doctest::description("Blocked on 🎯T41 (Cargo provider)")) {
+    TEST_CASE("Cargo binaries land in env-local CARGO_INSTALL_ROOT" * doctest::skip(true) *
+              doctest::description("Blocked on 🎯T41 (Cargo provider)")) {
         // Rust binaries must be installed into an environment-local root,
         // not ~/.cargo/bin. Verifies per-provider isolation.
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -341,35 +324,31 @@ TEST_SUITE("multi_provider::cargo") {
 // ---------------------------------------------------------------------------
 TEST_SUITE("multi_provider::invariants") {
 
-    TEST_CASE("den list shows packages from all providers uniformly"
-              * doctest::skip(true)
-              * doctest::description("Blocked on 🎯T23 (PackageProvider trait)")) {
+    TEST_CASE("den list shows packages from all providers uniformly" * doctest::skip(true) *
+              doctest::description("Blocked on 🎯T23 (PackageProvider trait)")) {
         // After installing jq (Homebrew), black (pip), prettier (npm),
         // golangci-lint (go), and ripgrep (cargo), `den list` must show all
         // five without any provider-specific prefix in the package name column.
     }
 
-    TEST_CASE("den info works for packages from each provider"
-              * doctest::skip(true)
-              * doctest::description("Blocked on 🎯T23 (PackageProvider trait)")) {
+    TEST_CASE("den info works for packages from each provider" * doctest::skip(true) *
+              doctest::description("Blocked on 🎯T23 (PackageProvider trait)")) {
         // `den info <name>` must return metadata regardless of which provider
         // owns the package. No provider-specific syntax in the command.
     }
 
-    TEST_CASE("provider-specific syntax does not appear in user-facing commands"
-              * doctest::skip(true)
-              * doctest::description("Blocked on 🎯T23 (PackageProvider trait)")) {
+    TEST_CASE("provider-specific syntax does not appear in user-facing commands" *
+              doctest::skip(true) *
+              doctest::description("Blocked on 🎯T23 (PackageProvider trait)")) {
         // Acceptance: `den install jq` installs jq; the user need not write
         // `homebrew:jq` or `pip:black`. Provider detection is automatic.
     }
 
-    TEST_CASE("packages from each provider PATH-compose via env symlinks"
-              * doctest::skip(true)
-              * doctest::description("Blocked on 🎯T23/T38/T39/T40/T41")) {
+    TEST_CASE("packages from each provider PATH-compose via env symlinks" * doctest::skip(true) *
+              doctest::description("Blocked on 🎯T23/T38/T39/T40/T41")) {
         // All providers produce binaries in the active env's bin/ directory
         // (or via symlinks), so a single PATH entry covers all providers.
     }
-
 }
 
 } // namespace multi_provider_test

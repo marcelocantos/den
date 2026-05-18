@@ -45,7 +45,7 @@ struct ParsedFormula {
     std::vector<ComplexityMarker> complexity_markers;
     std::string source_url;
     std::string source_sha256;
-    std::vector<std::string> env_settings; // "KEY=value" strings
+    std::vector<std::string> env_settings;   // "KEY=value" strings
     std::vector<std::string> build_commands; // shell commands to run
 };
 

@@ -132,9 +132,8 @@ TEST_SUITE("tap::install") {
         if (!resolved) {
             // Pending T11/T17 — note that the test is structurally correct
             // but upstream build infrastructure is absent.
-            MESSAGE(
-                "SKIP (T11/T17): formula resolved but build infrastructure "
-                "not yet available for fixture formula");
+            MESSAGE("SKIP (T11/T17): formula resolved but build infrastructure "
+                    "not yet available for fixture formula");
             return;
         }
         CHECK(resolved);

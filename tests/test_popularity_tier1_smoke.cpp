@@ -77,16 +77,21 @@ std::vector<std::string> read_tier1_names(const fs::path& json_path) {
         if (line.find("\"tests\"") != std::string::npos) {
             in_tests = true;
         }
-        if (!in_tests) continue;
+        if (!in_tests)
+            continue;
         // Match lines of the form:   "name": "openssl@3",
         auto npos = line.find("\"name\"");
-        if (npos == std::string::npos) continue;
+        if (npos == std::string::npos)
+            continue;
         auto q1 = line.find('"', npos + 6);
-        if (q1 == std::string::npos) continue;
+        if (q1 == std::string::npos)
+            continue;
         q1 = line.find('"', q1 + 1); // skip the colon and whitespace
-        if (q1 == std::string::npos) continue;
+        if (q1 == std::string::npos)
+            continue;
         auto q2 = line.find('"', q1 + 1);
-        if (q2 == std::string::npos) continue;
+        if (q2 == std::string::npos)
+            continue;
         names.push_back(line.substr(q1 + 1, q2 - q1 - 1));
     }
     return names;
@@ -102,13 +107,12 @@ struct Tier1TmpDir {
     fs::path path;
 
     Tier1TmpDir() {
-        path = fs::temp_directory_path() /
-               ("den_test_tier1_" +
-                std::to_string(
-                    std::hash<std::string>{}(
-                        std::to_string(reinterpret_cast<uintptr_t>(this))) ^
-                    static_cast<size_t>(
-                        std::chrono::steady_clock::now().time_since_epoch().count())));
+        path =
+            fs::temp_directory_path() /
+            ("den_test_tier1_" +
+             std::to_string(
+                 std::hash<std::string>{}(std::to_string(reinterpret_cast<uintptr_t>(this))) ^
+                 static_cast<size_t>(std::chrono::steady_clock::now().time_since_epoch().count())));
         fs::create_directories(path);
     }
 
@@ -121,8 +125,7 @@ struct Tier1TmpDir {
     Tier1TmpDir& operator=(const Tier1TmpDir&) = delete;
 
     // Build a synthetic legacy Cellar entry for each name@version.
-    void seed_legacy_cellar(const fs::path& store,
-                            const std::vector<std::string>& names,
+    void seed_legacy_cellar(const fs::path& store, const std::vector<std::string>& names,
                             const std::string& version = "1.0.0") {
         for (const auto& name : names) {
             auto bin = store / name / version / "bin";
@@ -149,7 +152,8 @@ TEST_SUITE("tier1_smoke_regression [T69]") {
 #if defined(DEN_TIER1_SMOKE_JSON)
         if (std::string_view(DEN_TIER1_SMOKE_JSON).size() > 0) {
             p = DEN_TIER1_SMOKE_JSON;
-            if (fs::is_regular_file(p)) return p;
+            if (fs::is_regular_file(p))
+                return p;
         }
 #endif
 #if defined(DEN_CORPUS_DIR)
@@ -157,7 +161,8 @@ TEST_SUITE("tier1_smoke_regression [T69]") {
             // DEN_CORPUS_DIR = .../tests/corpus/homebrew-core
             // tier1.json     = .../tests/smoke/tier1.json
             p = fs::path(DEN_CORPUS_DIR).parent_path().parent_path() / "smoke" / "tier1.json";
-            if (fs::is_regular_file(p)) return p;
+            if (fs::is_regular_file(p))
+                return p;
         }
 #endif
         return {};
@@ -183,7 +188,7 @@ TEST_SUITE("tier1_smoke_regression [T69]") {
         }
 
         auto store = tmp.path / "store";
-        auto cas   = tmp.path / "cas";
+        auto cas = tmp.path / "cas";
         const std::string ver = "1.0.0";
 
         tmp.seed_legacy_cellar(store, names, ver);
@@ -196,8 +201,7 @@ TEST_SUITE("tier1_smoke_regression [T69]") {
         }
 
         for (const auto& name : names) {
-            CHECK_MESSAGE(found.count(name) == 1,
-                          "package missing after migration: " + name);
+            CHECK_MESSAGE(found.count(name) == 1, "package missing after migration: " + name);
         }
     }
 
@@ -216,8 +220,8 @@ TEST_SUITE("tier1_smoke_regression [T69]") {
         }
 
         auto den_home = tmp.path / "den_home";
-        auto store    = tmp.path / "store";
-        auto cas      = tmp.path / "cas";
+        auto store = tmp.path / "store";
+        auto cas = tmp.path / "cas";
         const std::string ver = "1.0.0";
 
         tmp.seed_legacy_cellar(store, names, ver);
@@ -242,8 +246,7 @@ TEST_SUITE("tier1_smoke_regression [T69]") {
             // that the opt/<name> link was created.
             auto opt_link = eDir / "opt" / name;
             bool linked = fs::is_symlink(bin_link) || fs::is_symlink(opt_link);
-            CHECK_MESSAGE(linked,
-                          "no env link created for package after migration: " + name);
+            CHECK_MESSAGE(linked, "no env link created for package after migration: " + name);
         }
     }
 
@@ -256,10 +259,11 @@ TEST_SUITE("tier1_smoke_regression [T69]") {
             return;
         }
         const auto names = read_tier1_names(json);
-        if (names.empty()) return;
+        if (names.empty())
+            return;
 
         auto store = tmp.path / "store";
-        auto cas   = tmp.path / "cas";
+        auto cas = tmp.path / "cas";
         const std::string ver = "1.0.0";
 
         tmp.seed_legacy_cellar(store, names, ver);
@@ -268,7 +272,8 @@ TEST_SUITE("tier1_smoke_regression [T69]") {
         std::set<std::string> shas;
         for (const auto& name : names) {
             auto sha = cas_lookup(tmp.path, name, ver);
-            if (!sha.has_value()) continue;
+            if (!sha.has_value())
+                continue;
             // All stubs have unique content (contain the package name), so
             // all SHAs should be distinct.
             CHECK_MESSAGE(shas.find(*sha) == shas.end(),

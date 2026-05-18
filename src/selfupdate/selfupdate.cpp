@@ -61,8 +61,7 @@ fs::path self_exe() {
 } // namespace
 
 std::optional<UpdateInfo> check_for_update(const Config& cfg) {
-    std::string url =
-        "https://api.github.com/repos/marcelocantos/den/releases/latest";
+    std::string url = "https://api.github.com/repos/marcelocantos/den/releases/latest";
 
     SPDLOG_INFO("checking for updates...");
     std::string response;
@@ -138,8 +137,7 @@ void apply_update(const UpdateInfo& info, const Config& cfg) {
     if (!expected_hash.empty()) {
         auto actual = hash_string(tarball_data);
         if (actual != expected_hash) {
-            throw UserError("SHA256 mismatch: expected " + expected_hash +
-                           ", got " + actual);
+            throw UserError("SHA256 mismatch: expected " + expected_hash + ", got " + actual);
         }
         SPDLOG_INFO("checksum verified");
     }
@@ -151,14 +149,11 @@ void apply_update(const UpdateInfo& info, const Config& cfg) {
     auto tarball_path = tmp_dir / "den.tar.gz";
     {
         std::ofstream out(tarball_path, std::ios::binary);
-        out.write(tarball_data.data(),
-                  static_cast<std::streamsize>(tarball_data.size()));
+        out.write(tarball_data.data(), static_cast<std::streamsize>(tarball_data.size()));
     }
 
     // Extract — tarball contains just "den" at the top level.
-    auto rc = std::system(
-        ("tar xzf " + tarball_path.string() + " -C " + tmp_dir.string())
-            .c_str());
+    auto rc = std::system(("tar xzf " + tarball_path.string() + " -C " + tmp_dir.string()).c_str());
     if (rc != 0) {
         fs::remove_all(tmp_dir);
         throw UserError("failed to extract update tarball");
@@ -171,9 +166,9 @@ void apply_update(const UpdateInfo& info, const Config& cfg) {
     }
 
     // Make executable and writable (owner needs write for future updates).
-    fs::permissions(new_binary, fs::perms::owner_all |
-                                   fs::perms::group_read | fs::perms::group_exec |
-                                   fs::perms::others_read | fs::perms::others_exec,
+    fs::permissions(new_binary,
+                    fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec |
+                        fs::perms::others_read | fs::perms::others_exec,
                     fs::perm_options::replace);
 
     // Atomic replace: rename new binary over old.
@@ -196,8 +191,7 @@ void apply_update(const UpdateInfo& info, const Config& cfg) {
 
     fs::remove_all(tmp_dir);
 
-    std::cout << "Updated den " << DEN_VERSION << " → " << info.latest_version
-              << "\n";
+    std::cout << "Updated den " << DEN_VERSION << " → " << info.latest_version << "\n";
 }
 
 } // namespace den

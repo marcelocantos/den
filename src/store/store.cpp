@@ -72,10 +72,12 @@ std::optional<InstalledPackage> which_package(const fs::path& store, const fs::p
     // Store layout: <name>/<version>/...
     // Extract the first two path components.
     auto it = rel.begin();
-    if (it == rel.end()) return std::nullopt;
+    if (it == rel.end())
+        return std::nullopt;
     std::string name = it->string();
     ++it;
-    if (it == rel.end()) return std::nullopt;
+    if (it == rel.end())
+        return std::nullopt;
     std::string version = it->string();
 
     auto pkg_path = store_canonical / name / version;

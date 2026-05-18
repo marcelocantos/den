@@ -26,9 +26,9 @@
 #define T26_MIGRATION_IMPLEMENTED 0
 #endif
 
-#include "store/store.h"
 #include "env/environment.h"
 #include "env/manifest.h"
+#include "store/store.h"
 
 #include <chrono>
 #include <filesystem>
@@ -45,13 +45,12 @@ struct MigTmpDir {
     fs::path path;
 
     MigTmpDir() {
-        path = fs::temp_directory_path() /
-               ("den_test_mig_" +
-                std::to_string(
-                    std::hash<std::string>{}(
-                        std::to_string(reinterpret_cast<uintptr_t>(this))) ^
-                    static_cast<size_t>(
-                        std::chrono::steady_clock::now().time_since_epoch().count())));
+        path =
+            fs::temp_directory_path() /
+            ("den_test_mig_" +
+             std::to_string(
+                 std::hash<std::string>{}(std::to_string(reinterpret_cast<uintptr_t>(this))) ^
+                 static_cast<size_t>(std::chrono::steady_clock::now().time_since_epoch().count())));
         fs::create_directories(path);
     }
 
@@ -64,8 +63,7 @@ struct MigTmpDir {
     MigTmpDir& operator=(const MigTmpDir&) = delete;
 
     // Populate a legacy-layout store: store/<name>/<version>/bin/<name>
-    void make_legacy_keg(const fs::path& store, const std::string& name,
-                         const std::string& version,
+    void make_legacy_keg(const fs::path& store, const std::string& name, const std::string& version,
                          const std::string& content = "fake binary") {
         auto keg_bin = store / name / version / "bin";
         fs::create_directories(keg_bin);
@@ -87,7 +85,7 @@ TEST_SUITE("cas_migration [T26]") {
     TEST_CASE("migrated kegs appear in CAS store under SHA256 key") {
         MigTmpDir tmp;
         auto store = tmp.path / "store";
-        auto cas   = tmp.path / "cas";
+        auto cas = tmp.path / "cas";
 
         tmp.make_legacy_keg(store, "tree", "2.1.1", "tree-binary-v2.1.1");
         tmp.make_legacy_keg(store, "curl", "8.5.0", "curl-binary-v8.5.0");
@@ -107,7 +105,7 @@ TEST_SUITE("cas_migration [T26]") {
     TEST_CASE("list_installed returns all original packages after migration") {
         MigTmpDir tmp;
         auto store = tmp.path / "store";
-        auto cas   = tmp.path / "cas";
+        auto cas = tmp.path / "cas";
 
         tmp.make_legacy_keg(store, "tree", "2.1.1");
         tmp.make_legacy_keg(store, "tree", "2.2.0");
@@ -129,8 +127,8 @@ TEST_SUITE("cas_migration [T26]") {
     TEST_CASE("den use symlinks resolve correctly after migration") {
         MigTmpDir tmp;
         auto den_home = tmp.path / "den_home";
-        auto store    = tmp.path / "store";
-        auto cas      = tmp.path / "cas";
+        auto store = tmp.path / "store";
+        auto cas = tmp.path / "cas";
 
         tmp.make_legacy_keg(store, "tree", "2.1.1", "tree-binary");
 
@@ -151,7 +149,7 @@ TEST_SUITE("cas_migration [T26]") {
     TEST_CASE("migration is idempotent — running twice produces no error") {
         MigTmpDir tmp;
         auto store = tmp.path / "store";
-        auto cas   = tmp.path / "cas";
+        auto cas = tmp.path / "cas";
 
         tmp.make_legacy_keg(store, "git", "2.44.0", "git-binary");
 
@@ -166,7 +164,7 @@ TEST_SUITE("cas_migration [T26]") {
     TEST_CASE("two kegs with identical content share one CAS object") {
         MigTmpDir tmp;
         auto store = tmp.path / "store";
-        auto cas   = tmp.path / "cas";
+        auto cas = tmp.path / "cas";
 
         // Same content for both versions — should deduplicate in CAS.
         tmp.make_legacy_keg(store, "zlib", "1.3.0", "identical content");

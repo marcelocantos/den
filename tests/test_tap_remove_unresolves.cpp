@@ -122,9 +122,8 @@ TEST_SUITE("tap::remove_unresolves") {
         const bool visible_before = info_before.find("not found") == std::string::npos &&
                                     info_before.find("hello-tap") != std::string::npos;
         if (!visible_before) {
-            MESSAGE(
-                "SKIP: tap add succeeded but `den info` cannot yet query tapped "
-                "formulae — formula resolution path not yet implemented");
+            MESSAGE("SKIP: tap add succeeded but `den info` cannot yet query tapped "
+                    "formulae — formula resolution path not yet implemented");
             return;
         }
 
@@ -156,9 +155,8 @@ TEST_SUITE("tap::remove_unresolves") {
         const std::string info_before = run_den("info hello-tap", home);
         if (info_before.find("hello-tap") == std::string::npos ||
             looks_like_not_found(info_before)) {
-            MESSAGE(
-                "SKIP: bare-name resolution not yet supported via tap index "
-                "(pending 🎯T67 / T5)");
+            MESSAGE("SKIP: bare-name resolution not yet supported via tap index "
+                    "(pending 🎯T67 / T5)");
             return;
         }
 
