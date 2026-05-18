@@ -221,7 +221,7 @@ targets:
     discovered: 2026-04-09
   T23.1:
     name: PackageProvider abstract interface defines the per-provider operation surface
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -235,6 +235,7 @@ targets:
       No implementations land in this sub-target; it is pure contract definition.
     origin: manual
     discovered: 2026-05-18
+    achieved: 2026-05-18
   T23.2:
     name: Homebrew install/uninstall/list refactored to implement PackageProvider
     status: identified
