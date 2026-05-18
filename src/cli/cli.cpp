@@ -16,6 +16,7 @@
 #include "../index/index.h"
 #include "../migrate/migrate.h"
 #include "../platform/platform.h"
+#include "../provider/homebrew_provider.h"
 #include "../selfupdate/selfupdate.h"
 #include "../settings/settings.h"
 #include "../smoke/runner.h"
@@ -131,7 +132,8 @@ void Cli::M::setup() {
             auto links = materialise(cfg.den_home, cfg.store, active, &idx);
             std::cout << "Materialised: " << links << " symlinks.\n";
         } else {
-            install_packages(cfg, idx, install_names);
+            HomebrewProvider provider(&idx);
+            install_packages(cfg, provider, idx, install_names);
         }
     });
 
@@ -140,7 +142,8 @@ void Cli::M::setup() {
     uninstall->add_option("names", uninstall_names, "Package names to uninstall")->required();
     uninstall->callback([this] {
         auto cfg = Config::detect();
-        uninstall_packages(cfg, uninstall_names);
+        HomebrewProvider provider(nullptr);
+        uninstall_packages(cfg, provider, uninstall_names);
     });
 
     // --- upgrade ---
@@ -153,7 +156,8 @@ void Cli::M::setup() {
             SPDLOG_ERROR("package index is empty — run `den update` first");
             return;
         }
-        upgrade_packages(cfg, idx, upgrade_names);
+        HomebrewProvider provider(&idx);
+        upgrade_packages(cfg, provider, idx, upgrade_names);
     });
 
     // --- update ---
@@ -170,7 +174,8 @@ void Cli::M::setup() {
     auto* list = app.add_subcommand("list", "List installed packages");
     list->callback([] {
         auto cfg = Config::detect();
-        auto installed = list_installed(cfg.store);
+        HomebrewProvider provider(nullptr);
+        auto installed = provider.list_installed(cfg);
         if (installed.empty()) {
             std::cout << "No packages installed.\n";
             return;
@@ -528,12 +533,14 @@ void Cli::M::setup() {
         auto active = active_env_path(cfg.den_home);
 
         // Check the requested version exists in the store.
-        if (!is_installed(cfg.store, use_name, use_version)) {
+        HomebrewProvider list_provider(nullptr);
+        if (!list_provider.is_installed(cfg, use_name, use_version)) {
             // Try to install it.
             auto idx = load_index(cfg.cache / "index.json");
             auto* pkg = idx.find(use_name);
             if (pkg && pkg->version == use_version) {
-                install_packages(cfg, idx, {use_name});
+                HomebrewProvider provider(&idx);
+                install_packages(cfg, provider, idx, {use_name});
             } else {
                 SPDLOG_ERROR("version {} of {} is not installed and not available in the index",
                              use_version, use_name);

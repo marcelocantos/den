@@ -8,6 +8,7 @@
 #include "../env/environment.h"
 #include "../env/manifest.h"
 #include "../index/index.h"
+#include "../provider/homebrew_provider.h"
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -184,7 +185,8 @@ std::vector<SmokeResult> run_smoke_tests(const fs::path& test_defs_json, const C
                               [&](Manifest& m) { m.packages[name] = version; });
                 materialise(config.den_home, config.store, "/");
             } else {
-                install_packages(config, idx, {name});
+                HomebrewProvider provider(&idx);
+                install_packages(config, provider, idx, {name});
             }
             result.installed = true;
         } catch (const std::exception& e) {
