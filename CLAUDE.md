@@ -37,7 +37,9 @@ tap-related phases.
 
 ## Architecture
 
-See `docs/targets.md` for the convergence roadmap.
+The convergence roadmap lives in `bullseye.yaml` at the repo root.
+Use the `bullseye` MCP server (or `/cv`) to query it; there is no
+rendered Markdown copy.
 
 ### Key Design Decisions
 
@@ -56,46 +58,48 @@ See `docs/targets.md` for the convergence roadmap.
   intervention. The user's active environment is never modified
   without explicit action.
 
-### Crate Structure
+### Source Layout
+
+C++23, built with CMake + Ninja. `src/` is split into per-concern
+modules; everything compiles into a single `den_lib` static library
+linked by the `den` binary and the `den_tests` test runner.
 
 ```
 src/
-├── main.rs           # CLI entry point
-├── cli/              # Command definitions and handlers
-│   ├── mod.rs        # Cli struct, Command enum, dispatch
-│   ├── install.rs    # install, pour, uninstall, upgrade
-│   ├── query.rs      # info, search, deps, list, use, cleanup
-│   ├── env_cmd.rs    # environment management commands
-│   ├── daemon_cmd.rs # daemon lifecycle commands
-│   ├── shell.rs      # shell init and env switch output
-│   ├── services.rs   # service list/start/stop/restart
-│   └── migrate.rs    # Homebrew cellar migration
-├── env/              # Environment management (create, switch, layer)
-├── formula/          # Formula parsing, metadata, DSL
-├── cask/             # Cask parsing, artifacts
-├── keg/              # Keg/Cellar management
-├── tap/              # Tap (git repo) management (placeholder)
-├── bottle/           # Bottle download, pour, relocation
-├── deps/             # Dependency resolution, topological sort
-├── link/             # Symlink management
-├── download/         # Download strategies, caching (placeholder)
-├── api/              # formulae.brew.sh API client
-├── tab/              # INSTALL_RECEIPT.json handling
-├── daemon/           # Background upgrade service
-├── config/           # Configuration, environment
-├── manifest/         # Manifest read/write, environment hierarchy resolution
-├── service/          # Service management (launchd plists)
-├── settings/         # Unified settings (config.json)
-├── platform/         # OS/arch detection, Mach-O/ELF tools
-└── error.rs          # Error types
+├── main.cpp        # CLI entry point
+├── activity/       # User-facing progress / activity reporting
+├── build/          # Source-build pipeline (incl. native formula parser)
+├── cli/            # Command parsing and dispatch
+├── core/           # Shared utilities and primitives
+├── daemon/         # Background upgrade / supervisor daemon
+├── doctor/         # `den doctor` health checks
+├── download/       # Bottle / source download + cache
+├── env/            # Environment management (create, switch, layer)
+├── index/          # Formula / cask metadata index
+├── migrate/        # Homebrew → den migration
+├── platform/       # OS/arch detection, Mach-O/ELF tools
+├── provider/       # PackageProvider interface (multi-provider seam)
+├── ruby/           # Bundled / lazy-vendored Portable Ruby integration
+├── selfupdate/     # `den selfupdate`
+├── settings/       # Unified settings (config.json)
+├── smoke/          # In-process smoke checks
+└── store/          # Cellar / keg / manifest layer
 ```
+
+Tests live in `tests/test_*.cpp` (one binary, `den_tests`, run via
+`ctest`). Header-only deps are vendored under `vendor/`; system deps
+are `libcurl` and `libarchive`.
 
 ## Build
 
 ```bash
-cargo build
-cargo test
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+ctest --test-dir build --output-on-failure
 ```
+
+`make bullseye` runs the standing-invariants check used by `/cv`
+(configure-if-needed, build, test, format, clean tree).
 
 ## TODO Location
 
