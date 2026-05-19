@@ -52,8 +52,16 @@ auto with_manifest(const fs::path& den_home, const std::string& env_path, F&& fn
     -> decltype(fn(std::declval<Manifest&>()));
 
 /// Resolve the effective package set by walking the parent chain.
-/// Child entries override parent entries.
+/// Child entries override parent entries. The result is flattened across
+/// providers (name → version); for provider-aware iteration, use
+/// `resolve_per_provider` instead.
 std::map<std::string, std::string> resolve(const fs::path& den_home, const std::string& env_path);
+
+/// Resolve the parent chain, preserving per-provider grouping:
+/// provider_name → (package_name → version). Within each provider's bucket
+/// child entries override parent entries.
+std::map<std::string, std::map<std::string, std::string>>
+resolve_per_provider(const fs::path& den_home, const std::string& env_path);
 
 /// List all environment paths that have manifests.
 std::vector<std::string> list_all(const fs::path& den_home);

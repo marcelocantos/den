@@ -96,12 +96,23 @@ class PackageProvider {
     virtual bool is_installed(const Config& config, std::string_view name,
                               std::string_view version) const;
 
-    /// Binary paths to surface in the environment's PATH for `pkg`. Returned
-    /// paths are absolute and must exist; the env materialiser symlinks them
-    /// (or their executable contents) into the env's `bin/`.
+    /// The absolute path where this provider keeps an installed package's
+    /// root directory. The path may or may not exist on disk — the call is
+    /// pure layout computation and is used by the env materialiser to find
+    /// the package without going through `list_installed()`.
+    virtual fs::path package_root(const Config& config, std::string_view name,
+                                  std::string_view version) const = 0;
+
+    /// Directories within `pkg`'s root whose contents the env materialiser
+    /// should expose to the environment. Each returned path is absolute,
+    /// must exist, and is symlinked into `env/<basename>/` (e.g. a returned
+    /// `…/Cellar/foo/1.0/bin` produces symlinks under `env/bin/`).
     ///
-    /// Returning an empty vector means "this package has no PATH entries"
-    /// (e.g. a library-only package). It is not an error.
+    /// Different providers expose different shapes: a Homebrew keg exposes
+    /// `bin/sbin/lib/include/share`; a pip-installed Python package may
+    /// expose only its scripts directory; a stub provider may expose only
+    /// `bin/`. Returning an empty vector means "this package has no
+    /// environment-visible content" — a valid outcome, not an error.
     virtual std::vector<fs::path> binary_paths(const Config& config,
                                                const InstalledPackage& pkg) const = 0;
 };

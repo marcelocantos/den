@@ -220,10 +220,18 @@ std::vector<InstalledPackage> HomebrewProvider::list_installed(const Config& con
     return ::den::list_installed(config.store);
 }
 
+fs::path HomebrewProvider::package_root(const Config& config, std::string_view name,
+                                        std::string_view version) const {
+    // Cellar layout: <store>/<name>/<version>/
+    return config.store / std::string(name) / std::string(version);
+}
+
 std::vector<fs::path> HomebrewProvider::binary_paths(const Config& /*config*/,
                                                      const InstalledPackage& pkg) const {
+    // Homebrew kegs expose five standard subdirectories — the materialiser
+    // symlinks the contents of each into the env's matching subdir.
     std::vector<fs::path> paths;
-    for (const auto& sub : {"bin", "sbin"}) {
+    for (const auto& sub : {"bin", "sbin", "lib", "include", "share"}) {
         auto p = pkg.path / sub;
         if (fs::is_directory(p)) {
             paths.push_back(p);

@@ -233,6 +233,33 @@ std::map<std::string, std::string> resolve(const fs::path& den_home, const std::
     return result;
 }
 
+std::map<std::string, std::map<std::string, std::string>>
+resolve_per_provider(const fs::path& den_home, const std::string& env_path) {
+    std::map<std::string, std::map<std::string, std::string>> result;
+    std::set<std::string> visited;
+
+    // Walk the parent chain, collecting per-provider entries.
+    std::string current = env_path;
+    std::vector<Manifest> chain;
+    while (!current.empty() && visited.find(current) == visited.end()) {
+        visited.insert(current);
+        auto m = read_manifest(den_home, current);
+        chain.push_back(std::move(m));
+        current = chain.back().origin.value_or("");
+    }
+
+    // Apply in reverse order (root first, then children override).
+    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+        for (const auto& [provider, pkgs] : it->packages) {
+            for (const auto& [name, version] : pkgs) {
+                result[provider][name] = version;
+            }
+        }
+    }
+
+    return result;
+}
+
 std::vector<std::string> list_all(const fs::path& den_home) {
     std::vector<std::string> result;
     auto manifests_dir = den_home / "manifests";

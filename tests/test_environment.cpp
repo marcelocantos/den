@@ -153,6 +153,34 @@ TEST_SUITE("environment::materialise") {
 
         CHECK(fs::read_symlink(eDir / "bin" / "tree") == pkg2 / "bin" / "tree");
     }
+
+    TEST_CASE("materialise skips entries under an unregistered provider (T23.5)") {
+        // The materialiser dispatches through the provider registry. Entries
+        // under an unknown provider (e.g. the manifest was written by a
+        // newer den that knows a provider we don't) must not derail
+        // materialisation of the known providers' entries.
+        TmpDir tmp;
+        auto den_home = tmp.path / "den_home";
+        auto store = tmp.path / "store";
+
+        // A real Homebrew-style keg.
+        auto pkg = store / "tree" / "2.1.1";
+        fs::create_directories(pkg / "bin");
+        std::ofstream(pkg / "bin" / "tree") << "#!/bin/sh\n";
+
+        Manifest m;
+        m.packages["homebrew"]["tree"] = "2.1.1";
+        // An entry under a provider that isn't registered.
+        m.packages["ghost-provider"]["wraith"] = "0.1";
+        write_manifest(den_home, "/", m);
+
+        // Should warn about ghost-provider but link tree successfully.
+        auto count = materialise(den_home, store, "/");
+        CHECK(count > 0);
+
+        auto eDir = env_dir(den_home, "/");
+        CHECK(fs::is_symlink(eDir / "bin" / "tree"));
+    }
 }
 
 } // namespace test
