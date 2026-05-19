@@ -6,6 +6,7 @@
 #include "../core/error.h"
 #include "../env/manifest.h"
 #include "homebrew_provider.h"
+#include "stub_provider.h"
 
 #include <utility>
 
@@ -48,6 +49,10 @@ std::vector<PackageProvider*> ProviderRegistry::all() const {
 ProviderRegistry make_default_registry(const PackageIndex* idx) {
     ProviderRegistry r;
     r.add(std::make_shared<HomebrewProvider>(idx));
+    // The stub provider proves the multi-provider seams work end-to-end.
+    // accepts() returns false for all names, so it never auto-claims — it
+    // is only invoked when the user passes `--provider stub` explicitly.
+    r.add(std::make_shared<StubProvider>());
     return r;
 }
 
