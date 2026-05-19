@@ -198,7 +198,7 @@ targets:
     achieved: 2026-04-11
   T23:
     name: Multi-provider package management
-    status: identified
+    status: achieved
     value: 13.0
     cost: 21.0
     acceptance:
@@ -219,6 +219,7 @@ targets:
       The seam test (one stubbed non-Homebrew provider exercised end-to-end) is the cheapest way to prove the abstraction is real. Without it, "we have an interface" usually means "we have an interface that only Homebrew can satisfy."
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-05-19
   T23.1:
     name: PackageProvider abstract interface defines the per-provider operation surface
     status: achieved
@@ -313,7 +314,7 @@ targets:
     achieved: 2026-05-19
   T23.6:
     name: A stub non-Homebrew provider proves the seams are usable from outside core
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -333,6 +334,7 @@ targets:
     - T23.5
     origin: manual
     discovered: 2026-05-18
+    achieved: 2026-05-19
   T24:
     name: Semantic search
     status: identified
