@@ -16,11 +16,16 @@ namespace den {
 namespace fs = std::filesystem;
 
 struct Manifest {
-    /// Explicitly requested packages: name -> version constraint.
-    std::map<std::string, std::string> packages;
+    /// Explicitly requested packages, grouped by provider:
+    /// provider_name -> (package_name -> version). The reader accepts a
+    /// legacy flat shape and promotes those entries under "homebrew" for
+    /// backward compatibility; the writer always emits the nested form.
+    std::map<std::string, std::map<std::string, std::string>> packages;
 
-    /// Packages pulled in as transitive dependencies.
-    std::set<std::string> auto_deps;
+    /// Transitive dependencies pulled in by each provider's installer.
+    /// Grouped per-provider so prune operations don't accidentally reach
+    /// across ecosystems.
+    std::map<std::string, std::set<std::string>> auto_deps;
 
     /// Parent environment path (for hierarchical resolution).
     std::optional<std::string> origin;

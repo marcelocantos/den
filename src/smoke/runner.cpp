@@ -182,7 +182,7 @@ std::vector<SmokeResult> run_smoke_tests(const fs::path& test_defs_json, const C
                 build_from_source(config, idx, name, version);
                 // Update manifest so materialise works.
                 with_manifest(config.den_home, "/",
-                              [&](Manifest& m) { m.packages[name] = version; });
+                              [&](Manifest& m) { m.packages["homebrew"][name] = version; });
                 materialise(config.den_home, config.store, "/");
             } else {
                 HomebrewProvider provider(&idx);

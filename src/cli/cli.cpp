@@ -127,7 +127,7 @@ void Cli::M::setup() {
                 std::string version = pkg ? pkg->version : "unknown";
                 auto dest = den::build_from_source(cfg, idx, name, version);
                 with_manifest(cfg.den_home, active,
-                              [&](Manifest& m) { m.packages[name] = version; });
+                              [&](Manifest& m) { m.packages["homebrew"][name] = version; });
             }
             auto links = materialise(cfg.den_home, cfg.store, active, &idx);
             std::cout << "Materialised: " << links << " symlinks.\n";
@@ -383,11 +383,16 @@ void Cli::M::setup() {
         auto active = active_env_path(cfg.den_home);
         auto manifest = read_manifest(cfg.den_home, active);
 
-        // Find packages that are auto_deps and not depended on by any explicit package.
+        // Autoremove is scoped to Homebrew today — its dependency graph is
+        // available via the index. Other providers will grow their own
+        // autoremove paths when they land.
         auto idx = load_index(cfg.cache / "index.json");
+        const auto& homebrew_pkgs = manifest.packages["homebrew"];
+        const auto& homebrew_auto = manifest.auto_deps["homebrew"];
+
         std::set<std::string> needed;
-        for (const auto& [name, _] : manifest.packages) {
-            if (manifest.auto_deps.count(name))
+        for (const auto& [name, _] : homebrew_pkgs) {
+            if (homebrew_auto.count(name))
                 continue;
             // This is an explicit package — mark all its deps as needed.
             auto* pkg = idx.find(name);
@@ -398,7 +403,7 @@ void Cli::M::setup() {
         }
 
         std::vector<std::string> to_remove;
-        for (const auto& name : manifest.auto_deps) {
+        for (const auto& name : homebrew_auto) {
             if (!needed.count(name)) {
                 to_remove.push_back(name);
             }
@@ -410,9 +415,11 @@ void Cli::M::setup() {
         }
 
         with_manifest(cfg.den_home, active, [&](Manifest& m) {
+            auto& bucket = m.packages["homebrew"];
+            auto& auto_bucket = m.auto_deps["homebrew"];
             for (const auto& name : to_remove) {
-                m.packages.erase(name);
-                m.auto_deps.erase(name);
+                bucket.erase(name);
+                auto_bucket.erase(name);
                 std::cout << "Removing unused dependency: " << name << "\n";
             }
         });
@@ -548,9 +555,11 @@ void Cli::M::setup() {
             }
         }
 
-        // Update manifest to the requested version.
+        // Update manifest to the requested version. `use` switches a
+        // Homebrew-managed package's active version today; provider-aware
+        // version switching will land alongside resolution dispatch (T23.3).
         with_manifest(cfg.den_home, active,
-                      [&](Manifest& m) { m.packages[use_name] = use_version; });
+                      [&](Manifest& m) { m.packages["homebrew"][use_name] = use_version; });
 
         auto links = materialise(cfg.den_home, cfg.store, active);
         std::cout << "Switched " << use_name << " to " << use_version << " (" << links

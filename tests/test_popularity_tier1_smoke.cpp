@@ -229,7 +229,7 @@ TEST_SUITE("tier1_smoke_regression [T69]") {
         // Build root manifest with all tier-1 packages.
         Manifest m;
         for (const auto& name : names) {
-            m.packages[name] = ver;
+            m.packages["homebrew"][name] = ver;
         }
         write_manifest(den_home, "/", m);
 

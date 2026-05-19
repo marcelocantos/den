@@ -58,10 +58,13 @@ uint32_t materialise(const fs::path& den_home, const fs::path& store, const std:
             if (members.size() <= 1)
                 continue;
 
-            // Prefer explicit installs over auto-deps.
+            // Prefer explicit installs over auto-deps. Versioned families
+            // are a Homebrew concept (python@3.11 vs python@3.12); look up
+            // explicitness in the Homebrew auto_deps bucket.
+            const auto& homebrew_auto = manifest.auto_deps["homebrew"];
             std::vector<std::string> explicit_members;
             for (const auto& m : members) {
-                if (!manifest.auto_deps.count(m)) {
+                if (!homebrew_auto.count(m)) {
                     explicit_members.push_back(m);
                 }
             }

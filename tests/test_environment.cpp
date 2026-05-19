@@ -88,7 +88,7 @@ TEST_SUITE("environment::materialise") {
 
         // Write a manifest referencing it.
         Manifest m;
-        m.packages["tree"] = "2.1.1";
+        m.packages["homebrew"]["tree"] = "2.1.1";
         write_manifest(den_home, "/", m);
 
         // Materialise the root environment.
@@ -112,7 +112,7 @@ TEST_SUITE("environment::materialise") {
         std::ofstream(pkg / "bin" / "curl") << "#!/bin/sh\n";
 
         Manifest m;
-        m.packages["curl"] = "8.5.0";
+        m.packages["homebrew"]["curl"] = "8.5.0";
         write_manifest(den_home, "/", m);
 
         auto count1 = materialise(den_home, store, "/");
@@ -139,7 +139,7 @@ TEST_SUITE("environment::materialise") {
 
         // First materialise with v2.1.1.
         Manifest m;
-        m.packages["tree"] = "2.1.1";
+        m.packages["homebrew"]["tree"] = "2.1.1";
         write_manifest(den_home, "/", m);
         materialise(den_home, store, "/");
 
@@ -147,7 +147,7 @@ TEST_SUITE("environment::materialise") {
         CHECK(fs::read_symlink(eDir / "bin" / "tree") == pkg1 / "bin" / "tree");
 
         // Update manifest to v2.2.0 and re-materialise.
-        m.packages["tree"] = "2.2.0";
+        m.packages["homebrew"]["tree"] = "2.2.0";
         write_manifest(den_home, "/", m);
         materialise(den_home, store, "/");
 
