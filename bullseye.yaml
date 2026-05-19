@@ -256,7 +256,7 @@ targets:
     achieved: 2026-05-18
   T23.3:
     name: Provider resolution dispatch routes installs to the right provider
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -271,6 +271,7 @@ targets:
     - T23.2
     origin: manual
     discovered: 2026-05-18
+    achieved: 2026-05-19
   T23.4:
     name: Manifest schema accepts provider-scoped entries alongside formulae
     status: achieved
