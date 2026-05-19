@@ -50,6 +50,9 @@ struct StubProvider : public PackageProvider {
         throw std::logic_error("uninstall not exercised in registry tests");
     }
     std::vector<InstalledPackage> list_installed(const Config&) const override { return {}; }
+    fs::path package_root(const Config&, std::string_view, std::string_view) const override {
+        return {};
+    }
     std::vector<fs::path> binary_paths(const Config&, const InstalledPackage&) const override {
         return {};
     }

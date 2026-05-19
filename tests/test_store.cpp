@@ -198,7 +198,7 @@ TEST_SUITE("link::link_package") {
         std::ofstream(pkg / "bin" / "foo") << "#!/bin/sh\n";
         std::ofstream(pkg / "lib" / "bar.so") << "ELF";
 
-        auto count = link_package(pkg, env, "mypkg");
+        auto count = link_package(pkg, env, "mypkg", {"bin", "sbin", "lib", "include", "share"});
         // 2 file symlinks + 1 opt symlink = 3
         CHECK(count == 3);
 
@@ -224,7 +224,7 @@ TEST_SUITE("link::link_package") {
 
         std::ofstream(pkg / "share" / "man" / "man1" / "foo.1") << ".TH FOO";
 
-        auto count = link_package(pkg, env, "mypkg");
+        auto count = link_package(pkg, env, "mypkg", {"bin", "sbin", "lib", "include", "share"});
         // 1 file + 1 opt = 2
         CHECK(count == 2);
         CHECK(fs::is_symlink(env / "share" / "man" / "man1" / "foo.1"));
@@ -242,11 +242,12 @@ TEST_SUITE("link::unlink_package") {
 
         std::ofstream(pkg / "bin" / "foo") << "#!/bin/sh\n";
 
-        link_package(pkg, env, "mypkg");
+        link_package(pkg, env, "mypkg", {"bin", "sbin", "lib", "include", "share"});
         CHECK(fs::is_symlink(env / "bin" / "foo"));
         CHECK(fs::is_symlink(env / "opt" / "mypkg"));
 
-        auto removed = unlink_package(pkg, env, "mypkg");
+        auto removed =
+            unlink_package(pkg, env, "mypkg", {"bin", "sbin", "lib", "include", "share"});
         CHECK(removed == 2); // bin/foo + opt/mypkg
 
         CHECK_FALSE(fs::exists(env / "bin" / "foo"));

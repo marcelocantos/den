@@ -28,6 +28,8 @@ class HomebrewProvider : public PackageProvider {
                           std::string_view version_hint) override;
     void uninstall(const Config& config, std::string_view name) override;
     std::vector<InstalledPackage> list_installed(const Config& config) const override;
+    fs::path package_root(const Config& config, std::string_view name,
+                          std::string_view version) const override;
     std::vector<fs::path> binary_paths(const Config& config,
                                        const InstalledPackage& pkg) const override;
 

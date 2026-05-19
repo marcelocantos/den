@@ -7,17 +7,12 @@
 
 #include <spdlog/spdlog.h>
 
-#include <array>
 #include <fstream>
 #include <regex>
 
 namespace den {
 
 namespace {
-
-constexpr std::array<const char*, 5> kLinkDirs = {
-    "bin", "sbin", "lib", "include", "share",
-};
 
 /// Recursively create symlinks from src_dir into dst_dir.
 /// For files: creates a symlink in dst_dir pointing to the file in src_dir.
@@ -107,7 +102,8 @@ bool is_valid_package_name(const std::string& name) {
     return std::regex_match(name, pattern);
 }
 
-uint32_t link_package(const fs::path& pkg_path, const fs::path& env_dir, const std::string& name) {
+uint32_t link_package(const fs::path& pkg_path, const fs::path& env_dir, const std::string& name,
+                      const std::vector<std::string>& subdirs) {
     if (!is_valid_package_name(name)) {
         throw UserError("invalid package name: " + name);
     }
@@ -118,7 +114,7 @@ uint32_t link_package(const fs::path& pkg_path, const fs::path& env_dir, const s
 
     uint32_t count = 0;
 
-    for (const auto& dir : kLinkDirs) {
+    for (const auto& dir : subdirs) {
         auto src = pkg_path / dir;
         auto dst = env_dir / dir;
         count += link_tree(src, dst);
@@ -143,15 +139,15 @@ uint32_t link_package(const fs::path& pkg_path, const fs::path& env_dir, const s
     return count;
 }
 
-uint32_t unlink_package(const fs::path& pkg_path, const fs::path& env_dir,
-                        const std::string& name) {
+uint32_t unlink_package(const fs::path& pkg_path, const fs::path& env_dir, const std::string& name,
+                        const std::vector<std::string>& subdirs) {
     if (!is_valid_package_name(name)) {
         throw UserError("invalid package name: " + name);
     }
 
     uint32_t count = 0;
 
-    for (const auto& dir : kLinkDirs) {
+    for (const auto& dir : subdirs) {
         auto src = pkg_path / dir;
         auto dst = env_dir / dir;
         count += unlink_tree(src, dst);
