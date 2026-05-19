@@ -19,6 +19,11 @@ everything — not just Python, but every package on your system.
 - **Source-first architecture** — embedded Ruby VM for evaluating
   Homebrew formula build recipes. Pre-built archives as an optimisation,
   not a requirement.
+- **Multi-provider** — Homebrew is the default, but `den install`
+  routes through a pluggable `PackageProvider` interface. Future
+  providers (pip, npm, cargo, go) plug in without changes to the CLI,
+  manifest, or environment layers. Pass `--provider <name>` to choose
+  explicitly.
 
 ## Install
 
@@ -77,15 +82,22 @@ den upgrade                 # upgrade everything
 
 ## How it works
 
-Den consumes Homebrew's package ecosystem (the same archives, the same
-formulae API) but manages everything independently:
+Den manages package providers behind a uniform interface. Homebrew is
+the default — den consumes the same archives and formulae API — but
+the install / uninstall / upgrade / list / use flows all dispatch
+through a pluggable `PackageProvider` so additional providers (pip,
+npm, cargo, go) can plug in without changes to the CLI, manifest, or
+environment-composition layers.
 
-- **Shared Cellar** (`/opt/homebrew/Cellar/`) holds installed package
-  versions — shared with Homebrew, so bottles work without relocation.
-- **Manifests** declare what each environment contains. Child
-  environments inherit from parents and override specific packages.
-- **Materialisation** resolves the manifest hierarchy and creates a
-  flat directory of symlinks into the store.
+- **Shared Cellar** (`/opt/homebrew/Cellar/`) holds Homebrew-installed
+  package versions — shared with Homebrew, so bottles work without
+  relocation. Other providers keep their own storage areas.
+- **Manifests** declare what each environment contains, grouped per
+  provider. Child environments inherit from parents and override
+  specific packages.
+- **Materialisation** asks each owning provider for its package root
+  and binary paths, then resolves the manifest hierarchy into a flat
+  directory of symlinks.
 - **Shell integration** sets PATH and build environment variables
   (LIBRARY_PATH, CPATH, PKG_CONFIG_PATH, etc.) to point at the
   active environment.
@@ -133,8 +145,8 @@ Run `den --help` for the full list. Key commands:
 
 | Command | Description |
 |---|---|
-| `den install <pkg>` | Install a package (with dependency resolution) |
-| `den uninstall <pkg>` | Remove from the active environment |
+| `den install <pkg> [--provider <p>]` | Install a package (with dependency resolution); `--provider` routes to a specific provider |
+| `den uninstall <pkg> [--provider <p>]` | Remove from the active environment |
 | `den use <pkg> <version>` | Switch active version |
 | `den upgrade [pkg]` | Upgrade outdated packages |
 | `den list` | List packages in the active environment |

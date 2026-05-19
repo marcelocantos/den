@@ -13,17 +13,30 @@ binary.
   Environments use path-based naming (`/` is root, `/ml`,
   `/work/legacy`) with manifest-level inheritance.
 - **Manifest**: JSON file declaring which packages an environment
-  contains. Child environments inherit from parents and can override
-  specific versions.
+  contains, grouped per provider:
+  `{ "packages": { "homebrew": {"ffmpeg": "6.1.1"}, "pip": {...} } }`.
+  Child environments inherit from parents and can override specific
+  versions. A legacy flat `packages: {name: ver}` block (pre-v0.11.0)
+  is auto-promoted under the `homebrew` provider on read.
 - **Materialisation**: Resolving a manifest hierarchy into a flat
-  symlink directory.
+  symlink directory. The env materialiser asks each owning provider
+  for its package root and binary paths, then symlinks them into the
+  env — Homebrew kegs and packages from other providers flow through
+  the same pipeline.
 - **Unified package model**: No formula/cask distinction. All
   packages are installed with `den install <name>`.
+- **Providers**: Pluggable backends behind a `PackageProvider`
+  interface. Homebrew is the default; auxiliary providers (pip, npm,
+  cargo, go, …) plug in without touching CLI, manifest, or env
+  layers. Pass `--provider <name>` to install / uninstall / upgrade
+  to route a command explicitly; otherwise den resolves via manifest
+  hint → name-pattern hint → Homebrew fallback.
 
 ## Common operations
 
 ```bash
 den install <name>           # install with dependency resolution
+den install <name> --provider <p>   # route to a specific provider
 den uninstall <name>         # remove from active environment
 den use <pkg> <version>      # switch active version
 den upgrade                  # upgrade all outdated packages
