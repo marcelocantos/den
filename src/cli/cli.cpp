@@ -17,6 +17,7 @@
 #include "../migrate/migrate.h"
 #include "../platform/platform.h"
 #include "../provider/homebrew_provider.h"
+#include "../provider/registry.h"
 #include "../selfupdate/selfupdate.h"
 #include "../settings/settings.h"
 #include "../smoke/runner.h"
@@ -52,12 +53,15 @@ struct Cli::M {
     // install
     std::vector<std::string> install_names;
     bool build_from_source = false;
+    std::string install_provider;
 
     // uninstall
     std::vector<std::string> uninstall_names;
+    std::string uninstall_provider;
 
     // upgrade
     std::vector<std::string> upgrade_names;
+    std::string upgrade_provider;
 
     // info
     std::string info_name;
@@ -113,6 +117,8 @@ void Cli::M::setup() {
     install->add_option("names", install_names, "Package names to install")->required();
     install->add_flag("-s,--build-from-source", build_from_source,
                       "Build from source instead of pouring a bottle");
+    install->add_option("--provider", install_provider,
+                        "Provider to install through (default: auto-resolve)");
     install->callback([this] {
         auto cfg = Config::detect();
         auto idx = load_index(cfg.cache / "index.json");
@@ -121,6 +127,8 @@ void Cli::M::setup() {
             return;
         }
         if (this->build_from_source) {
+            // Source builds are Homebrew-only — the Ruby DSL belongs to the
+            // Homebrew ecosystem. --provider is ignored on this path.
             auto active = active_env_path(cfg.den_home);
             for (const auto& name : install_names) {
                 auto* pkg = idx.find(name);
@@ -131,24 +139,49 @@ void Cli::M::setup() {
             }
             auto links = materialise(cfg.den_home, cfg.store, active, &idx);
             std::cout << "Materialised: " << links << " symlinks.\n";
-        } else {
-            HomebrewProvider provider(&idx);
-            install_packages(cfg, provider, idx, install_names);
+            return;
+        }
+
+        auto registry = make_default_registry(&idx);
+        auto active = active_env_path(cfg.den_home);
+        auto manifest = read_manifest(cfg.den_home, active);
+
+        std::map<PackageProvider*, std::vector<std::string>> by_provider;
+        for (const auto& name : install_names) {
+            auto& provider = resolve_provider(registry, name, manifest, this->install_provider);
+            by_provider[&provider].push_back(name);
+        }
+        for (auto& [provider, names] : by_provider) {
+            install_packages(cfg, *provider, idx, names);
         }
     });
 
     // --- uninstall ---
     auto* uninstall = app.add_subcommand("uninstall", "Uninstall packages");
     uninstall->add_option("names", uninstall_names, "Package names to uninstall")->required();
+    uninstall->add_option("--provider", uninstall_provider,
+                          "Provider that owns the package (default: auto-resolve)");
     uninstall->callback([this] {
         auto cfg = Config::detect();
-        HomebrewProvider provider(nullptr);
-        uninstall_packages(cfg, provider, uninstall_names);
+        auto registry = make_default_registry(nullptr);
+        auto active = active_env_path(cfg.den_home);
+        auto manifest = read_manifest(cfg.den_home, active);
+
+        std::map<PackageProvider*, std::vector<std::string>> by_provider;
+        for (const auto& name : uninstall_names) {
+            auto& provider = resolve_provider(registry, name, manifest, this->uninstall_provider);
+            by_provider[&provider].push_back(name);
+        }
+        for (auto& [provider, names] : by_provider) {
+            uninstall_packages(cfg, *provider, names);
+        }
     });
 
     // --- upgrade ---
     auto* upgrade = app.add_subcommand("upgrade", "Upgrade installed packages");
     upgrade->add_option("names", upgrade_names, "Package names to upgrade (all if empty)");
+    upgrade->add_option("--provider", upgrade_provider,
+                        "Provider whose packages to upgrade (default: auto-resolve)");
     upgrade->callback([this] {
         auto cfg = Config::detect();
         auto idx = load_index(cfg.cache / "index.json");
@@ -156,8 +189,35 @@ void Cli::M::setup() {
             SPDLOG_ERROR("package index is empty — run `den update` first");
             return;
         }
-        HomebrewProvider provider(&idx);
-        upgrade_packages(cfg, provider, idx, upgrade_names);
+        auto registry = make_default_registry(&idx);
+        auto active = active_env_path(cfg.den_home);
+        auto manifest = read_manifest(cfg.den_home, active);
+
+        if (upgrade_names.empty()) {
+            // Upgrade-all: dispatch one batch per provider whose bucket is non-empty.
+            for (auto& [provider_name, pkgs] : manifest.packages) {
+                if (pkgs.empty())
+                    continue;
+                auto* provider = registry.find(provider_name);
+                if (!provider) {
+                    SPDLOG_WARN("manifest holds entries under provider '{}' but no provider with "
+                                "that name is registered — skipping",
+                                provider_name);
+                    continue;
+                }
+                upgrade_packages(cfg, *provider, idx, {});
+            }
+            return;
+        }
+
+        std::map<PackageProvider*, std::vector<std::string>> by_provider;
+        for (const auto& name : upgrade_names) {
+            auto& provider = resolve_provider(registry, name, manifest, this->upgrade_provider);
+            by_provider[&provider].push_back(name);
+        }
+        for (auto& [provider, names] : by_provider) {
+            upgrade_packages(cfg, *provider, idx, names);
+        }
     });
 
     // --- update ---
@@ -538,15 +598,18 @@ void Cli::M::setup() {
     use->callback([this] {
         auto cfg = Config::detect();
         auto active = active_env_path(cfg.den_home);
+        auto manifest = read_manifest(cfg.den_home, active);
 
-        // Check the requested version exists in the store.
-        HomebrewProvider list_provider(nullptr);
-        if (!list_provider.is_installed(cfg, use_name, use_version)) {
-            // Try to install it.
-            auto idx = load_index(cfg.cache / "index.json");
+        auto idx = load_index(cfg.cache / "index.json");
+        auto registry = make_default_registry(&idx);
+        auto& provider = resolve_provider(registry, use_name, manifest);
+        auto provider_name = std::string(provider.provider_name());
+
+        // Check the requested version exists in the store for this provider.
+        if (!provider.is_installed(cfg, use_name, use_version)) {
+            // Try to install it via the resolved provider.
             auto* pkg = idx.find(use_name);
             if (pkg && pkg->version == use_version) {
-                HomebrewProvider provider(&idx);
                 install_packages(cfg, provider, idx, {use_name});
             } else {
                 SPDLOG_ERROR("version {} of {} is not installed and not available in the index",
@@ -555,11 +618,9 @@ void Cli::M::setup() {
             }
         }
 
-        // Update manifest to the requested version. `use` switches a
-        // Homebrew-managed package's active version today; provider-aware
-        // version switching will land alongside resolution dispatch (T23.3).
+        // Update the resolved provider's manifest bucket to the requested version.
         with_manifest(cfg.den_home, active,
-                      [&](Manifest& m) { m.packages["homebrew"][use_name] = use_version; });
+                      [&](Manifest& m) { m.packages[provider_name][use_name] = use_version; });
 
         auto links = materialise(cfg.den_home, cfg.store, active);
         std::cout << "Switched " << use_name << " to " << use_version << " (" << links
