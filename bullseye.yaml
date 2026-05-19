@@ -273,7 +273,7 @@ targets:
     discovered: 2026-05-18
   T23.4:
     name: Manifest schema accepts provider-scoped entries alongside formulae
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -289,6 +289,7 @@ targets:
     - T23.1
     origin: manual
     discovered: 2026-05-18
+    achieved: 2026-05-19
   T23.5:
     name: Environment composition treats provider binaries uniformly with Homebrew kegs
     status: identified

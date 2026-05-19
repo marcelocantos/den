@@ -16,19 +16,22 @@ namespace den {
 void install_packages(const Config& config, PackageProvider& provider, const PackageIndex& idx,
                       const std::vector<std::string>& names) {
     auto active = active_env_path(config.den_home);
+    auto pname = std::string(provider.provider_name());
 
     for (const auto& name : names) {
         auto result = provider.install(config, name, "");
 
         with_manifest(config.den_home, active, [&](Manifest& m) {
-            m.packages[name] = result.resolved_version;
+            auto& bucket = m.packages[pname];
+            bucket[name] = result.resolved_version;
+            auto& auto_bucket = m.auto_deps[pname];
             for (const auto& dep : result.auto_deps) {
-                if (!m.packages.count(dep)) {
+                if (!bucket.count(dep)) {
                     if (const auto* dep_pkg = idx.find(dep)) {
-                        m.packages[dep] = dep_pkg->version;
+                        bucket[dep] = dep_pkg->version;
                     }
                 }
-                m.auto_deps.insert(dep);
+                auto_bucket.insert(dep);
             }
         });
 
@@ -43,17 +46,20 @@ void install_packages(const Config& config, PackageProvider& provider, const Pac
 void uninstall_packages(const Config& config, PackageProvider& provider,
                         const std::vector<std::string>& names) {
     auto active = active_env_path(config.den_home);
+    auto pname = std::string(provider.provider_name());
 
     with_manifest(config.den_home, active, [&](Manifest& m) {
+        auto& bucket = m.packages[pname];
+        auto& auto_bucket = m.auto_deps[pname];
         for (const auto& name : names) {
-            if (!m.packages.count(name)) {
+            if (!bucket.count(name)) {
                 std::cerr << "warning: '" << name << "' is not installed in environment '" << active
                           << "'\n";
                 continue;
             }
             provider.uninstall(config, name);
-            m.packages.erase(name);
-            m.auto_deps.erase(name);
+            bucket.erase(name);
+            auto_bucket.erase(name);
             std::cout << "Removed '" << name << "' from environment '" << active << "'.\n";
         }
     });
@@ -115,9 +121,11 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
         provider.install(config, u.name, u.available);
     }
 
+    auto pname = std::string(provider.provider_name());
     with_manifest(config.den_home, active, [&](Manifest& m) {
+        auto& bucket = m.packages[pname];
         for (const auto& u : upgrades) {
-            m.packages[u.name] = u.available;
+            bucket[u.name] = u.available;
         }
     });
 

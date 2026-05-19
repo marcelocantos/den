@@ -125,13 +125,34 @@ Manifest read_manifest(const fs::path& den_home, const std::string& env_path) {
 
         if (j.contains("packages") && j["packages"].is_object()) {
             for (auto& [k, v] : j["packages"].items()) {
-                m.packages[k] = v.get<std::string>();
+                if (v.is_object()) {
+                    // New nested shape: k is the provider name, v is name->version.
+                    for (auto& [name, ver] : v.items()) {
+                        m.packages[k][name] = ver.get<std::string>();
+                    }
+                } else if (v.is_string()) {
+                    // Legacy flat shape: k is the package name, v is the version.
+                    // Promote under "homebrew" for backward compatibility.
+                    m.packages["homebrew"][k] = v.get<std::string>();
+                }
             }
         }
 
-        if (j.contains("auto_deps") && j["auto_deps"].is_array()) {
-            for (auto& v : j["auto_deps"]) {
-                m.auto_deps.insert(v.get<std::string>());
+        if (j.contains("auto_deps")) {
+            const auto& ad = j["auto_deps"];
+            if (ad.is_object()) {
+                for (auto& [provider, deps] : ad.items()) {
+                    if (deps.is_array()) {
+                        for (auto& v : deps) {
+                            m.auto_deps[provider].insert(v.get<std::string>());
+                        }
+                    }
+                }
+            } else if (ad.is_array()) {
+                // Legacy flat shape: all entries are homebrew auto-deps.
+                for (auto& v : ad) {
+                    m.auto_deps["homebrew"].insert(v.get<std::string>());
+                }
             }
         }
 
@@ -150,8 +171,14 @@ void write_manifest(const fs::path& den_home, const std::string& env_path, const
     fs::create_directories(path.parent_path());
 
     json j;
-    j["packages"] = m.packages;
-    j["auto_deps"] = m.auto_deps;
+    j["packages"] = json::object();
+    for (const auto& [provider, pkgs] : m.packages) {
+        j["packages"][provider] = pkgs;
+    }
+    j["auto_deps"] = json::object();
+    for (const auto& [provider, deps] : m.auto_deps) {
+        j["auto_deps"][provider] = deps;
+    }
     if (m.origin) {
         j["origin"] = *m.origin;
     }
@@ -191,9 +218,15 @@ std::map<std::string, std::string> resolve(const fs::path& den_home, const std::
     }
 
     // Apply in reverse order (root first, then children override).
+    // Flatten across providers: returned map is name -> version. If the same
+    // package name appears under two providers within a single manifest, the
+    // last-iterated provider wins — name collisions across providers are a
+    // separate concern handled at install time.
     for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
-        for (const auto& [name, version] : it->packages) {
-            result[name] = version;
+        for (const auto& [provider, pkgs] : it->packages) {
+            for (const auto& [name, version] : pkgs) {
+                result[name] = version;
+            }
         }
     }
 

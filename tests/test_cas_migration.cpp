@@ -133,7 +133,7 @@ TEST_SUITE("cas_migration [T26]") {
         tmp.make_legacy_keg(store, "tree", "2.1.1", "tree-binary");
 
         Manifest m;
-        m.packages["tree"] = "2.1.1";
+        m.packages["homebrew"]["tree"] = "2.1.1";
         write_manifest(den_home, "/", m);
 
         migrate_to_cas(tmp.path, store, cas);

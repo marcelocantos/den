@@ -168,18 +168,21 @@ InstallResult HomebrewProvider::install(const Config& config, std::string_view n
     // Forward conflict check: does this package conflict with anything already
     // present? We use the active env's manifest as the authoritative "what's
     // installed" view, because the on-disk store is a shared Cellar (a package
-    // may sit there without being part of any env).
+    // may sit there without being part of any env). Conflicts are scoped to
+    // the Homebrew block — only Homebrew formulae declare conflicts_with, and
+    // colliding names across providers are a separate concern.
     auto active = active_env_path(config.den_home);
     auto manifest = read_manifest(config.den_home, active);
+    const auto& homebrew_pkgs = manifest.packages["homebrew"];
 
     for (const auto& conflict : pkg->conflicts_with) {
-        if (manifest.packages.count(conflict)) {
+        if (homebrew_pkgs.count(conflict)) {
             throw UserError("cannot install '" + name_str + "': conflicts with '" + conflict +
                             "' (already installed). Uninstall '" + conflict + "' first.");
         }
     }
     // Reverse conflict check.
-    for (const auto& [installed_name, _] : manifest.packages) {
+    for (const auto& [installed_name, _] : homebrew_pkgs) {
         const auto* installed_pkg = idx_->find(installed_name);
         if (!installed_pkg)
             continue;
