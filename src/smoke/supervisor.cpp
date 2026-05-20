@@ -1,18 +1,13 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// 🎯T61 — Quick smoke check: supervisor without launchctl
+// 🎯T33 / 🎯T61 — Quick smoke check: built-in supervisor without launchctl
 //
-// This compilation unit registers a smoke check that verifies den's built-in
-// supervisor is reachable and does not delegate to launchctl.  It is called
-// from the smoke runner when supervisor smoke checks are requested.
+// Verifies that den's services CLI is reachable AND that it never delegates
+// to launchctl. Also checks that the supervisor-specific subcommands
+// (status, logs) are present.
 //
-// UPSTREAM GAPS (as of 2026-05-17):
-//   T61 — The services CLI (src/cli/cli.cpp:876-980) is entirely backed by
-//          launchctl.  A built-in supervisor does not exist yet.  The check
-//          below succeeds vacuously (the services subcommand parses) and
-//          documents the expected shape once T61 lands.
-//   T33 — Restart policies not implemented.
+// Remaining gaps tracked elsewhere:
 //   T34 — Daemon socket API not implemented.
 //   T52 — Post-upgrade restart behaviour not implemented.
 
@@ -61,15 +56,18 @@ fs::path make_launchctl_spy(const fs::path& dir, const fs::path& log) {
     return spy;
 }
 
+bool subcommand_present(const std::string& out) {
+    return out.find("No such subcommand") == std::string::npos &&
+           out.find("No such command") == std::string::npos &&
+           out.find("requires a subcommand") == std::string::npos;
+}
+
 } // namespace
 
 SupervisorSmokeResult run_supervisor_smoke(const fs::path& den_binary,
                                            const fs::path& scratch_dir) {
     SupervisorSmokeResult result;
 
-    // -----------------------------------------------------------------------
-    // 1. `den services list` subcommand must parse without error.
-    // -----------------------------------------------------------------------
     fs::path spy_dir = scratch_dir / "spy-bin";
     fs::path invoc_log = scratch_dir / "launchctl-invocations.log";
     fs::path den_home = scratch_dir / "den-home";
@@ -82,49 +80,44 @@ SupervisorSmokeResult run_supervisor_smoke(const fs::path& den_binary,
     std::string path_env = spy_dir.string() + ":" + (real_path ? real_path : "/usr/bin:/bin");
     std::string prefix = den_home.string() + "/brew";
     std::string cellar = prefix + "/Cellar";
+    std::string env_prefix = "PATH=" + path_env + " DEN_HOME=" + den_home.string() +
+                             " HOMEBREW_PREFIX=" + prefix + " HOMEBREW_CELLAR=" + cellar + " ";
 
-    std::string list_cmd = "PATH=" + path_env + " DEN_HOME=" + den_home.string() +
-                           " HOMEBREW_PREFIX=" + prefix + " HOMEBREW_CELLAR=" + cellar + " " +
-                           den_binary.string() + " services list";
-    auto [rc, out] = shell(list_cmd);
+    auto invoke = [&](const std::string& args) {
+        return shell(env_prefix + den_binary.string() + " " + args);
+    };
 
-    bool no_parse_error = out.find("No such subcommand") == std::string::npos &&
-                          out.find("No such command") == std::string::npos;
-
+    // 1. `den services list` subcommand must parse without error.
+    auto [rc_list, out_list] = invoke("services list");
+    bool list_ok = subcommand_present(out_list);
     result.checks.push_back(
-        {"services list parses without error", no_parse_error, no_parse_error ? "" : out});
+        {"services list parses without error", list_ok, list_ok ? "" : out_list});
 
-    // -----------------------------------------------------------------------
-    // 2. launchctl spy must NOT have been invoked (T61 acceptance criterion).
-    //    EXPECTED FAILURE until T61 lands: the current implementation calls
-    //    launchctl, so this check will fail on macOS.
-    // -----------------------------------------------------------------------
+    // 2. launchctl spy must NOT have been invoked (🎯T61 acceptance).
     bool no_launchctl = true;
     if (fs::exists(invoc_log)) {
         std::ifstream f(invoc_log);
         std::string content((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
         no_launchctl = content.empty();
     }
-
-    // We report but do not hard-fail: the upstream T61 work must fix this.
     if (!no_launchctl) {
         SPDLOG_WARN("supervisor smoke: launchctl was invoked by 'den services list' — "
                     "T61 requires a built-in supervisor with no launchctl calls");
     }
     result.checks.push_back(
-        {"services list does not invoke launchctl (T61)", no_launchctl,
+        {"services list does not invoke launchctl (🎯T61)", no_launchctl,
          no_launchctl ? "" : "launchctl was invoked; see " + invoc_log.string()});
 
-    // -----------------------------------------------------------------------
-    // 3. Supervisor-specific subcommands (status, logs) — expected absent.
-    //    Documented here as the target shape for T61.
-    // -----------------------------------------------------------------------
-    // T61 requires `den services status <name>` and `den services logs <name>`.
-    // These subcommands do not exist yet. We record this as a known gap.
-    SPDLOG_INFO("supervisor smoke: NOTE — 'den services status' and 'den services logs' "
-                "are not yet implemented (T61 upstream gap)");
-    result.checks.push_back({"services status/logs subcommands present (T61 upstream gap)", false,
-                             "Not implemented yet; blocked on T61"});
+    // 3. Supervisor-specific subcommands must exist.
+    auto [rc_status, out_status] = invoke("services status nonexistent");
+    bool status_present = subcommand_present(out_status);
+    result.checks.push_back({"services status subcommand present (🎯T61)", status_present,
+                             status_present ? "" : out_status});
+
+    auto [rc_logs, out_logs] = invoke("services logs nonexistent");
+    bool logs_present = subcommand_present(out_logs);
+    result.checks.push_back(
+        {"services logs subcommand present (🎯T61)", logs_present, logs_present ? "" : out_logs});
 
     // Aggregate.
     result.all_passed = true;
