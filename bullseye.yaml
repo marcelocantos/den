@@ -457,9 +457,10 @@ targets:
     discovered: 2026-04-09
   T33:
     name: Built-in process supervisor
-    status: identified
+    status: achieved
     value: 8.0
     cost: 13.0
+    actual_cost: 13.0
     acceptance:
     - A `src/supervisor/` module manages per-service child processes via fork/exec — no `launchctl`, `system()`, or shell-out path remains in `src/cli/cli.cpp` services subcommands.
     - 'Per-service state lives under `~/.den/services/<name>/`: `pid` (service PID), `sup.pid` (supervisor PID), `log` (combined stdout+stderr), and a small JSON state file with start time, exit count, and restart policy.'
@@ -477,6 +478,7 @@ targets:
     context: 'Replace the launchctl-based service management (T16) with a built-in process supervisor in den itself. No external dependency — one binary does the lot.  **Phase 1 (minimal viable supervisor):** - Fork/exec service binary as a child process - PID tracking in `~/.den/services/<name>/pid` - stdout/stderr capture to `~/.den/services/<name>/log` - `den services stop` sends SIGTERM, waits (configurable timeout), then SIGKILL - `den services list` checks live PIDs, shows uptime - `den services logs <name> [-f]` tails/follows the log - Environment-aware: services inherit the active den environment  **Phase 2 (robustness):** - Restart policies: `always`, `on-failure`, `never` (default: never) - Configurable restart backoff (exponential with jitter) - Health checks: TCP port open, HTTP endpoint, custom command - Graceful shutdown ordering (stop dependents before dependencies) - Log rotation (size-based, configurable retention)  **Phase 3 (advanced):** - `den services status` with resource usage (RSS, CPU) - Per-environment services (`/ml` gets its own postgres instance) - Service groups (`den services start dev-stack`) - `den daemon` as a long-lived background process that manages both services and background upgrades (T13), started on first use or at login via a single launchd bootstrap job  The den daemon is the only thing that touches launchd — everything else is supervised directly by den.'
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-05-20
   T34:
     name: Daemon socket API
     status: identified
