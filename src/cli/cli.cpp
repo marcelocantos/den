@@ -22,6 +22,7 @@
 #include "../settings/settings.h"
 #include "../smoke/runner.h"
 #include "../store/store.h"
+#include "../supervisor/supervisor.h"
 
 #include <CLI11.hpp>
 #include <nlohmann/json.hpp>
@@ -91,6 +92,8 @@ struct Cli::M {
 
     // services
     std::vector<std::string> service_names;
+    bool services_logs_follow = false;
+    uint32_t services_stop_timeout = 10;
 
     // smoke
     std::string smoke_defs;
@@ -942,115 +945,134 @@ void Cli::M::setup() {
         }
     });
 
-    // --- services ---
+    // --- services (🎯T33 / 🎯T61: built-in supervisor, no launchctl) ---
     auto* services = app.add_subcommand("services", "Manage package services");
     services->require_subcommand(1);
 
+    auto fmt_uptime = [](uint64_t now, std::optional<uint64_t> start) -> std::string {
+        if (!start)
+            return "-";
+        if (now < *start)
+            return "0s";
+        uint64_t s = now - *start;
+        std::ostringstream o;
+        if (s >= 86400)
+            o << (s / 86400) << "d";
+        else if (s >= 3600)
+            o << (s / 3600) << "h";
+        else if (s >= 60)
+            o << (s / 60) << "m";
+        else
+            o << s << "s";
+        return o.str();
+    };
+
     auto* svc_list = services->add_subcommand("list", "List running services");
-    svc_list->callback([] {
-#ifndef __APPLE__
-        SPDLOG_ERROR("services are only supported on macOS (launchd)");
-        return;
-#else
+    svc_list->callback([fmt_uptime] {
         auto cfg = Config::detect();
-        auto installed = list_installed(cfg.store);
-        bool found = false;
-        for (const auto& pkg : installed) {
-            // Scan for .plist files in the package.
-            // Check for plist files in standard locations.
-            for (const auto& candidate :
-                 {pkg.path / (std::string("homebrew.mxcl.") + pkg.name + ".plist"),
-                  pkg.path / "share" / (pkg.name + ".plist")}) {
-                if (fs::exists(candidate)) {
-                    // Check if loaded.
-                    auto label = "homebrew.mxcl." + pkg.name;
-                    auto rc = std::system(("launchctl list " + label + " >/dev/null 2>&1").c_str());
-                    std::string status_str = (rc == 0) ? "running" : "stopped";
-                    std::cout << std::left << std::setw(30) << pkg.name << " " << status_str
-                              << "\n";
-                    found = true;
-                    break;
-                }
-            }
-        }
-        if (!found) {
+        auto entries = list_services(cfg);
+        if (entries.empty()) {
             std::cout << "No services found.\n";
+            return;
         }
-#endif
+        std::cout << std::left << std::setw(24) << "NAME" << std::setw(8) << "STATUS"
+                  << std::setw(10) << "PID" << std::setw(10) << "UPTIME" << "RESTART\n";
+        auto now = static_cast<uint64_t>(std::time(nullptr));
+        for (const auto& s : entries) {
+            std::cout << std::left << std::setw(24) << s.name << std::setw(8)
+                      << (s.running ? "running" : "stopped") << std::setw(10)
+                      << (s.svc_pid ? std::to_string(*s.svc_pid) : std::string("-"))
+                      << std::setw(10)
+                      << (s.running ? fmt_uptime(now, s.start_time) : std::string("-"))
+                      << restart_policy_to_string(s.restart) << "\n";
+        }
     });
 
     auto* svc_start = services->add_subcommand("start", "Start services");
-    svc_start->add_option("names", service_names, "Service names");
+    svc_start->add_option("names", service_names, "Service names")->required();
     svc_start->callback([this] {
-#ifndef __APPLE__
-        SPDLOG_ERROR("services are only supported on macOS (launchd)");
-#else
+        auto cfg = Config::detect();
         for (const auto& name : service_names) {
-            auto label = "homebrew.mxcl." + name;
-            auto cfg = Config::detect();
-            // Find the plist in the store.
-            auto installed = list_installed(cfg.store);
-            bool found = false;
-            for (const auto& pkg : installed) {
-                if (pkg.name != name)
-                    continue;
-                auto plist = pkg.path / std::string(label + ".plist");
-                if (fs::exists(plist)) {
-                    auto home = fs::path(std::getenv("HOME"));
-                    auto dest = home / "Library" / "LaunchAgents" / (label + ".plist");
-                    fs::copy_file(plist, dest, fs::copy_options::overwrite_existing);
-                    std::system(("launchctl load -w " + dest.string()).c_str());
-                    std::cout << "Started " << name << "\n";
-                    found = true;
-                }
-                break;
+            auto spec = resolve_service_spec(cfg, name);
+            if (!spec) {
+                SPDLOG_ERROR("no service spec for '{}' (looked for spec.json and homebrew plist)",
+                             name);
+                continue;
             }
-            if (!found) {
-                SPDLOG_ERROR("no service plist found for '{}'", name);
+            if (start_service(cfg, *spec)) {
+                std::cout << "Started " << name << "\n";
+            } else {
+                SPDLOG_ERROR("failed to start '{}'", name);
             }
         }
-#endif
     });
 
     auto* svc_stop = services->add_subcommand("stop", "Stop services");
-    svc_stop->add_option("names", service_names, "Service names");
+    svc_stop->add_option("names", service_names, "Service names")->required();
+    svc_stop->add_option("--timeout", services_stop_timeout,
+                         "Seconds to wait for graceful exit before SIGKILL (default 10)");
     svc_stop->callback([this] {
-#ifndef __APPLE__
-        SPDLOG_ERROR("services are only supported on macOS (launchd)");
-#else
-        for (const auto& name : service_names) {
-            auto label = "homebrew.mxcl." + name;
-            auto home = fs::path(std::getenv("HOME"));
-            auto plist = home / "Library" / "LaunchAgents" / (label + ".plist");
-            if (fs::exists(plist)) {
-                std::system(("launchctl unload -w " + plist.string()).c_str());
-                std::cout << "Stopped " << name << "\n";
-            } else {
-                SPDLOG_ERROR("service '{}' is not loaded", name);
-            }
-        }
-#endif
+        auto cfg = Config::detect();
+        auto stopped = stop_services_ordered(cfg, service_names, services_stop_timeout);
+        for (const auto& name : stopped)
+            std::cout << "Stopped " << name << "\n";
     });
 
     auto* svc_restart = services->add_subcommand("restart", "Restart services");
-    svc_restart->add_option("names", service_names, "Service names");
+    svc_restart->add_option("names", service_names, "Service names")->required();
     svc_restart->callback([this] {
-#ifndef __APPLE__
-        SPDLOG_ERROR("services are only supported on macOS (launchd)");
-#else
-        for (const auto& name : service_names) {
-            auto label = "homebrew.mxcl." + name;
-            auto home = fs::path(std::getenv("HOME"));
-            auto plist = home / "Library" / "LaunchAgents" / (label + ".plist");
-            if (fs::exists(plist)) {
-                std::system(("launchctl unload -w " + plist.string()).c_str());
-                std::system(("launchctl load -w " + plist.string()).c_str());
-                std::cout << "Restarted " << name << "\n";
-            } else {
-                SPDLOG_ERROR("service '{}' is not loaded", name);
+        auto cfg = Config::detect();
+        // Stop in dependency order, then start in reverse (dependencies first).
+        auto stop_order = stop_services_ordered(cfg, service_names, services_stop_timeout);
+        std::vector<std::string> start_order(stop_order.rbegin(), stop_order.rend());
+        for (const auto& name : start_order) {
+            auto spec = resolve_service_spec(cfg, name);
+            if (!spec) {
+                SPDLOG_ERROR("no service spec for '{}'", name);
+                continue;
             }
+            if (start_service(cfg, *spec))
+                std::cout << "Restarted " << name << "\n";
+            else
+                SPDLOG_ERROR("failed to restart '{}'", name);
         }
-#endif
+    });
+
+    auto* svc_status = services->add_subcommand("status", "Show status of a service");
+    svc_status->add_option("name", service_names, "Service name")->required();
+    svc_status->callback([this, fmt_uptime] {
+        auto cfg = Config::detect();
+        auto now = static_cast<uint64_t>(std::time(nullptr));
+        for (const auto& name : service_names) {
+            auto s = service_status(cfg, name);
+            if (!s) {
+                SPDLOG_ERROR("unknown service '{}'", name);
+                continue;
+            }
+            std::cout << "name:     " << s->name << "\n";
+            std::cout << "status:   " << (s->running ? "running" : "stopped") << "\n";
+            std::cout << "pid:      " << (s->svc_pid ? std::to_string(*s->svc_pid) : "-") << "\n";
+            std::cout << "sup-pid:  " << (s->sup_pid ? std::to_string(*s->sup_pid) : "-") << "\n";
+            std::cout << "uptime:   "
+                      << (s->running ? fmt_uptime(now, s->start_time) : std::string("-")) << "\n";
+            std::cout << "restart:  " << restart_policy_to_string(s->restart) << "\n";
+            std::cout << "restarts: " << s->restart_count << "\n";
+            std::cout << "last-exit:" << (s->last_exit ? std::to_string(*s->last_exit) : "-")
+                      << "\n";
+        }
+    });
+
+    auto* svc_logs = services->add_subcommand("logs", "Show service logs");
+    svc_logs->add_option("name", service_names, "Service name")->required();
+    svc_logs->add_flag("-f,--follow", services_logs_follow, "Follow log output");
+    svc_logs->callback([this] {
+        auto cfg = Config::detect();
+        for (const auto& name : service_names) {
+            if (services_logs_follow)
+                follow_service_log(cfg, name);
+            else
+                cat_service_log(cfg, name);
+        }
     });
 
     // --- self-update ---
