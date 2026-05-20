@@ -461,7 +461,19 @@ targets:
     value: 8.0
     cost: 13.0
     acceptance:
-    - TODO
+    - A `src/supervisor/` module manages per-service child processes via fork/exec — no `launchctl`, `system()`, or shell-out path remains in `src/cli/cli.cpp` services subcommands.
+    - 'Per-service state lives under `~/.den/services/<name>/`: `pid` (service PID), `sup.pid` (supervisor PID), `log` (combined stdout+stderr), and a small JSON state file with start time, exit count, and restart policy.'
+    - '`den services start <name> [...]` forks a long-lived supervisor that double-forks (or setsid) so it survives the `den` process exit, then execs the service binary with the active den environment''s PATH and env vars.'
+    - '`den services stop <name> [...]` sends SIGTERM to the supervisor, waits up to a configurable timeout (default 10s), then SIGKILL. Graceful: if multiple names are given and a declared dependency relation exists in the service''s plist/manifest, dependents are stopped first.'
+    - '`den services list` shows name, PID, uptime, status (running/stopped) by reading live PIDs from the per-service state. No launchctl in the path.'
+    - '`den services status <name>` prints PID, uptime, restart policy, last exit code, restart count.'
+    - '`den services logs <name> [-f]` tails the captured log; `-f` follows new lines.'
+    - 'Restart policies: `always` (always restart on exit), `on-failure` (restart only on non-zero exit), `never` (default; no restart). Policy is per-service, read from the service''s plist/manifest with a fallback to `never`. A short backoff (e.g. 1s initial, exponential up to 60s) prevents tight crash loops.'
+    - 'Graceful shutdown ordering: when stopping multiple services in one invocation, dependents are stopped before their dependencies. Dependency relations come from the service plist or a sibling manifest file.'
+    - All T61-tagged tests in `tests/test_supervisor_e2e.cpp` (start without launchctl, status reports PID+uptime, list shows PID column, stop terminates gracefully, logs tail) pass without `skip(true)`.
+    - All T33-tagged tests in `tests/test_supervisor_e2e.cpp` (restart policy always / on-failure / never, graceful shutdown ordering) pass without `skip(true)`.
+    - '`src/smoke/supervisor.cpp` reports a fully passing supervisor smoke without the `UPSTREAM GAPS` notes for T33/T61; remaining T34/T52 gaps stay as recorded.'
+    - '`make bullseye` is green (configure / build / tests / format / clean).'
     context: 'Replace the launchctl-based service management (T16) with a built-in process supervisor in den itself. No external dependency — one binary does the lot.  **Phase 1 (minimal viable supervisor):** - Fork/exec service binary as a child process - PID tracking in `~/.den/services/<name>/pid` - stdout/stderr capture to `~/.den/services/<name>/log` - `den services stop` sends SIGTERM, waits (configurable timeout), then SIGKILL - `den services list` checks live PIDs, shows uptime - `den services logs <name> [-f]` tails/follows the log - Environment-aware: services inherit the active den environment  **Phase 2 (robustness):** - Restart policies: `always`, `on-failure`, `never` (default: never) - Configurable restart backoff (exponential with jitter) - Health checks: TCP port open, HTTP endpoint, custom command - Graceful shutdown ordering (stop dependents before dependencies) - Log rotation (size-based, configurable retention)  **Phase 3 (advanced):** - `den services status` with resource usage (RSS, CPU) - Per-environment services (`/ml` gets its own postgres instance) - Service groups (`den services start dev-stack`) - `den daemon` as a long-lived background process that manages both services and background upgrades (T13), started on first use or at login via a single launchd bootstrap job  The den daemon is the only thing that touches launchd — everything else is supervised directly by den.'
     origin: manual
     discovered: 2026-04-09
