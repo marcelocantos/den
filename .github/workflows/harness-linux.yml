@@ -1,0 +1,48 @@
+name: Harness Linux
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  harness-linux:
+    name: Harness Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev libarchive-dev
+
+      - name: Configure and build
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+
+      - name: Verify den binary
+        run: ./build/den --version
+
+      - name: Run Linux harness
+        timeout-minutes: 30
+        run: tests/harness/linux/run.sh --binary build/den
+
+      - name: Upload harness logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-linux-logs-${{ github.run_id }}
+          path: tests/harness/linux/logs/
