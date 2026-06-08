@@ -15,7 +15,10 @@
 # Optional:
 #   TEST_PKG  — package to exercise (default: jq)
 
-set -eu
+# Intentionally NOT `set -e`: each step does its own pass/fail accounting,
+# and a failing den invocation (e.g. exit 127 for a missing shared library)
+# should surface as a FAIL line, not silently abort the whole smoke run.
+set -u
 
 # ---------------------------------------------------------------------------
 # Guard rails
@@ -80,12 +83,14 @@ capture_den() {
 # Step 1: version
 # ---------------------------------------------------------------------------
 step_version() {
-    _out=$(capture_den --version 2>&1) || true
-    if [ -n "${_out}" ]; then
+    _out=$(capture_den --version 2>&1)
+    _rc=$?
+    if [ "${_rc}" -eq 0 ] && [ -n "${_out}" ]; then
         echo "  version output: ${_out}" >&2
         pass "version"
     else
-        fail "version" "den --version produced no output"
+        echo "  version output: ${_out}" >&2
+        fail "version" "den --version failed (rc=${_rc})"
     fi
 }
 
