@@ -11,7 +11,7 @@ Catch integration regressions before a release ships to users. The harness runs
 the same smoke set (`smoke.sh`) on every supported platform:
 
 - **Linux** — executed inside a Docker container (see `tests/harness/linux/`).
-- **macOS** — executed over SSH on a real macOS host (see `tests/harness/macos/`, T73.2 — not yet implemented).
+- **macOS** — executed over SSH on a real macOS host (see `tests/harness/macos/`).
 
 ## File layout
 
@@ -20,7 +20,7 @@ tests/harness/
 ├── README.md          — this file
 ├── smoke.sh           — shared POSIX smoke set (Linux + macOS)
 ├── linux/             — Docker harness (Makefile rule: make harness-linux)
-└── macos/             — SSH harness (future — T73.2)
+└── macos/             — SSH harness (Makefile rule: make harness-macos)
 ```
 
 ## Running locally (Linux)
@@ -34,6 +34,25 @@ make harness-linux
 This rule (defined in the root Makefile) builds a Docker image with the den
 binary baked in, mounts a temporary `DEN_HOME`, and runs `smoke.sh` inside the
 container. The exit code mirrors the smoke-set result.
+
+## Running locally (macOS)
+
+One-time setup is required (SSH alias, Remote Login, key-based auth, clamshell-sleep fix).
+See `tests/harness/macos/README.md` for step-by-step instructions.
+
+Once set up, build den for your current platform and then:
+
+```sh
+make harness-macos
+```
+
+This rule (defined in the root Makefile) ssh's into the configured test host, uploads the
+binary and `smoke.sh`, runs the smoke set inside a temporary `DEN_HOME` sandbox under
+`/tmp/den-harness/`, and reports pass/fail/skip counts.
+
+**This harness is not in CI.** The test host is a dev-controlled physical machine, not a
+CI runner. Runs are triggered manually via `make harness-macos` (or by calling
+`tests/harness/macos/run.sh` directly).
 
 ## Smoke-set contract
 
@@ -66,22 +85,23 @@ step cleans up its own preconditions before acting (e.g., `env_create` removes
 
 ## The smoke set is canonical
 
-The 13-step smoke set in `smoke.sh` is the **authoritative list** of what the
+The 14-step smoke set in `smoke.sh` is the **authoritative list** of what the
 harness expects den to support:
 
 1. `version` — `den --version` reports a non-empty version string.
-2. `help` — `den --help` mentions `install` and `doctor`.
+2. `help` — `den --help` exits 0 and produces non-empty output.
 3. `doctor` — `den doctor` runs and produces output (non-zero exit allowed while doctor is partial).
-4. `info` — `den info $TEST_PKG` returns package metadata.
-5. `install` — `den install $TEST_PKG` succeeds.
-6. `installed_pkg_runs` — the installed binary (e.g. `jq --version`) runs correctly.
-7. `env_create` — `den env create harness-test` creates a new environment.
-8. `env_list` — `den env list` includes `harness-test`.
-9. `env_use` — `den env use harness-test` switches the active environment.
-10. `env_destroy` — `den env remove harness-test` tears the environment down.
-11. `uninstall` — `den uninstall $TEST_PKG` removes the package.
-12. `state_clean_post_uninstall` — no binary remains under `$DEN_HOME/envs/*/bin/` after uninstall.
-13. `selfupdate_check` — `den self-update --check` probes for an update without applying it (currently SKIP — no dry-run mode exists).
+4. `update` — `den update` populates the package index (required before info/install on a fresh sandbox).
+5. `info` — `den info $TEST_PKG` returns package metadata.
+6. `install` — `den install $TEST_PKG` succeeds **and** the package binary appears under `$DEN_HOME`.
+7. `installed_pkg_runs` — the installed binary (e.g. `jq --version`) runs correctly.
+8. `env_create` — `den env create harness-test` creates a new environment.
+9. `env_list` — `den env list` includes `harness-test`.
+10. `env_use` — `den env use harness-test` switches the active environment.
+11. `env_destroy` — `den env remove harness-test` tears the environment down.
+12. `uninstall` — `den uninstall $TEST_PKG` removes the package.
+13. `state_clean_post_uninstall` — no binary remains under `$DEN_HOME/envs/*/bin/` after uninstall (currently SKIP — `den uninstall` leaves env symlinks behind, real den bug).
+14. `selfupdate_check` — `den self-update --check` probes for an update without applying it (currently SKIP — no dry-run mode exists).
 
 **Gaps are SKIPs, not omissions.** When a den capability is not yet implemented,
 the corresponding step emits `SKIP:` with a clear reason. A `SKIP` is a tracked
