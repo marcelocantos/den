@@ -17,6 +17,14 @@ RUN useradd -m -s /bin/bash tester \
  && echo 'tester ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/tester \
  && chmod 0440 /etc/sudoers.d/tester
 
+# den installs Linux bottles into the Linuxbrew prefix.  The bottles are not
+# relocatable — they expect exactly /home/linuxbrew/.linuxbrew/Cellar/...
+# Create the prefix up-front, owned by tester, so the smoke install works in
+# a clean container without needing a full Linuxbrew install.
+RUN install -d -o tester -g tester \
+        /home/linuxbrew/.linuxbrew/Cellar \
+        /home/linuxbrew/.linuxbrew/Caskroom
+
 USER tester
 WORKDIR /home/tester
 
