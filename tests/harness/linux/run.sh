@@ -220,11 +220,15 @@ FAIL=0
 SKIP=0
 
 if [[ -f "$LOG" ]]; then
+    # NB: arithmetic `(( expr ))` returns exit code 1 when expr evaluates to
+    # 0 (e.g. `(( PASS++ ))` on the first hit, when PASS was 0).  Under
+    # `set -e` that aborts the script before the summary prints — even
+    # though smoke itself was green.  Use plain assignment to dodge it.
     while IFS= read -r line; do
         case "$line" in
-            PASS:*) (( PASS++ )); (( TOTAL++ )) ;;
-            FAIL:*) (( FAIL++ )); (( TOTAL++ )) ;;
-            SKIP:*) (( SKIP++ )); (( TOTAL++ )) ;;
+            PASS:*) PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1)) ;;
+            FAIL:*) FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1)) ;;
+            SKIP:*) SKIP=$((SKIP + 1)); TOTAL=$((TOTAL + 1)) ;;
         esac
     done < "$LOG"
 fi
