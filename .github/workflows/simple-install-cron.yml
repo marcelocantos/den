@@ -99,7 +99,7 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         if: steps.override_check.outputs.skip != 'true'
         with:
           submodules: recursive
@@ -194,7 +194,7 @@ jobs:
 
       - name: Upload build log on failure
         if: failure() && steps.override_check.outputs.skip != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: build-log-${{ matrix.formula }}-${{ matrix.os }}
           path: |
