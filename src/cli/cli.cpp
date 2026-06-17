@@ -99,6 +99,9 @@ struct Cli::M {
     std::string smoke_defs;
     int smoke_max = 0;
 
+    // self-update
+    bool selfupdate_check = false;
+
     // which
     std::string which_file;
 
@@ -1077,8 +1080,24 @@ void Cli::M::setup() {
 
     // --- self-update ---
     auto* selfupdate = app.add_subcommand("self-update", "Update den to the latest version");
-    selfupdate->callback([] {
+    selfupdate->add_flag("--check,--dry-run", selfupdate_check,
+                         "Print the latest available version without downloading or applying it");
+    selfupdate->callback([this] {
         auto cfg = Config::detect();
+        if (selfupdate_check) {
+            auto latest = resolve_latest_version();
+            if (latest.empty()) {
+                std::cout << "Unable to determine the latest version.\n";
+                return;
+            }
+            if (latest == DEN_VERSION) {
+                std::cout << "den " << DEN_VERSION << " is the latest version.\n";
+            } else {
+                std::cout << "den " << latest << " is available (current: " << DEN_VERSION
+                          << ").\n";
+            }
+            return;
+        }
         auto info = check_for_update(cfg);
         if (!info) {
             std::cout << "den " << DEN_VERSION << " is up to date.\n";

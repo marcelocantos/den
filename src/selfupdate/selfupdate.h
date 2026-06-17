@@ -16,6 +16,12 @@ struct UpdateInfo {
     std::string checksum_url;   // .sha256 URL
 };
 
+/// Fetch the latest available release version from GitHub Releases.
+/// Returns empty string if unable to determine (network error, API oddity, etc.).
+/// Unlike check_for_update, this always returns the version — it does NOT compare
+/// against DEN_VERSION, making it suitable for --check / --dry-run queries.
+std::string resolve_latest_version();
+
 /// Check GitHub Releases for a newer version of den.
 /// Returns nullopt if already up to date or unable to determine.
 std::optional<UpdateInfo> check_for_update(const Config& cfg);

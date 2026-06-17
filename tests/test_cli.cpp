@@ -270,7 +270,40 @@ TEST_SUITE("cli::integration") {
     }
 
     // -----------------------------------------------------------------------
-    // 15. doctor — runs without crashing, reports findings or passes
+    // 15. self-update --check — version probe: no download, no binary replacement
+    // -----------------------------------------------------------------------
+    TEST_CASE("self-update --check prints a version line without downloading") {
+        // This test contacts the GitHub Releases API.  If the network is
+        // unavailable the command may print "Unable to determine the latest
+        // version." — that is still a valid, non-crashing result.
+        const auto out = run_den_fresh("self-update --check");
+
+        // Must contain "den" on the one-line output.
+        CHECK(out.find("den") != std::string::npos);
+
+        // Must match one of:
+        //   "den X.Y.Z is the latest version."
+        //   "den X.Y.Z is available (current: ...)"
+        //   "Unable to determine the latest version."  (network absent)
+        const bool up_to_date = out.find("is the latest version") != std::string::npos;
+        const bool update_avail = out.find("is available") != std::string::npos;
+        const bool no_network = out.find("Unable to determine") != std::string::npos;
+        CHECK((up_to_date || update_avail || no_network));
+
+        // Must NOT have started a download.
+        CHECK(out.find("Downloading") == std::string::npos);
+    }
+
+    TEST_CASE("self-update --dry-run is accepted as an alias for --check") {
+        // --dry-run is an alias for --check.  Verify it is parsed without error
+        // (CLI11 would exit non-zero and emit "unknown option" otherwise).
+        const auto out = run_den_fresh("self-update --dry-run");
+        CHECK(out.find("unknown option") == std::string::npos);
+        CHECK(out.find("Downloading") == std::string::npos);
+    }
+
+    // -----------------------------------------------------------------------
+    // 16. doctor — runs without crashing, reports findings or passes
     // -----------------------------------------------------------------------
     TEST_CASE("doctor runs and produces a summary") {
         const auto out = run_den_fresh("doctor");

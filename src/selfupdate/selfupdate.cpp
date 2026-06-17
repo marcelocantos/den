@@ -60,6 +60,28 @@ fs::path self_exe() {
 
 } // namespace
 
+std::string resolve_latest_version() {
+    std::string url = "https://api.github.com/repos/marcelocantos/den/releases/latest";
+
+    SPDLOG_INFO("checking for latest version...");
+    std::string response;
+    try {
+        response = fetch_url(url);
+    } catch (const std::exception& e) {
+        SPDLOG_WARN("failed to fetch latest version: {}", e.what());
+        return {};
+    }
+
+    auto j = nlohmann::json::parse(response, nullptr, false);
+    if (j.is_discarded() || !j.contains("tag_name")) {
+        SPDLOG_WARN("unexpected response from GitHub releases API");
+        return {};
+    }
+
+    std::string tag = j["tag_name"].get<std::string>();
+    return tag.starts_with("v") ? tag.substr(1) : tag;
+}
+
 std::optional<UpdateInfo> check_for_update(const Config& cfg) {
     std::string url = "https://api.github.com/repos/marcelocantos/den/releases/latest";
 
