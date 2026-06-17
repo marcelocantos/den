@@ -126,8 +126,20 @@ bool install_one(const Config& config, const Package& pkg) {
     if (fs::exists(dest)) {
         fs::remove_all(dest);
     }
-    fs::create_directories(dest.parent_path());
-    fs::rename(inner, dest);
+    try {
+        fs::create_directories(dest.parent_path());
+    } catch (const fs::filesystem_error& e) {
+        throw UserError("cannot create Cellar directory '" + dest.parent_path().string() +
+                        "': " + e.code().message() +
+                        "\nCheck that '" + dest.parent_path().parent_path().string() +
+                        "' exists and is writable by the current user.");
+    }
+    try {
+        fs::rename(inner, dest);
+    } catch (const fs::filesystem_error& e) {
+        throw UserError("cannot install '" + pkg.name + "' to '" + dest.string() +
+                        "': " + e.code().message());
+    }
 
     if (archive.relocation != RelocationType::Portable) {
         std::cout << "==> Relocating " << pkg.name << "\n";

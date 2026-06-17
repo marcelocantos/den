@@ -1151,6 +1151,12 @@ int Cli::run(int argc, char** argv) {
         m->app.parse(argc, argv);
     } catch (const CLI::ParseError& e) {
         return m->app.exit(e);
+    } catch (const UserError& e) {
+        std::cerr << "error: " << e.what() << "\n";
+        return 1;
+    } catch (const std::exception& e) {
+        std::cerr << "fatal: " << e.what() << "\n";
+        return 1;
     }
 
     if (m->help_agent) {
