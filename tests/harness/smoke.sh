@@ -313,9 +313,6 @@ step_uninstall() {
 # ---------------------------------------------------------------------------
 # Step 12: state_clean_post_uninstall
 # ---------------------------------------------------------------------------
-# TODO(T73): den uninstall currently leaves the binary symlink under
-# envs/<env>/bin/.  Demoted to SKIP so the harness goes green; flip back to
-# an assertion once den uninstall cleans up.  Tracked separately.
 step_state_clean_post_uninstall() {
     _found=0
     for _candidate in "${DEN_HOME}/envs/"*/bin/"${TEST_PKG}"; do
@@ -327,8 +324,7 @@ step_state_clean_post_uninstall() {
     if [ "${_found}" -eq 0 ]; then
         pass "state_clean_post_uninstall"
     else
-        # When the den bug is fixed, change this `skip` to `fail`.
-        skip "state_clean_post_uninstall" "den uninstall leaves env symlinks behind (real den bug — see TODO above)"
+        fail "state_clean_post_uninstall" "${TEST_PKG} binary still exists under \${DEN_HOME}/envs/ after uninstall"
     fi
 }
 
@@ -336,12 +332,22 @@ step_state_clean_post_uninstall() {
 # Step 13: selfupdate_check
 # ---------------------------------------------------------------------------
 step_selfupdate_check() {
-    # 'den self-update' applies the update immediately — there is no --check or
-    # --dry-run flag in the current implementation.  Skip until a safe check
-    # mode is added.
-    # TODO(T73): add 'den self-update --check' (dry-run mode) so harness can
-    #            probe for updates without replacing the binary under test.
-    skip "selfupdate_check" "den self-update has no --check/--dry-run mode (would replace running binary)"
+    _out=$(capture_den self-update --check 2>&1)
+    _rc=$?
+    echo "${_out}" | while IFS= read -r _line; do
+        echo "  [self-update --check] ${_line}" >&2
+    done
+    if [ "${_rc}" -ne 0 ]; then
+        fail "selfupdate_check" "den self-update --check exited ${_rc}"
+        return
+    fi
+    # The --check path must NOT mention downloading or replacing — verifies
+    # it's a dry-run probe, not an actual update.
+    if echo "${_out}" | grep -qiE "download|replac"; then
+        fail "selfupdate_check" "den self-update --check appears to have applied an update"
+        return
+    fi
+    pass "selfupdate_check"
 }
 
 # ---------------------------------------------------------------------------
@@ -361,12 +367,12 @@ step_update
 step_info
 step_install
 step_installed_pkg_runs
+step_uninstall
+step_state_clean_post_uninstall
 step_env_create
 step_env_list
 step_env_use
 step_env_destroy
-step_uninstall
-step_state_clean_post_uninstall
 step_selfupdate_check
 
 echo "" >&2

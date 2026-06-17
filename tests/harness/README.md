@@ -95,13 +95,18 @@ harness expects den to support:
 5. `info` — `den info $TEST_PKG` returns package metadata.
 6. `install` — `den install $TEST_PKG` succeeds **and** the package binary appears under `$DEN_HOME`.
 7. `installed_pkg_runs` — the installed binary (e.g. `jq --version`) runs correctly.
-8. `env_create` — `den env create harness-test` creates a new environment.
-9. `env_list` — `den env list` includes `harness-test`.
-10. `env_use` — `den env use harness-test` switches the active environment.
-11. `env_destroy` — `den env remove harness-test` tears the environment down.
-12. `uninstall` — `den uninstall $TEST_PKG` removes the package.
-13. `state_clean_post_uninstall` — no binary remains under `$DEN_HOME/envs/*/bin/` after uninstall (currently SKIP — `den uninstall` leaves env symlinks behind, real den bug).
-14. `selfupdate_check` — `den self-update --check` probes for an update without applying it (currently SKIP — no dry-run mode exists).
+8. `uninstall` — `den uninstall $TEST_PKG` removes the package.
+9. `state_clean_post_uninstall` — no binary remains under `$DEN_HOME/envs/*/bin/` after uninstall.
+10. `env_create` — `den env create harness-test` creates a new environment.
+11. `env_list` — `den env list` includes `harness-test`.
+12. `env_use` — `den env use harness-test` switches the active environment.
+13. `env_destroy` — `den env remove harness-test` tears the environment down.
+14. `selfupdate_check` — `den self-update --check` probes for an update without applying it (must not download or replace the binary).
+
+Install/uninstall lifecycle (steps 6–9) runs before env creation/teardown
+(steps 10–13) so the package's symlinks are checked against the env they
+were installed into. Reordering creates a known false negative when the
+active env changes mid-lifecycle.
 
 **Gaps are SKIPs, not omissions.** When a den capability is not yet implemented,
 the corresponding step emits `SKIP:` with a clear reason. A `SKIP` is a tracked

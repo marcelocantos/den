@@ -181,6 +181,10 @@ void Cli::M::setup() {
         for (auto& [provider, names] : by_provider) {
             uninstall_packages(cfg, *provider, names);
         }
+        // Re-materialise the active environment so the symlinks for the
+        // removed packages are cleaned up (materialise's stale-cleanup pass
+        // does the actual unlink work).
+        materialise(cfg.den_home, cfg.store, active);
     });
 
     // --- upgrade ---

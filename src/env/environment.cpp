@@ -244,8 +244,36 @@ uint32_t materialise(const fs::path& den_home, const fs::path& store, const std:
                 break;
             }
             if (!unlinked) {
-                // Package is no longer on disk; just remove the linked-version
-                // record so it doesn't linger.
+                // Package is no longer on disk; the keg is gone so we can't
+                // call unlink_package (it would enumerate the keg's contents
+                // to know what to remove).  Instead, scan the env's subdirs
+                // for symlinks whose target sits under the Cellar/<pkg_name>/
+                // prefix and remove those — they're now-dangling pointers
+                // into the deleted keg.
+                auto pkg_prefix = (store / pkg_name).string();
+                for (const auto& subdir : {"bin", "opt", "lib", "include", "share"}) {
+                    auto sub = dir / subdir;
+                    std::error_code dir_ec;
+                    if (!fs::is_directory(sub, dir_ec)) {
+                        continue;
+                    }
+                    for (const auto& link_entry : fs::directory_iterator(sub, dir_ec)) {
+                        std::error_code sym_ec;
+                        if (!fs::is_symlink(link_entry, sym_ec)) {
+                            continue;
+                        }
+                        auto target = fs::read_symlink(link_entry, sym_ec);
+                        if (sym_ec) {
+                            continue;
+                        }
+                        if (target.string().starts_with(pkg_prefix)) {
+                            std::error_code rm_link_ec;
+                            fs::remove(link_entry.path(), rm_link_ec);
+                            SPDLOG_INFO("removed dangling symlink {} -> {}",
+                                        link_entry.path().string(), target.string());
+                        }
+                    }
+                }
                 std::error_code rm_ec;
                 fs::remove(entry.path(), rm_ec);
                 SPDLOG_INFO("cleared stale linked-version record for '{}' (store entry gone)",
