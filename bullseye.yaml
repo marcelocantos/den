@@ -1064,7 +1064,7 @@ targets:
     discovered: 2026-05-15
   T73:
     name: den publishes a fully-validated release candidate
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1081,9 +1081,10 @@ targets:
     - T73.3
     origin: manual
     discovered: 2026-06-07
+    achieved: 2026-06-20
   T73.1:
     name: Docker-based Linux test harness exercises a clean install end-to-end
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1095,9 +1096,10 @@ targets:
     context: Docker is the stateless half of the harness. Because the container is built fresh every run from a minimal base image, there is no risk of polluting the developer's machine and no risk of last-run state masking a regression. The Linux harness lands first because it is the easier of the two to get right — no SSH, no remote teardown, no clamshell-sleep gotchas — and the shared smoke set defined here is what T73.2 (macOS) then reuses. Tests live under `tests/harness/` to keep them visibly separate from the in-process unit/integration tests under `tests/test_*.cpp` (which run via ctest).
     origin: manual
     discovered: 2026-06-07
+    achieved: 2026-06-20
   T73.2:
     name: Remote macOS test harness exercises a clean install via SSH without bricking the test host
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1112,9 +1114,10 @@ targets:
     - T73.1
     origin: manual
     discovered: 2026-06-07
+    achieved: 2026-06-20
   T73.3:
     name: RC publishing pipeline gates GitHub prerelease on both harnesses passing
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1129,6 +1132,7 @@ targets:
     - T73.2
     origin: manual
     discovered: 2026-06-07
+    achieved: 2026-06-20
   T74:
     name: den v1.0 feature set is complete
     status: identified
