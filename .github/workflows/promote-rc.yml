@@ -1,0 +1,244 @@
+# Copyright 2026 Marcelo Cantos
+# SPDX-License-Identifier: Apache-2.0
+#
+# Promote a validated release candidate to a GA release.
+#
+# No rebuild — the exact binaries the harness validated are copied from the RC
+# release to the GA release. The RC release is left in place as a historical
+# record.
+#
+# Trigger: Actions → Promote RC → Run workflow
+#   rc_tag:                       the prerelease tag to promote, e.g. v0.12.0-rc.3
+#   confirm_macos_harness_passed: operator attestation (must be true)
+
+name: Promote RC
+
+on:
+  workflow_dispatch:
+    inputs:
+      rc_tag:
+        description: 'RC tag to promote (e.g. v0.12.0-rc.3)'
+        required: true
+      confirm_macos_harness_passed:
+        description: 'I have run "make harness-macos" and it passed (must be true)'
+        required: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    name: Promote ${{ github.event.inputs.rc_tag }} to GA
+    runs-on: ubuntu-latest
+
+    steps:
+      # -----------------------------------------------------------------------
+      # 1. Validate the RC tag format.
+      # -----------------------------------------------------------------------
+      - name: Validate RC tag format
+        run: |
+          RC_TAG="${{ github.event.inputs.rc_tag }}"
+          if ! echo "$RC_TAG" | grep -qE '^v[0-9]+\.[0-9]+\.0-rc\.[0-9]+$'; then
+            echo "ERROR: rc_tag '$RC_TAG' does not match ^v[0-9]+\.[0-9]+\.0-rc\.[0-9]+$" >&2
+            echo "       Expected format: v0.12.0-rc.3" >&2
+            exit 1
+          fi
+          # Derive GA tag by stripping the -rc.N suffix.
+          GA_TAG=$(echo "$RC_TAG" | sed 's/-rc\.[0-9]*$//')
+          echo "RC_TAG=$RC_TAG"   >> "$GITHUB_ENV"
+          echo "GA_TAG=$GA_TAG"   >> "$GITHUB_ENV"
+          echo "RC tag : $RC_TAG"
+          echo "GA tag : $GA_TAG"
+
+      # -----------------------------------------------------------------------
+      # 2. Enforce macOS harness attestation.
+      # -----------------------------------------------------------------------
+      - name: Check macOS harness attestation
+        run: |
+          if [ "${{ github.event.inputs.confirm_macos_harness_passed }}" != "true" ]; then
+            echo "ERROR: confirm_macos_harness_passed must be true." >&2
+            echo "" >&2
+            echo "  The macOS harness validates den on a real macOS host and cannot" >&2
+            echo "  run in CI. You must execute it manually before promotion:" >&2
+            echo "" >&2
+            echo "    make harness-macos" >&2
+            echo "" >&2
+            echo "  Only promote after the harness reports RESULT: PASS." >&2
+            exit 1
+          fi
+
+      # -----------------------------------------------------------------------
+      # 3. Verify the RC release exists and is still a prerelease.
+      # -----------------------------------------------------------------------
+      - name: Fetch RC release metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RC_TAG="${{ env.RC_TAG }}"
+
+          # Confirm the RC release exists.
+          if ! gh release view "$RC_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "ERROR: RC release $RC_TAG not found." >&2
+            exit 1
+          fi
+
+          # Confirm it is still marked prerelease (not already promoted).
+          is_prerelease=$(gh release view "$RC_TAG" --repo "$GITHUB_REPOSITORY" \
+            --json isPrerelease -q '.isPrerelease')
+          if [ "$is_prerelease" != "true" ]; then
+            echo "ERROR: $RC_TAG is not marked as a prerelease — it may already have been promoted." >&2
+            exit 1
+          fi
+
+          # Capture the commit SHA the RC tag points to.
+          rc_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/$RC_TAG" \
+            --jq '.object.sha' 2>/dev/null || echo "")
+          if [ -z "$rc_sha" ]; then
+            echo "ERROR: could not resolve commit SHA for tag $RC_TAG." >&2
+            exit 1
+          fi
+          echo "RC_SHA=$rc_sha" >> "$GITHUB_ENV"
+          echo "RC commit: $rc_sha"
+
+      # -----------------------------------------------------------------------
+      # 4. Check that the GA tag does not already exist.
+      # -----------------------------------------------------------------------
+      - name: Check GA tag does not exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          GA_TAG="${{ env.GA_TAG }}"
+          if gh release view "$GA_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "ERROR: GA release $GA_TAG already exists." >&2
+            echo "       $GA_TAG has already shipped; there is nothing to promote." >&2
+            exit 1
+          fi
+          if gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/$GA_TAG" >/dev/null 2>&1; then
+            echo "ERROR: GA tag $GA_TAG already exists (but no matching release)." >&2
+            exit 1
+          fi
+
+      # -----------------------------------------------------------------------
+      # 5. Download all assets from the RC release.
+      # -----------------------------------------------------------------------
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download RC assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RC_TAG="${{ env.RC_TAG }}"
+          mkdir -p rc-assets
+          gh release download "$RC_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir rc-assets \
+            --pattern '*.tar.gz' \
+            --pattern '*.sha256' \
+            --pattern '*-checksums.txt'
+
+          echo "Downloaded assets:"
+          ls -lh rc-assets/
+
+      # -----------------------------------------------------------------------
+      # 6. Generate GA release notes (diff against prior GA tag).
+      # -----------------------------------------------------------------------
+      - name: Generate GA release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          GA_TAG="${{ env.GA_TAG }}"
+          RC_TAG="${{ env.RC_TAG }}"
+          RC_SHA="${{ env.RC_SHA }}"
+
+          # Find the most recent GA tag before this release (exclude the new one and RCs).
+          prior=$(gh api "repos/$GITHUB_REPOSITORY/git/refs/tags" \
+            --jq '.[].ref | ltrimstr("refs/tags/")' 2>/dev/null \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | grep -v "^${GA_TAG}$" \
+            | sort -V | tail -1 || echo "")
+
+          {
+            echo "Promoted from ${RC_TAG}."
+            echo ""
+            if [ -n "$prior" ]; then
+              echo "## Changes since ${prior}"
+              echo ""
+              git log "${prior}..${RC_SHA}" --pretty=format:"- %s" --no-merges
+            else
+              echo "## Changes"
+              echo ""
+              git log "${RC_SHA}" --pretty=format:"- %s" --no-merges | head -50
+            fi
+            echo ""
+            echo ""
+            echo "## Assets"
+            echo ""
+            VERSION=$(echo "$GA_TAG" | sed 's/^v//')
+            echo "| File | Platform |"
+            echo "|------|----------|"
+            echo "| \`den-${VERSION}-darwin-aarch64.tar.gz\` | macOS arm64 |"
+            echo "| \`den-${VERSION}-linux-x86_64.tar.gz\` | Linux x86_64 |"
+            echo "| \`den-${VERSION}-linux-aarch64.tar.gz\` | Linux arm64 |"
+            echo "| \`den-${VERSION}-checksums.txt\` | SHA256 checksums |"
+            echo ""
+            echo "## Install"
+            echo ""
+            echo '```sh'
+            echo 'curl -fsSL https://raw.githubusercontent.com/marcelocantos/den/master/install.sh | sh'
+            echo '```'
+            echo ""
+            echo "Or pin a version:"
+            echo '```sh'
+            echo "DEN_VERSION=${VERSION} curl -fsSL https://raw.githubusercontent.com/marcelocantos/den/master/install.sh | sh"
+            echo '```'
+          } > ga-release-notes.md
+
+      # -----------------------------------------------------------------------
+      # 7. Create the GA tag on the RC commit and publish the GA release.
+      # -----------------------------------------------------------------------
+      - name: Create GA tag
+        run: |
+          git tag "${{ env.GA_TAG }}" "${{ env.RC_SHA }}"
+          git push origin "${{ env.GA_TAG }}"
+
+      - name: Create GA release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          GA_TAG="${{ env.GA_TAG }}"
+
+          gh release create "$GA_TAG" \
+            --target "${{ env.RC_SHA }}" \
+            --title "den ${GA_TAG}" \
+            --notes-file ga-release-notes.md \
+            rc-assets/*.tar.gz \
+            rc-assets/*.sha256 \
+            rc-assets/*-checksums.txt
+
+      # -----------------------------------------------------------------------
+      # 8. Print promotion summary.
+      #    RC release is intentionally left in place as a historical record.
+      # -----------------------------------------------------------------------
+      - name: Print summary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          GA_TAG="${{ env.GA_TAG }}"
+          RC_TAG="${{ env.RC_TAG }}"
+          REPO_URL="https://github.com/${{ github.repository }}"
+
+          echo ""
+          echo "============================================================"
+          echo "  PROMOTED: ${RC_TAG} → ${GA_TAG}"
+          echo "============================================================"
+          echo ""
+          echo "  GA release  : ${REPO_URL}/releases/tag/${GA_TAG}"
+          echo "  RC release  : ${REPO_URL}/releases/tag/${RC_TAG} (retained)"
+          echo "  Commit      : ${{ env.RC_SHA }}"
+          echo ""
+          echo "  The RC release is preserved as a historical record."
+          echo "  To remove it: gh release delete ${RC_TAG} --cleanup-tag"
+          echo "============================================================"

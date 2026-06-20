@@ -199,6 +199,89 @@ uint32_t materialise(const fs::path& den_home, const fs::path& store, const std:
         }
     }
 
+    // Stale-link cleanup: packages that were previously linked but are no
+    // longer in the manifest (e.g. after `den uninstall`) must be removed.
+    // Build the set of names currently in the manifest, then scan the
+    // linked-version records for any name that's no longer present.
+    std::set<std::string> manifest_names;
+    for (const auto& [pn, pkgs] : per_provider) {
+        for (const auto& [name, _] : pkgs) {
+            manifest_names.insert(name);
+        }
+    }
+
+    auto linked_dir = dir / ".den" / "linked";
+    std::error_code scan_ec;
+    if (fs::is_directory(linked_dir, scan_ec)) {
+        for (const auto& entry : fs::directory_iterator(linked_dir, scan_ec)) {
+            auto pkg_name = entry.path().filename().string();
+            if (manifest_names.count(pkg_name)) {
+                continue; // still in manifest, nothing to do
+            }
+            auto stale_version = linked_version(dir, pkg_name);
+            if (!stale_version) {
+                continue;
+            }
+            // Find which registered provider owns this package by checking
+            // which one produced an on-disk path for the recorded version.
+            // In practice this is almost always homebrew; we try all
+            // registered providers so the logic is provider-agnostic.
+            bool unlinked = false;
+            for (auto* prov : registry.all()) {
+                if (!prov) {
+                    continue;
+                }
+                auto pkg_path = prov->package_root(cfg, pkg_name, *stale_version);
+                if (!fs::exists(pkg_path)) {
+                    continue;
+                }
+                InstalledPackage stale{pkg_name, *stale_version, pkg_path};
+                auto exposed = prov->binary_paths(cfg, stale);
+                auto subdirs = subdirs_from(exposed);
+                unlink_package(pkg_path, dir, pkg_name, subdirs);
+                unlinked = true;
+                SPDLOG_INFO("unlinked stale package '{}' ({})", pkg_name, *stale_version);
+                break;
+            }
+            if (!unlinked) {
+                // Package is no longer on disk; the keg is gone so we can't
+                // call unlink_package (it would enumerate the keg's contents
+                // to know what to remove).  Instead, scan the env's subdirs
+                // for symlinks whose target sits under the Cellar/<pkg_name>/
+                // prefix and remove those — they're now-dangling pointers
+                // into the deleted keg.
+                auto pkg_prefix = (store / pkg_name).string();
+                for (const auto& subdir : {"bin", "opt", "lib", "include", "share"}) {
+                    auto sub = dir / subdir;
+                    std::error_code dir_ec;
+                    if (!fs::is_directory(sub, dir_ec)) {
+                        continue;
+                    }
+                    for (const auto& link_entry : fs::directory_iterator(sub, dir_ec)) {
+                        std::error_code sym_ec;
+                        if (!fs::is_symlink(link_entry, sym_ec)) {
+                            continue;
+                        }
+                        auto target = fs::read_symlink(link_entry, sym_ec);
+                        if (sym_ec) {
+                            continue;
+                        }
+                        if (target.string().starts_with(pkg_prefix)) {
+                            std::error_code rm_link_ec;
+                            fs::remove(link_entry.path(), rm_link_ec);
+                            SPDLOG_INFO("removed dangling symlink {} -> {}",
+                                        link_entry.path().string(), target.string());
+                        }
+                    }
+                }
+                std::error_code rm_ec;
+                fs::remove(entry.path(), rm_ec);
+                SPDLOG_INFO("cleared stale linked-version record for '{}' (store entry gone)",
+                            pkg_name);
+            }
+        }
+    }
+
     SPDLOG_INFO("materialised env '{}' ({} symlinks)", env_path, total);
     return total;
 }

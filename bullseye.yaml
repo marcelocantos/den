@@ -1062,6 +1062,132 @@ targets:
     context: Standalone checkpoint for T51 (safe automatic upgrades). Critical user-trust property — automatic upgrades that yank the rug out from under running processes will get den uninstalled fast.
     origin: manual
     discovered: 2026-05-15
+  T73:
+    name: den publishes a fully-validated release candidate
+    status: achieved
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - A release-candidate workflow tags `vX.Y.0-rc.N`, builds binaries for all primary platforms, and publishes a GitHub *prerelease* with checksums, release notes, and links to the harness logs of the run that produced it.
+    - Before publishing, the candidate is exercised end-to-end against an agreed smoke set on a clean Linux environment (via T73.1) and a clean macOS environment (via T73.2). Publishing is gated on both harnesses passing.
+    - The same smoke set runs against both platforms — Linux and macOS exercises are not allowed to diverge silently. Anything platform-specific is gated behind a documented skip in the harness, not a forked test.
+    - 'The smoke set covers, at minimum: install via `install.sh`, `den --version`, `den doctor`, install a fast tier-1 bottle, run the installed binary, create + use + tear down an environment, uninstall, `den selfupdate`, and verify clean state after uninstall.'
+    - Re-running the RC pipeline against the same master SHA produces identical artifacts (same checksums modulo timestamps) and identical harness pass/fail outcomes.
+    - An RC can be *promoted* to a full release without rebuilding — the promotion step only re-tags and flips the GitHub release out of prerelease.
+    context: 'Today releases ship via the `/release` skill, but there is no pre-publication validation beyond CI''s unit tests and a clean local build. For the prime-time question to have a credible answer, every release should be preceded by a release candidate that has been run against a real install on a clean Linux and clean macOS environment, and the published RC should be reproducible. This target shapes the whole testing-for-release infrastructure around a single publish gate: T73.1 (Docker harness) and T73.2 (remote macOS harness) feed evidence into T73.3 (the RC pipeline), which is the only thing that can publish a prerelease.'
+    depends_on:
+    - T73.1
+    - T73.2
+    - T73.3
+    origin: manual
+    discovered: 2026-06-07
+    achieved: 2026-06-20
+  T73.1:
+    name: Docker-based Linux test harness exercises a clean install end-to-end
+    status: achieved
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - A `tests/harness/linux/` directory contains a Dockerfile (Ubuntu LTS, x86_64 and arm64) with only the dependencies needed to install den via `install.sh` — no Homebrew, no pre-staged Cellar, no warm cache.
+    - A `run.sh` runner takes either a built den binary (path) or a GitHub release URL, builds the image fresh, runs the smoke set inside the container, captures stdout/stderr + relevant `~/.den/` state to a logs directory, and exits non-zero on any failure.
+    - The container is destroyed after each run; no Docker volume or bind-mount carries state across runs. Two consecutive runs against the same input produce the same pass/fail outcome.
+    - The smoke set is defined in one place (e.g. `tests/harness/smoke.yaml` or a shell library) and shared with T73.2 — the Linux harness does not maintain its own copy of the test list.
+    - Runs locally via `make harness-linux` and in CI via a GitHub Actions workflow. Both invocations use the same Dockerfile and runner.
+    context: Docker is the stateless half of the harness. Because the container is built fresh every run from a minimal base image, there is no risk of polluting the developer's machine and no risk of last-run state masking a regression. The Linux harness lands first because it is the easier of the two to get right — no SSH, no remote teardown, no clamshell-sleep gotchas — and the shared smoke set defined here is what T73.2 (macOS) then reuses. Tests live under `tests/harness/` to keep them visibly separate from the in-process unit/integration tests under `tests/test_*.cpp` (which run via ctest).
+    origin: manual
+    discovered: 2026-06-07
+    achieved: 2026-06-20
+  T73.2:
+    name: Remote macOS test harness exercises a clean install via SSH without bricking the test host
+    status: achieved
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - A stable SSH host alias for the test MacBook Pro is configured in `~/.ssh/config` (e.g. `Host den-test-mac`, `HostName 192.168.1.112`, `User marcelo`, key-based auth, no password). The alias is documented in `tests/harness/macos/README.md`.
+    - A `tests/harness/macos/run.sh` runner ssh-es to the test host, syncs a candidate binary (rsync or scp), runs the *same* smoke set as T73.1 against a sandboxed `DEN_HOME` and a sandboxed Cellar prefix so the primary `/opt/homebrew` and `~/.den` on the test host are never touched, captures logs back to the controlling machine, and exits non-zero on failure.
+    - 'Isolation is enforced: the harness sets `DEN_HOME=/tmp/den-harness/<run-id>` and a per-run Cellar prefix, refuses to run if either path collides with `~/.den` or `/opt/homebrew`, and refuses to run if the SSH target resolves to localhost or to the controlling machine''s hostname.'
+    - 'Teardown is idempotent: a `run.sh --reset` flag wipes the sandbox dirs on the test host and verifies no den processes are running. On test failure, the sandbox is *preserved* for inspection (cleaned only on success or explicit `--reset`).'
+    - A preflight step confirms the test host is reachable, that Remote Login is enabled, and that `pmset -b disablesleep` is set (so a closed-lid laptop still answers SSH). Preflight failure aborts before any smoke step runs.
+    - Runs locally via `make harness-macos`. Not gated on CI — the remote laptop is dev-controlled, not a CI runner. CI integration is deferred to a follow-up if/when self-hosted macOS runners become available.
+    context: 'The Linux harness can be reproduced inside Docker; macOS cannot, so we test on a *separate physical machine* and treat the primary workstation as untouchable. Prior SSH context (from the hms repo, March 2026): the test MacBook Pro lives at `192.168.1.112`, hostname `MacBookPro`, login user `marcelo`. Clamshell-sleep was the gotcha that took us out the first time — `sudo pmset -b disablesleep 1` is required (and was set in that session). No SSH alias exists yet; the existing `~/.ssh/config` has aliases for `george`, `catflap`, `concierge`, `learner`, `home`, `rpi`, but nothing for this MacBook. Adding `den-test-mac` is part of this target. Isolation via sandboxed `DEN_HOME` + a non-default Cellar prefix is the bricking-safety mechanism — we never write to the host''s real Homebrew Cellar or real `~/.den` even during the smoke install.'
+    depends_on:
+    - T73.1
+    origin: manual
+    discovered: 2026-06-07
+    achieved: 2026-06-20
+  T73.3:
+    name: RC publishing pipeline gates GitHub prerelease on both harnesses passing
+    status: achieved
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - A new `/rc` skill (or `--candidate` mode on `/release`) bumps the version with a `-rc.N` suffix, builds release artifacts in CI, runs T73.1 (Linux harness) and T73.2 (macOS harness) against the freshly built artifact, and only publishes a GitHub *prerelease* if both harnesses pass. A failing harness aborts before any tag is pushed or any release is created.
+    - The prerelease assets include the smoke-test logs from both harnesses (or a link to the CI run that produced them) and a SHA256 manifest covering every artifact.
+    - 'RC numbering: first candidate for `vX.Y.0` is `vX.Y.0-rc.1`; subsequent candidates increment N. The bumping logic is automatic, not manual.'
+    - 'A promotion path exists: `gh release edit vX.Y.0-rc.N --tag vX.Y.0 --prerelease=false` (or skill equivalent) flips an already-published RC into the final release without rebuilding binaries. The promotion is gated by the same harness pass status as the RC itself (no fresh harness run required).'
+    - 'Failure modes are surfaced clearly: if the harnesses pass but the upload fails, the pipeline does not silently leave a half-published release.'
+    context: The pipeline is the gate. Without it, T73.1 and T73.2 are tools the developer might or might not invoke before cutting a release. With it, *no RC reaches GitHub* without harness evidence attached. Pairs with the existing `/release` skill but does not replace it — a hotfix release path (`/release` direct) can still exist for emergencies; `/rc` is the standard path. Promotion-without-rebuild matters because the candidate that was tested is the artefact you ship; rebuilding between RC and GA reintroduces the question \"is what shipped the thing we tested?\"
+    depends_on:
+    - T73.1
+    - T73.2
+    origin: manual
+    discovered: 2026-06-07
+    achieved: 2026-06-20
+  T74:
+    name: den v1.0 feature set is complete
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - 'Every cluster verify needed for a credible Homebrew replacement is achieved: T60 (multi-provider end-to-end), T63 (SAT solver), T64 (trust model beyond brew), T65 (source builds + third-party tap parsing), T66 (host introspection / Cellar inspection), T67 (third-party tap management), T68 (perf parity vs brew), T71 (brew→den migration), T72 (defer-while-in-use upgrade safety).'
+    - A `docs/den-vs-brew.md` capability matrix documents den at parity or better on every line; any gap is explicit and links to a follow-up target.
+    - On a clean macOS or Linux machine, a user can install den via `install.sh`, install a representative basket of packages across providers (Homebrew bottle, Python, Node, Go, Cargo) without falling back to brew, compose environments, run `den migrate` against an existing brew install, and uninstall — all without manual workarounds.
+    - No v1-scope target remains in `identified` or `converging` status. (Post-v1 work — e.g. T62 semantic search, T69 content-addressed Cellar, T70 telemetry — can remain open and does not block this checkpoint.)
+    context: 'Single checkpoint that says "the v1 feature surface is built". Not a release target — just feature completeness. Distinct from T75 (validation event) and T76 (publication event) so the graph cleanly separates: features done → tests pass → shipped. Post-v1 capabilities (semantic search, content-addressed Cellar, telemetry, services-restart, advanced bindings) are deliberately excluded — they shape v1.x, not the v1.0 gate.'
+    depends_on:
+    - T60
+    - T63
+    - T64
+    - T65
+    - T66
+    - T67
+    - T68
+    - T71
+    - T72
+    origin: manual
+    discovered: 2026-06-07
+  T75:
+    name: v1.0 release candidate passes end-to-end validation
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - The T73 RC pipeline (T73.3) has been run against the feature-complete master and produced a `v1.0.0-rc.N` GitHub prerelease.
+    - The Linux (T73.1) and macOS (T73.2) harnesses both pass against the v1.0.0-rc.N artefacts — not against a local build, against the actual published prerelease binaries.
+    - 'The smoke set has been *expanded for v1* beyond the baseline T73 set to cover every feature in T74: at least one bottle install, one source build via a third-party tap, one Python package, one Node package, one Go package, one Cargo package, an SAT-solved multi-version coinstall scenario, a `den migrate` from a seeded brew install, a defer-while-in-use upgrade scenario, and the doctor/inspection commands.'
+    - Both harnesses run against the same SHA at least twice with identical outcomes — i.e. validation is reproducible, not lucky.
+    - 'At least one real-world soak: the validated RC is installed on a developer’s primary system (or the user’s) and used for ≥7 days as the sole package manager without falling back to brew. Soak issues either close before promotion or are explicitly accepted with a documented workaround.'
+    context: The validation *event*, not the validation *mechanism*. T73.1/T73.2 are the harnesses; this target is the assertion that those harnesses have been pointed at the v1 candidate and have come back green. The soak-on-a-real-system criterion exists because no smoke set catches everything — a week of real use will find what the harnesses miss.
+    depends_on:
+    - T74
+    - T73
+    origin: manual
+    discovered: 2026-06-07
+  T76:
+    name: den v1.0 is published as a stable release
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - A non-prerelease `v1.0.0` GitHub release is live, promoted from the validated `v1.0.0-rc.N` (no fresh build — same binaries, same checksums).
+    - '`install.sh` defaults to v1.0.0 on a clean run; an explicit `--rc` flag is required to install a prerelease.'
+    - Release notes link to the validation summary (harness logs, soak report) and the `docs/den-vs-brew.md` capability matrix.
+    - The README updates to claim v1.0 status — the “not yet a replacement for brew” hedge from earlier copy is removed.
+    context: Publication event. Separated from T75 (validation) because the RC could pass validation and the GA publish step could still go wrong (upload failure, tag conflict, install.sh regression). Keeping it distinct also models the human moment of "press the button" — you don't release v1 by accident, you release it because the validation passed and you chose to promote.
+    depends_on:
+    - T75
+    origin: manual
+    discovered: 2026-06-07
   T8:
     name: Bottle pouring
     status: achieved

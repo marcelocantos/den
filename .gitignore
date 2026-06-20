@@ -8,3 +8,9 @@
 *.swp
 *.swo
 .release-notes-*.md
+
+# Test harness logs (local runs only — never committed)
+tests/harness/*/logs/
+
+# Claude Code internal state (worktrees, transcripts)
+/.claude/

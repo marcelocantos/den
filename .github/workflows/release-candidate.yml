@@ -1,0 +1,371 @@
+# Copyright 2026 Marcelo Cantos
+# SPDX-License-Identifier: Apache-2.0
+#
+# Release-candidate publishing pipeline.
+#
+# Builds binaries across all platforms, runs the Linux harness, and
+# publishes a GitHub prerelease. macOS harness must be run manually
+# before promoting to GA (CI cannot exercise it).
+#
+# Trigger: Actions → Release Candidate → Run workflow
+#   version:   GA version this RC targets, e.g. 0.12.0 (no v, no -rc.N)
+#   rc_number: leave blank to auto-bump; set explicitly to retry a failed RC
+
+name: Release Candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'GA version this RC targets (e.g. 0.12.0 — no v prefix, no -rc.N suffix)'
+        required: true
+      rc_number:
+        description: 'RC number (blank = auto-bump; explicit = retry that N after fixes)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-candidate-${{ github.event.inputs.version }}
+  cancel-in-progress: false
+
+# ---------------------------------------------------------------------------
+# Job 1: Validate inputs and compute the RC tag.  Outputs the tag and the
+# prior GA/RC tag for release-notes diffing to downstream jobs.
+# ---------------------------------------------------------------------------
+jobs:
+  preflight:
+    name: Preflight checks
+    runs-on: ubuntu-latest
+
+    outputs:
+      rc_tag:   ${{ steps.compute.outputs.rc_tag }}
+      ga_tag:   ${{ steps.compute.outputs.ga_tag }}
+      prior_tag: ${{ steps.compute.outputs.prior_tag }}
+
+    steps:
+      - name: Validate version format
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.0$'; then
+            echo "ERROR: version '$VERSION' does not match ^[0-9]+\.[0-9]+\.0$" >&2
+            echo "       Only minor-version RCs are supported (X.Y.0). Patch versions are not allowed." >&2
+            exit 1
+          fi
+
+      - name: Compute RC tag and check for conflicts
+        id: compute
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          RC_NUMBER="${{ github.event.inputs.rc_number }}"
+          GA_TAG="v${VERSION}"
+
+          # Refuse if the GA tag already exists.
+          if gh release view "$GA_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "ERROR: GA tag $GA_TAG already exists — $VERSION has already shipped." >&2
+            echo "       Increment the minor version for a new release." >&2
+            exit 1
+          fi
+
+          if [ -n "$RC_NUMBER" ]; then
+            # Operator supplied an explicit N.
+            if ! echo "$RC_NUMBER" | grep -qE '^[1-9][0-9]*$'; then
+              echo "ERROR: rc_number '$RC_NUMBER' is not a positive integer." >&2
+              exit 1
+            fi
+            N="$RC_NUMBER"
+          else
+            # Auto-bump: find the highest existing rc.N for this version and add 1.
+            N=1
+            TAGS=$(gh api "repos/$GITHUB_REPOSITORY/git/refs/tags" \
+              --jq '.[].ref' 2>/dev/null | grep "^refs/tags/v${VERSION}-rc\." || true)
+            for ref in $TAGS; do
+              candidate=$(echo "$ref" | sed "s|refs/tags/v${VERSION}-rc\.||")
+              if echo "$candidate" | grep -qE '^[0-9]+$' && [ "$candidate" -ge "$N" ]; then
+                N=$(( candidate + 1 ))
+              fi
+            done
+          fi
+
+          RC_TAG="v${VERSION}-rc.${N}"
+
+          # Refuse if the computed RC tag already exists.
+          if gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/$RC_TAG" >/dev/null 2>&1; then
+            echo "ERROR: RC tag $RC_TAG already exists." >&2
+            echo "       Leave rc_number blank to auto-bump, or supply the next N explicitly." >&2
+            exit 1
+          fi
+
+          # Find prior GA/RC tag for release-notes diffing.
+          prior=$(gh api "repos/$GITHUB_REPOSITORY/git/refs/tags" \
+            --jq '.[].ref | ltrimstr("refs/tags/")' 2>/dev/null \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$' \
+            | sort -V | tail -1 || echo "")
+
+          echo "RC tag  : $RC_TAG"
+          echo "GA tag  : $GA_TAG"
+          echo "Prior   : ${prior:-<none>}"
+
+          echo "rc_tag=$RC_TAG"   >> "$GITHUB_OUTPUT"
+          echo "ga_tag=$GA_TAG"   >> "$GITHUB_OUTPUT"
+          echo "prior_tag=$prior" >> "$GITHUB_OUTPUT"
+
+  # -------------------------------------------------------------------------
+  # Job 2: Build binaries on all three platforms.
+  # -------------------------------------------------------------------------
+  build:
+    name: Build (${{ matrix.target }})
+    needs: preflight
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-aarch64
+            os: macos-14
+          - target: linux-x86_64
+            os: ubuntu-latest
+          - target: linux-aarch64
+            os: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake ninja libarchive
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev libarchive-dev
+
+      - name: Configure
+        run: |
+          cmake_args="-B build -G Ninja -DCMAKE_BUILD_TYPE=Release"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cmake_args="$cmake_args -DCMAKE_PREFIX_PATH=$(brew --prefix libarchive)"
+          fi
+          cmake $cmake_args
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: cd build && ctest --output-on-failure
+
+      - name: Package binary
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          archive="den-${VERSION}-${{ matrix.target }}.tar.gz"
+          tar czf "${archive}" -C build den
+          sha256sum "${archive}" > "${archive}.sha256"
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: |
+            den-${{ github.event.inputs.version }}-${{ matrix.target }}.tar.gz
+            den-${{ github.event.inputs.version }}-${{ matrix.target }}.tar.gz.sha256
+          retention-days: 7
+
+  # -------------------------------------------------------------------------
+  # Job 3: Run the Linux harness against the freshly built linux-x86_64 binary.
+  # Abort the pipeline if the harness fails — do not publish a broken RC.
+  # -------------------------------------------------------------------------
+  harness:
+    name: Linux harness
+    needs: [preflight, build]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Download Linux x86_64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-linux-x86_64
+          path: dist/
+
+      - name: Extract binary
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          tar xzf "dist/den-${VERSION}-linux-x86_64.tar.gz" -C dist/
+          chmod +x dist/den
+          dist/den --version
+
+      - name: Run Linux harness
+        timeout-minutes: 30
+        run: tests/harness/linux/run.sh --binary "$(pwd)/dist/den"
+
+      - name: Upload harness logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-linux-logs
+          path: tests/harness/linux/logs/
+          retention-days: 30
+
+  # -------------------------------------------------------------------------
+  # Job 4: Consolidate checksums, tag, publish the prerelease, print summary.
+  # Only runs after the harness passes.
+  # -------------------------------------------------------------------------
+  publish:
+    name: Publish prerelease
+    needs: [preflight, build, harness]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          path: dist/
+          merge-multiple: true
+
+      - name: Download harness logs artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: harness-linux-logs
+          path: harness-logs/
+
+      - name: Package harness logs
+        run: |
+          RC_TAG="${{ needs.preflight.outputs.rc_tag }}"
+          tar czf "harness-linux-logs-${RC_TAG}.tar.gz" harness-logs/
+
+      - name: Generate consolidated checksums
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          checksums="den-${VERSION}-checksums.txt"
+          cat dist/*.sha256 > "${checksums}"
+          echo "CHECKSUMS_FILE=${checksums}" >> "$GITHUB_ENV"
+
+      - name: Generate release notes
+        run: |
+          RC_TAG="${{ needs.preflight.outputs.rc_tag }}"
+          VERSION="${{ github.event.inputs.version }}"
+          PRIOR="${{ needs.preflight.outputs.prior_tag }}"
+
+          {
+            echo "> **This is a release candidate.** Not for production until promoted via \`promote-rc.yml\`."
+            echo ""
+            if [ -n "$PRIOR" ]; then
+              echo "## Changes since ${PRIOR}"
+              echo ""
+              git log "${PRIOR}..HEAD" --pretty=format:"- %s" --no-merges
+            else
+              echo "## Changes"
+              echo ""
+              git log HEAD --pretty=format:"- %s" --no-merges | head -50
+            fi
+            echo ""
+            echo ""
+            echo "## Assets"
+            echo ""
+            echo "| File | Platform |"
+            echo "|------|----------|"
+            echo "| \`den-${VERSION}-darwin-aarch64.tar.gz\` | macOS arm64 |"
+            echo "| \`den-${VERSION}-linux-x86_64.tar.gz\` | Linux x86_64 |"
+            echo "| \`den-${VERSION}-linux-aarch64.tar.gz\` | Linux arm64 |"
+            echo "| \`den-${VERSION}-checksums.txt\` | SHA256 checksums |"
+            echo "| \`harness-linux-logs-${RC_TAG}.tar.gz\` | Linux harness logs |"
+            echo ""
+            echo "## What was validated"
+            echo ""
+            echo "- Build: all three platforms (macOS arm64, Linux x86_64, Linux arm64)"
+            echo "- Unit tests: all three platforms"
+            echo "- Linux harness: PASS (Docker-based end-to-end smoke)"
+            echo ""
+            echo "## What requires manual validation before promotion"
+            echo ""
+            echo "- **macOS harness** — run \`make harness-macos\` against \`den-test-mac\`."
+            echo "  CI cannot exercise this (test laptop is not a GitHub runner)."
+            echo ""
+            echo "## Promoting to GA"
+            echo ""
+            echo '```'
+            echo "# After macOS harness passes:"
+            echo "gh workflow run promote-rc.yml \\"
+            echo "  -f rc_tag=${RC_TAG} \\"
+            echo "  -f confirm_macos_harness_passed=true"
+            echo '```'
+          } > release-notes.md
+
+      - name: Create RC tag
+        run: |
+          git tag "${{ needs.preflight.outputs.rc_tag }}" "${{ github.sha }}"
+          git push origin "${{ needs.preflight.outputs.rc_tag }}"
+
+      - name: Create GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RC_TAG="${{ needs.preflight.outputs.rc_tag }}"
+          VERSION="${{ github.event.inputs.version }}"
+
+          gh release create "$RC_TAG" \
+            --prerelease \
+            --target "${{ github.sha }}" \
+            --title "den ${RC_TAG}" \
+            --notes-file release-notes.md \
+            dist/*.tar.gz \
+            dist/*.sha256 \
+            "${{ env.CHECKSUMS_FILE }}" \
+            "harness-linux-logs-${RC_TAG}.tar.gz"
+
+      - name: Print summary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RC_TAG="${{ needs.preflight.outputs.rc_tag }}"
+          VERSION="${{ github.event.inputs.version }}"
+          REPO_URL="https://github.com/${{ github.repository }}"
+
+          echo ""
+          echo "============================================================"
+          echo "  RC PUBLISHED: ${RC_TAG}"
+          echo "============================================================"
+          echo ""
+          echo "  Release URL : ${REPO_URL}/releases/tag/${RC_TAG}"
+          echo "  Commit      : ${{ github.sha }}"
+          echo ""
+          echo "  Assets:"
+          gh release view "$RC_TAG" --json assets -q '.assets[] | "    " + .name' 2>/dev/null \
+            || echo "    (see release page)"
+          echo ""
+          echo "------------------------------------------------------------"
+          echo "  NEXT STEP — REQUIRED BEFORE PROMOTION:"
+          echo ""
+          echo "  Run the macOS harness on den-test-mac:"
+          echo "    make harness-macos"
+          echo ""
+          echo "  The macOS harness CANNOT run in CI. You MUST execute it"
+          echo "  manually and confirm it passes before promoting to GA."
+          echo ""
+          echo "  When the macOS harness PASSES, promote:"
+          echo "    gh workflow run promote-rc.yml \\"
+          echo "      -f rc_tag=${RC_TAG} \\"
+          echo "      -f confirm_macos_harness_passed=true"
+          echo ""
+          echo "  If the macOS harness FAILS:"
+          echo "    - Fix the bug and cut a new RC (N auto-bumps):"
+          echo "        gh workflow run release-candidate.yml -f version=${VERSION}"
+          echo "    - Or delete this RC to free the tag:"
+          echo "        gh release delete ${RC_TAG} --cleanup-tag"
+          echo "============================================================"

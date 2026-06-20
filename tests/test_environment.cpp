@@ -154,6 +154,45 @@ TEST_SUITE("environment::materialise") {
         CHECK(fs::read_symlink(eDir / "bin" / "tree") == pkg2 / "bin" / "tree");
     }
 
+    TEST_CASE("removes stale symlinks for packages removed from manifest") {
+        // Regression test for the uninstall-leaves-symlink bug: after a
+        // package is removed from the manifest, a subsequent materialise call
+        // must remove the symlinks it previously created.
+        TmpDir tmp;
+        auto den_home = tmp.path / "den_home";
+        auto store = tmp.path / "store";
+
+        // Set up two packages.
+        auto jq_pkg = store / "jq" / "1.7.1";
+        fs::create_directories(jq_pkg / "bin");
+        std::ofstream(jq_pkg / "bin" / "jq") << "#!/bin/sh\n";
+
+        auto tree_pkg = store / "tree" / "2.1.1";
+        fs::create_directories(tree_pkg / "bin");
+        std::ofstream(tree_pkg / "bin" / "tree") << "#!/bin/sh\n";
+
+        // Install both packages.
+        Manifest m;
+        m.packages["homebrew"]["jq"] = "1.7.1";
+        m.packages["homebrew"]["tree"] = "2.1.1";
+        write_manifest(den_home, "/", m);
+        materialise(den_home, store, "/");
+
+        auto eDir = env_dir(den_home, "/");
+        CHECK(fs::is_symlink(eDir / "bin" / "jq"));
+        CHECK(fs::is_symlink(eDir / "bin" / "tree"));
+
+        // Uninstall jq: remove it from the manifest and re-materialise.
+        m.packages["homebrew"].erase("jq");
+        write_manifest(den_home, "/", m);
+        materialise(den_home, store, "/");
+
+        // jq symlink must be gone; tree symlink must remain.
+        CHECK_FALSE(fs::exists(eDir / "bin" / "jq"));
+        CHECK_FALSE(fs::is_symlink(eDir / "bin" / "jq"));
+        CHECK(fs::is_symlink(eDir / "bin" / "tree"));
+    }
+
     TEST_CASE("materialise skips entries under an unregistered provider (T23.5)") {
         // The materialiser dispatches through the provider registry. Entries
         // under an unknown provider (e.g. the manifest was written by a

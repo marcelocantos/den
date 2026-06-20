@@ -6,7 +6,7 @@
 BUILD_DIR := build
 CMAKE_FLAGS := -G Ninja -DCMAKE_BUILD_TYPE=Release
 
-.PHONY: bullseye configure build test format format-fix clean-tree
+.PHONY: bullseye configure build test format format-fix clean-tree harness-linux harness-macos
 
 bullseye: configure build test format clean-tree
 
@@ -40,3 +40,17 @@ clean-tree:
 	@test -z "$$(git status --porcelain)" \
 		&& echo "✓ clean" \
 		|| (echo "✗ dirty tree"; git status --short; exit 1)
+
+# Docker-based Linux smoke harness — not part of bullseye (Docker is not a
+# guaranteed local dependency; CI runs this separately).
+harness-linux: build/den
+	tests/harness/linux/run.sh --binary build/den
+
+# SSH-based macOS smoke harness — not part of bullseye.
+# Requires a configured SSH alias (den-test-mac by default).
+# See tests/harness/macos/README.md for one-time setup.
+# Not in CI — runs are dev-triggered only.
+harness-macos: build/den
+	tests/harness/macos/run.sh --binary build/den
+
+build/den: build

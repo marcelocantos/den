@@ -12,8 +12,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <stdexcept>
 #include <string>
+#include <sys/wait.h>
 #include <unistd.h>
 
 namespace den {
@@ -85,6 +87,33 @@ static std::string run_den(const std::string& args, const std::string& den_home)
 static std::string run_den_fresh(const std::string& args) {
     TempDir tmp;
     return run_den(args, tmp.path.string());
+}
+
+struct DenResult {
+    std::string output; // combined stdout + stderr
+    int exit_code;      // raw process exit code (from WEXITSTATUS)
+};
+
+// Run den with an explicit HOMEBREW_CELLAR override; returns output and exit code.
+static DenResult run_den_with_cellar(const std::string& args, const std::string& den_home,
+                                     const std::string& cellar) {
+    const std::string prefix = den_home + "/brew";
+    std::string cmd = "DEN_HOME=" + den_home + " HOMEBREW_PREFIX=" + prefix +
+                      " HOMEBREW_CELLAR=" + cellar + " ./den " + args + " 2>&1";
+
+    FILE* pipe = ::popen(cmd.c_str(), "r");
+    if (!pipe) {
+        throw std::runtime_error("popen failed for: " + cmd);
+    }
+
+    std::string output;
+    std::array<char, 1024> buf{};
+    while (std::fgets(buf.data(), static_cast<int>(buf.size()), pipe) != nullptr) {
+        output += buf.data();
+    }
+    int raw = ::pclose(pipe);
+    int exit_code = WIFEXITED(raw) ? WEXITSTATUS(raw) : -1;
+    return {output, exit_code};
 }
 
 // ---------------------------------------------------------------------------
@@ -270,7 +299,40 @@ TEST_SUITE("cli::integration") {
     }
 
     // -----------------------------------------------------------------------
-    // 15. doctor — runs without crashing, reports findings or passes
+    // 15. self-update --check — version probe: no download, no binary replacement
+    // -----------------------------------------------------------------------
+    TEST_CASE("self-update --check prints a version line without downloading") {
+        // This test contacts the GitHub Releases API.  If the network is
+        // unavailable the command may print "Unable to determine the latest
+        // version." — that is still a valid, non-crashing result.
+        const auto out = run_den_fresh("self-update --check");
+
+        // Must contain "den" on the one-line output.
+        CHECK(out.find("den") != std::string::npos);
+
+        // Must match one of:
+        //   "den X.Y.Z is the latest version."
+        //   "den X.Y.Z is available (current: ...)"
+        //   "Unable to determine the latest version."  (network absent)
+        const bool up_to_date = out.find("is the latest version") != std::string::npos;
+        const bool update_avail = out.find("is available") != std::string::npos;
+        const bool no_network = out.find("Unable to determine") != std::string::npos;
+        CHECK((up_to_date || update_avail || no_network));
+
+        // Must NOT have started a download.
+        CHECK(out.find("Downloading") == std::string::npos);
+    }
+
+    TEST_CASE("self-update --dry-run is accepted as an alias for --check") {
+        // --dry-run is an alias for --check.  Verify it is parsed without error
+        // (CLI11 would exit non-zero and emit "unknown option" otherwise).
+        const auto out = run_den_fresh("self-update --dry-run");
+        CHECK(out.find("unknown option") == std::string::npos);
+        CHECK(out.find("Downloading") == std::string::npos);
+    }
+
+    // -----------------------------------------------------------------------
+    // 16. doctor — runs without crashing, reports findings or passes
     // -----------------------------------------------------------------------
     TEST_CASE("doctor runs and produces a summary") {
         const auto out = run_den_fresh("doctor");
@@ -285,6 +347,80 @@ TEST_SUITE("cli::integration") {
         // directory structure.
         const auto out = run_den_fresh("doctor");
         CHECK(out.find("finding(s)") != std::string::npos);
+    }
+
+    // -----------------------------------------------------------------------
+    // 16. install with blocked Cellar — no SIGABRT (regression for crash fix)
+    //
+    // Before the fix, den aborted with SIGABRT (exit 134) when
+    // fs::create_directories threw std::filesystem_error because the Cellar
+    // parent didn't exist or wasn't writable.  After the fix:
+    //   - The exception is caught and converted to a UserError with a clear
+    //     message, or the install proceeds if the store is auto-creatable.
+    //   - Exit code is 1 (clean failure), never 134 (abort).
+    //   - Output contains "error:" or "fatal:", not "terminate called".
+    //
+    // We trigger the original scenario by placing a regular file at the Cellar
+    // path, making fs::create_directories(<cellar>/<pkg_name>) fail with
+    // ENOTDIR.  A minimal index.json with an "all"-tagged archive ensures the
+    // code reaches the install path (past the "index is empty" guard) before
+    // the network fetch fails (fake URL) or the directory creation fails.
+    // Either way the process must exit cleanly.
+    // -----------------------------------------------------------------------
+    TEST_CASE("install with blocked Cellar exits cleanly, not with SIGABRT") {
+        TempDir tmp;
+        const std::string home = tmp.path.string();
+
+        // Seed a minimal index.json so the "index is empty" guard passes.
+        // The package has an "all" archive tag that matches every platform;
+        // the URL is intentionally fake — the test only needs the code to
+        // reach the Cellar creation step (or fail at download with a clean
+        // error), not to complete a real install.
+        const std::string cache_dir = home + "/cache";
+        fs::create_directories(cache_dir);
+        std::ofstream idx(cache_dir + "/index.json");
+        idx << R"({
+  "packages": [{
+    "name": "den-test-pkg",
+    "version": "1.0.0",
+    "description": "test",
+    "homepage": "",
+    "license": "",
+    "artifact_type": "binary",
+    "deprecated": false,
+    "disabled": false,
+    "dependencies": [],
+    "build_dependencies": [],
+    "archives": {
+      "all": {
+        "url": "file:///nonexistent/den-test-pkg-1.0.0.tar.gz",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "relocation": "any_cellar"
+      }
+    }
+  }]
+})";
+        idx.close();
+
+        // Block the Cellar path by placing a regular file there.
+        // fs::create_directories(<cellar>/<pkg_name>) will fail with ENOTDIR.
+        const std::string blocked_cellar = home + "/blocked-cellar";
+        std::ofstream(blocked_cellar) << "not a directory\n";
+
+        auto result = run_den_with_cellar("install den-test-pkg", home, blocked_cellar);
+
+        // Must NOT be SIGABRT (exit 134).
+        CHECK(result.exit_code != 134);
+        // Must be a clean non-zero exit.
+        CHECK(result.exit_code != 0);
+        // Must NOT contain the raw C++ exception message that indicates abort.
+        CHECK(result.output.find("terminate called") == std::string::npos);
+        CHECK(result.output.find("std::filesystem") == std::string::npos);
+        // Should contain a human-readable error prefix.
+        const bool has_error = result.output.find("error:") != std::string::npos ||
+                               result.output.find("fatal:") != std::string::npos ||
+                               result.output.find("cannot") != std::string::npos;
+        CHECK(has_error);
     }
 
 } // TEST_SUITE cli::integration

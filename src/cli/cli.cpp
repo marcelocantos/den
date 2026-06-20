@@ -99,6 +99,9 @@ struct Cli::M {
     std::string smoke_defs;
     int smoke_max = 0;
 
+    // self-update
+    bool selfupdate_check = false;
+
     // which
     std::string which_file;
 
@@ -178,6 +181,10 @@ void Cli::M::setup() {
         for (auto& [provider, names] : by_provider) {
             uninstall_packages(cfg, *provider, names);
         }
+        // Re-materialise the active environment so the symlinks for the
+        // removed packages are cleaned up (materialise's stale-cleanup pass
+        // does the actual unlink work).
+        materialise(cfg.den_home, cfg.store, active);
     });
 
     // --- upgrade ---
@@ -1077,8 +1084,24 @@ void Cli::M::setup() {
 
     // --- self-update ---
     auto* selfupdate = app.add_subcommand("self-update", "Update den to the latest version");
-    selfupdate->callback([] {
+    selfupdate->add_flag("--check,--dry-run", selfupdate_check,
+                         "Print the latest available version without downloading or applying it");
+    selfupdate->callback([this] {
         auto cfg = Config::detect();
+        if (selfupdate_check) {
+            auto latest = resolve_latest_version();
+            if (latest.empty()) {
+                std::cout << "Unable to determine the latest version.\n";
+                return;
+            }
+            if (latest == DEN_VERSION) {
+                std::cout << "den " << DEN_VERSION << " is the latest version.\n";
+            } else {
+                std::cout << "den " << latest << " is available (current: " << DEN_VERSION
+                          << ").\n";
+            }
+            return;
+        }
         auto info = check_for_update(cfg);
         if (!info) {
             std::cout << "den " << DEN_VERSION << " is up to date.\n";
@@ -1132,6 +1155,12 @@ int Cli::run(int argc, char** argv) {
         m->app.parse(argc, argv);
     } catch (const CLI::ParseError& e) {
         return m->app.exit(e);
+    } catch (const UserError& e) {
+        std::cerr << "error: " << e.what() << "\n";
+        return 1;
+    } catch (const std::exception& e) {
+        std::cerr << "fatal: " << e.what() << "\n";
+        return 1;
     }
 
     if (m->help_agent) {
