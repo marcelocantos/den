@@ -113,9 +113,14 @@ static void write_exit_script(const fs::path& script_path, int code) {
 }
 
 // Write a fake that logs "<tag>_stop <epoch_ns>" to a shared log on SIGTERM,
-// optionally sleeping first.
+// optionally sleeping first. It appends "ready" to `ready_path` *after* the
+// TERM trap is installed, so callers can wait for the handler to be in place
+// before stopping. Without this gate the test races service startup: bash can
+// take several hundred ms to reach its trap in a constrained spawn environment,
+// and a stop that arrives first kills the process before the handler exists.
 static void write_ordered_stop_script(const fs::path& script_path, const fs::path& log_path,
-                                      const std::string& tag, double pre_exit_sleep_secs) {
+                                      const fs::path& ready_path, const std::string& tag,
+                                      double pre_exit_sleep_secs) {
     std::ofstream f(script_path);
     f << "#!/bin/sh\n"
       << "log() {\n"
@@ -123,6 +128,7 @@ static void write_ordered_stop_script(const fs::path& script_path, const fs::pat
       << "  echo \"" << tag << "_stop $ts\" >> " << log_path.string() << "\n"
       << "}\n"
       << "trap 'sleep " << pre_exit_sleep_secs << "; log; exit 0' TERM\n"
+      << "echo ready >> " << ready_path.string() << "\n"
       << "while true; do sleep 1 & wait $!; done\n";
     f.close();
     fs::permissions(script_path,
@@ -513,15 +519,17 @@ TEST_CASE("graceful shutdown ordering: dependents stop before dependencies") {
     write_launchctl_spy(spy_dir.path, tmp.path / "launchctl-invocations.log");
 
     fs::path order_log = tmp.path / "order.log";
+    fs::path ready_a = tmp.path / "ready_a";
+    fs::path ready_b = tmp.path / "ready_b";
 
     // Service B is a dependency. It logs immediately on SIGTERM.
     auto script_b = tmp.path / "b.sh";
-    write_ordered_stop_script(script_b, order_log, "B", 0.0);
+    write_ordered_stop_script(script_b, order_log, ready_b, "B", 0.0);
 
     // Service A depends on B. It sleeps 0.4s before logging its stop, so any
     // stop-A-after-B ordering would have B's line appear FIRST in the log.
     auto script_a = tmp.path / "a.sh";
-    write_ordered_stop_script(script_a, order_log, "A", 0.4);
+    write_ordered_stop_script(script_a, order_log, ready_a, "A", 0.4);
 
     install_service(tmp.path.string(), "B", {script_b.string()}, "never", {});
     install_service(tmp.path.string(), "A", {script_a.string()}, "never", {"B"});
@@ -534,7 +542,12 @@ TEST_CASE("graceful shutdown ordering: dependents stop before dependencies") {
     CAPTURE(out_start_b);
     REQUIRE(out_start_a.find("Started") != std::string::npos);
     REQUIRE(out_start_b.find("Started") != std::string::npos);
-    sleep_ms(300);
+
+    // Gate the stop on both services having installed their TERM trap. A fixed
+    // sleep here races startup and intermittently stops a service before its
+    // handler exists, yielding an empty order log.
+    REQUIRE(wait_for_log_contains(ready_a, "ready", 10000));
+    REQUIRE(wait_for_log_contains(ready_b, "ready", 10000));
 
     // Stop both — order is determined by depends_on, not argv order.
     auto [rc_stop, out_stop] =
