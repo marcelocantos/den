@@ -48,7 +48,7 @@ jobs:
           - os: ${{ (github.event.inputs.platform == 'linux') && 'macos-14' || 'skip' }}
           - os: ${{ (github.event.inputs.platform == 'macos') && 'ubuntu-latest' || 'skip' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -90,7 +90,7 @@ jobs:
       github.event.inputs.platform == 'all' ||
       github.event.inputs.platform == 'macos'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -170,7 +170,7 @@ jobs:
 
       - name: Upload build log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: source-build-macos-log
           path: |
@@ -192,7 +192,7 @@ jobs:
       github.event.inputs.platform == 'all' ||
       github.event.inputs.platform == 'linux'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -245,7 +245,7 @@ jobs:
 
       - name: Upload build log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: source-build-linux-log
           path: ${{ runner.temp }}/source-build-linux.log
@@ -263,7 +263,7 @@ jobs:
     # continue-on-error: true until 🎯T17 is live.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -293,7 +293,7 @@ jobs:
 
       - name: Upload tap log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tap-source-build-log
           path: ${{ runner.temp }}/tap-build.log
