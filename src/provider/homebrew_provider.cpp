@@ -130,8 +130,8 @@ bool install_one(const Config& config, const Package& pkg) {
         fs::create_directories(dest.parent_path());
     } catch (const fs::filesystem_error& e) {
         throw UserError("cannot create Cellar directory '" + dest.parent_path().string() +
-                        "': " + e.code().message() +
-                        "\nCheck that '" + dest.parent_path().parent_path().string() +
+                        "': " + e.code().message() + "\nCheck that '" +
+                        dest.parent_path().parent_path().string() +
                         "' exists and is writable by the current user.");
     }
     try {
