@@ -5,7 +5,11 @@
 
 #include "../core/error.h"
 #include "../env/manifest.h"
+#include "cargo_provider.h"
+#include "go_provider.h"
 #include "homebrew_provider.h"
+#include "node_provider.h"
+#include "python_provider.h"
 #include "stub_provider.h"
 
 #include <utility>
@@ -48,7 +52,18 @@ std::vector<PackageProvider*> ProviderRegistry::all() const {
 
 ProviderRegistry make_default_registry(const PackageIndex* idx) {
     ProviderRegistry r;
+    // Homebrew is registered first and is therefore the default fallback —
+    // bare names with no explicit provider or manifest hint route here.
     r.add(std::make_shared<HomebrewProvider>(idx));
+
+    // Ecosystem providers (🎯T38-T41). Each `accepts()` returns false, so they
+    // never auto-claim a bare name; selection is via `--provider <name>` or a
+    // manifest hint, keeping provider syntax out of the common case.
+    r.add(std::make_shared<PythonProvider>());
+    r.add(std::make_shared<NodeProvider>());
+    r.add(std::make_shared<GoProvider>());
+    r.add(std::make_shared<CargoProvider>());
+
     // The stub provider proves the multi-provider seams work end-to-end.
     // accepts() returns false for all names, so it never auto-claims — it
     // is only invoked when the user passes `--provider stub` explicitly.

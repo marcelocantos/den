@@ -200,79 +200,88 @@ TEST_SUITE("T66::list_cellar::store_unit") {
 }
 
 // ===========================================================================
-// Integration tests for `den list` (plain, no --cellar flag yet).
-// These verify the existing `den list` output against the fake Cellar.
+// Integration tests for Cellar inspection via `den list --cellar`.
+//
+// Note on semantics (🎯T66 + 🎯T60): plain `den list` enumerates the *active
+// environment's* installed packages across all providers (the multi-provider
+// view), not the raw Cellar. Cellar enumeration — every keg in the shared
+// store, regardless of environment — is the `--cellar` view. The fake-Cellar
+// fixture exercises that store-level view.
 // ===========================================================================
 
 TEST_SUITE("T66::list_cellar::integration") {
 
-    TEST_CASE("den list shows installed kegs from fake Cellar" * doctest::skip(true)) {
+    TEST_CASE("den list --cellar shows installed kegs from fake Cellar") {
         TempDir tmp;
         auto cellar = tmp.path / "Cellar";
         auto den_home = tmp.path / "den";
         fs::create_directories(den_home);
         build_fake_cellar(cellar, den_home);
 
-        const auto out = run_den("list", den_home, cellar);
+        const auto out = run_den("list --cellar", den_home, cellar);
         CHECK(out.find("tree") != std::string::npos);
         CHECK(out.find("curl") != std::string::npos);
         CHECK(out.find("orphan") != std::string::npos);
-        // The "No packages installed" message must NOT appear.
-        CHECK(out.find("No packages installed") == std::string::npos);
+        // The empty-Cellar message must NOT appear.
+        CHECK(out.find("No kegs in Cellar") == std::string::npos);
     }
 
     // -----------------------------------------------------------------------
-    // SKIP — den list --cellar not yet implemented (T4 gap).
-    //
-    // When `den list --cellar` lands:
-    //   1. Remove the MESSAGE.
-    //   2. Uncomment the CHECK lines below.
+    // den list --cellar shows disk usage per keg (🎯T66/T4).
     // -----------------------------------------------------------------------
-    TEST_CASE("SKIP: den list --cellar shows disk usage per keg [T4 gap]") {
-        MESSAGE("SKIP — den list --cellar flag not implemented. Upstream gap: T4.");
-        // When implemented, check output similar to:
-        //   tree 2.1.1   <size>
-        //   tree 2.2.0   <size>
-        //
-        // TempDir tmp;
-        // auto cellar = tmp.path / "Cellar";
-        // auto den_home = tmp.path / "den";
-        // fs::create_directories(den_home);
-        // build_fake_cellar(cellar, den_home);
-        // const auto out = run_den("list --cellar", den_home, cellar);
-        // CHECK(out.find("tree") != std::string::npos);
-        // CHECK(out.find("2.1.1") != std::string::npos);
-        // // Some size indicator must appear (e.g. "KB" or "MB" or byte count).
-        // bool has_size = out.find("KB") != std::string::npos ||
-        //                 out.find("MB") != std::string::npos ||
-        //                 out.find("B")  != std::string::npos;
-        // CHECK(has_size);
+    TEST_CASE("den list --cellar shows disk usage per keg") {
+        TempDir tmp;
+        auto cellar = tmp.path / "Cellar";
+        auto den_home = tmp.path / "den";
+        fs::create_directories(den_home);
+        build_fake_cellar(cellar, den_home);
+
+        const auto out = run_den("list --cellar", den_home, cellar);
+        CHECK(out.find("tree") != std::string::npos);
+        CHECK(out.find("2.1.1") != std::string::npos);
+        CHECK(out.find("2.2.0") != std::string::npos);
+        // A size indicator must appear (every keg here is < 1 KiB, so " B").
+        const bool has_size = out.find(" B") != std::string::npos ||
+                              out.find(" KB") != std::string::npos ||
+                              out.find(" MB") != std::string::npos;
+        CHECK(has_size);
     }
 
-    TEST_CASE("SKIP: den list --cellar shows env references per keg [T4 gap]") {
-        MESSAGE("SKIP — den list --cellar env-reference column not implemented. Upstream gap: T4.");
-        // When implemented, kegs referenced by an env should show which envs use them.
-        // The orphan keg should show zero references.
-        //
-        // TempDir tmp;
-        // ...
-        // const auto out = run_den("list --cellar", den_home, cellar);
-        // CHECK(out.find("envA") != std::string::npos);
-        // CHECK(out.find("envB") != std::string::npos);
+    // -----------------------------------------------------------------------
+    // den list --cellar shows which environments reference each keg (🎯T66/T4).
+    // -----------------------------------------------------------------------
+    TEST_CASE("den list --cellar shows env references per keg") {
+        TempDir tmp;
+        auto cellar = tmp.path / "Cellar";
+        auto den_home = tmp.path / "den";
+        fs::create_directories(den_home);
+        build_fake_cellar(cellar, den_home);
+
+        const auto out = run_den("list --cellar", den_home, cellar);
+        // Manifests live under den_home/manifests/<slug>; list_all decodes the
+        // slug back to an env path ("/envA", "/envB").
+        CHECK(out.find("envA") != std::string::npos);
+        CHECK(out.find("envB") != std::string::npos);
     }
 
-    TEST_CASE("SKIP: den list --cellar marks orphaned kegs [T4 gap]") {
-        MESSAGE("SKIP — den list --cellar orphan detection not implemented. Upstream gap: T4.");
-        // When implemented, orphan@1.0.0 should appear with an "orphan" or
-        // "unreferenced" marker since no env references it.
-        //
-        // TempDir tmp;
-        // ...
-        // const auto out = run_den("list --cellar", den_home, cellar);
-        // CHECK(out.find("orphan") != std::string::npos);
-        // bool has_marker = out.find("unreferenced") != std::string::npos ||
-        //                   out.find("orphan")        != std::string::npos;
-        // CHECK(has_marker);
+    // -----------------------------------------------------------------------
+    // den list --cellar marks orphaned (unreferenced) kegs (🎯T66/T4).
+    // -----------------------------------------------------------------------
+    TEST_CASE("den list --cellar marks orphaned kegs") {
+        TempDir tmp;
+        auto cellar = tmp.path / "Cellar";
+        auto den_home = tmp.path / "den";
+        fs::create_directories(den_home);
+        build_fake_cellar(cellar, den_home);
+
+        const auto out = run_den("list --cellar", den_home, cellar);
+        // orphan@1.0.0 is referenced by no env, so an orphan marker must appear.
+        CHECK(out.find("orphan") != std::string::npos);
+        const bool has_marker = out.find("(orphan)") != std::string::npos ||
+                                out.find("unreferenced") != std::string::npos;
+        CHECK(has_marker);
+        // Exactly one orphan in this fixture.
+        CHECK(out.find("1 orphan(s)") != std::string::npos);
     }
 }
 

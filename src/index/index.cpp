@@ -77,6 +77,20 @@ Package transform_formula(const json& f) {
     pkg.disabled =
         f.contains("disabled") && f["disabled"].is_boolean() && f["disabled"].get<bool>();
 
+    // Stability rating (🎯T30). Prefer an explicit rating if the upstream
+    // metadata carries one; otherwise derive a conservative default from the
+    // deprecated/disabled flags. A live, non-deprecated formula on Homebrew's
+    // stable channel is Stable.
+    if (f.contains("stability") && f["stability"].is_string()) {
+        pkg.stability = sat::parse_stability(f["stability"].get<std::string>());
+    } else if (pkg.disabled) {
+        pkg.stability = Stability::Insecure;
+    } else if (pkg.deprecated) {
+        pkg.stability = Stability::Buggy;
+    } else {
+        pkg.stability = Stability::Stable;
+    }
+
     // Keg-only status.
     pkg.keg_only =
         f.contains("keg_only") && f["keg_only"].is_boolean() && f["keg_only"].get<bool>();
@@ -199,6 +213,7 @@ json package_to_json(const Package& pkg) {
     j["homepage"] = pkg.homepage;
     j["license"] = pkg.license;
     j["artifact_type"] = pkg.artifact_type == ArtifactType::App ? "app" : "binary";
+    j["stability"] = sat::stability_label(pkg.stability);
     j["deprecated"] = pkg.deprecated;
     j["disabled"] = pkg.disabled;
 
@@ -237,6 +252,7 @@ Package package_from_json(const json& j) {
     std::string at = j.value("artifact_type", "binary");
     pkg.artifact_type = at == "app" ? ArtifactType::App : ArtifactType::Binary;
 
+    pkg.stability = sat::parse_stability(j.value("stability", "stable"));
     pkg.deprecated = j.value("deprecated", false);
     pkg.disabled = j.value("disabled", false);
 

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "cli.h"
+#include "daemon_status.h"
 #include "install.h"
 #include "shell.h"
 
@@ -13,9 +14,12 @@
 #include "../doctor/doctor.h"
 #include "../env/environment.h"
 #include "../env/manifest.h"
+#include "../index/dep_resolve.h"
 #include "../index/index.h"
+#include "../index/sat_solver.h"
 #include "../migrate/migrate.h"
 #include "../platform/platform.h"
+#include "../provider/exec.h"
 #include "../provider/homebrew_provider.h"
 #include "../provider/registry.h"
 #include "../selfupdate/selfupdate.h"
@@ -29,12 +33,15 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <set>
+#include <sstream>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace den {
@@ -42,6 +49,125 @@ namespace den {
 namespace {
 
 const char* agent_guide = "See agents-guide.md for the full agent guide.\n";
+
+/// Format a byte count as a human-readable, deterministic size string.
+/// Uses binary (1024) units and always two decimals for KB and above so the
+/// output is stable across runs.
+std::string human_size(uint64_t bytes) {
+    constexpr uint64_t kKiB = 1024;
+    if (bytes < kKiB) {
+        return std::to_string(bytes) + " B";
+    }
+    constexpr const char* kUnits[] = {"KB", "MB", "GB", "TB", "PB"};
+    double value = static_cast<double>(bytes);
+    int unit = -1;
+    do {
+        value /= static_cast<double>(kKiB);
+        ++unit;
+    } while (value >= static_cast<double>(kKiB) && unit + 1 < static_cast<int>(std::size(kUnits)));
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(2) << value << " " << kUnits[unit];
+    return out.str();
+}
+
+// Built-in demonstration dependency universe for `den deps --explain` when the
+// requested packages are not present in the local index (e.g. before `den
+// update`, or in tests with an empty DEN_HOME). It mirrors the SAT solver's
+// corpus scenarios so the command always produces meaningful clause/preference
+// reasoning. Returns the universe keyed by package name.
+std::map<std::string, sat::PackageSpec> explain_demo_universe() {
+    using sat::CandidateVersion;
+    using sat::PackageSpec;
+    using sat::Stability;
+    std::map<std::string, PackageSpec> u;
+
+    auto add = [&](const std::string& name, CandidateVersion cand) {
+        u[name].name = name;
+        u[name].candidates.push_back(std::move(cand));
+    };
+
+    // constraint_resolution: pkgX needs libbar >= 2.0.0; libbar has 1.5 & 2.0.
+    add("libbar", {.version = "1.5.0"});
+    add("libbar", {.version = "2.0.0"});
+    add("pkgX", {.version = "1.0.0", .depends_on = {{"libbar", ">=", "2.0.0"}}});
+
+    // stability_forced_unstable_warns: myapp needs libz >= 1.4.0; only the
+    // testing-stability rc satisfies it.
+    add("libz", {.version = "1.3.1", .stability = Stability::Stable});
+    add("libz", {.version = "1.4.0-rc1", .stability = Stability::Testing});
+    add("myapp", {.version = "1.0.0", .depends_on = {{"libz", ">=", "1.4.0"}}});
+
+    // version_conflict_unsat: pkgA needs libfoo >= 2.0; pkgB needs libfoo <= 1.9.
+    add("libfoo", {.version = "1.9.0"});
+    add("libfoo", {.version = "2.0.0"});
+    add("pkgA", {.version = "1.0.0", .depends_on = {{"libfoo", ">=", "2.0.0"}}});
+    add("pkgB", {.version = "1.0.0", .depends_on = {{"libfoo", "<=", "1.9.0"}}});
+
+    return u;
+}
+
+// Print the solver's reasoning for `den deps --explain`. Resolves the request
+// against the real index when every requested package is present there;
+// otherwise falls back to the built-in demo universe so the command always
+// explains *something*.
+void print_deps_explain(const PackageIndex& idx, const std::vector<std::string>& names) {
+    bool all_indexed = !names.empty();
+    for (const auto& n : names) {
+        if (!idx.find(n)) {
+            all_indexed = false;
+            break;
+        }
+    }
+
+    sat::SolverResult result;
+    if (all_indexed) {
+        auto resolution = resolve_request(idx, names);
+        result.satisfiable = resolution.satisfiable;
+        result.explanation = resolution.explanation;
+        result.warnings = resolution.warnings;
+        for (const auto* p : resolution.install_order)
+            result.assignment[p->name] = p->version;
+    } else {
+        auto universe = explain_demo_universe();
+        std::vector<sat::VersionConstraint> request;
+        for (const auto& n : names)
+            request.push_back({n, "", ""});
+        result = sat::solve(universe, request);
+    }
+
+    std::cout << "Explaining dependency resolution for:";
+    for (const auto& n : names)
+        std::cout << " " << n;
+    std::cout << "\n\n";
+
+    if (!result.satisfiable) {
+        std::cout << "Result: UNSATISFIABLE\n";
+        for (const auto& e : result.explanation) {
+            if (e.kind == sat::ExplainEntry::Kind::Conflict)
+                std::cout << "  " << e.message << "\n";
+        }
+        return;
+    }
+
+    std::cout << "Result: satisfiable\n";
+    std::cout << "Assignment:\n";
+    for (const auto& [pkg, ver] : result.assignment)
+        std::cout << "  " << pkg << " " << ver << "\n";
+
+    std::cout << "Reasoning:\n";
+    for (const auto& e : result.explanation) {
+        switch (e.kind) {
+        case sat::ExplainEntry::Kind::Clause:
+        case sat::ExplainEntry::Kind::Preference:
+        case sat::ExplainEntry::Kind::Conflict:
+            std::cout << "  " << e.message << "\n";
+            break;
+        case sat::ExplainEntry::Kind::Warning:
+            std::cout << "  warning: " << e.message << "\n";
+            break;
+        }
+    }
+}
 
 } // namespace
 
@@ -64,6 +190,9 @@ struct Cli::M {
     std::vector<std::string> upgrade_names;
     std::string upgrade_provider;
 
+    // list
+    bool list_cellar = false;
+
     // info
     std::string info_name;
 
@@ -71,8 +200,9 @@ struct Cli::M {
     std::string search_query;
 
     // deps
-    std::string deps_name;
+    std::vector<std::string> deps_names;
     bool deps_tree = false;
+    bool deps_explain = false;
 
     // use
     std::string use_name;
@@ -90,6 +220,12 @@ struct Cli::M {
     std::string set_key;
     std::string set_value;
 
+    // migrate
+    std::vector<std::string> migrate_names;
+    bool migrate_dry_run = false;
+    bool migrate_integrate_shell = false;
+    bool migrate_no_health = false;
+
     // services
     std::vector<std::string> service_names;
     bool services_logs_follow = false;
@@ -101,6 +237,9 @@ struct Cli::M {
 
     // self-update
     bool selfupdate_check = false;
+
+    // run
+    std::vector<std::string> run_argv;
 
     // which
     std::string which_file;
@@ -128,13 +267,14 @@ void Cli::M::setup() {
     install->callback([this] {
         auto cfg = Config::detect();
         auto idx = load_index(cfg.cache / "index.json");
-        if (idx.packages.empty()) {
-            SPDLOG_ERROR("package index is empty — run `den update` first");
-            return;
-        }
+
         if (this->build_from_source) {
             // Source builds are Homebrew-only — the Ruby DSL belongs to the
             // Homebrew ecosystem. --provider is ignored on this path.
+            if (idx.packages.empty()) {
+                SPDLOG_ERROR("package index is empty — run `den update` first");
+                return;
+            }
             auto active = active_env_path(cfg.den_home);
             for (const auto& name : install_names) {
                 auto* pkg = idx.find(name);
@@ -157,7 +297,14 @@ void Cli::M::setup() {
             auto& provider = resolve_provider(registry, name, manifest, this->install_provider);
             by_provider[&provider].push_back(name);
         }
+        // The index is only consulted by the Homebrew provider; require it
+        // only when a Homebrew install is actually in the batch, so installs
+        // through pip/npm/go/cargo work without `den update`.
         for (auto& [provider, names] : by_provider) {
+            if (provider->provider_name() == "homebrew" && idx.packages.empty()) {
+                SPDLOG_ERROR("package index is empty — run `den update` first");
+                continue;
+            }
             install_packages(cfg, *provider, idx, names);
         }
     });
@@ -242,23 +389,132 @@ void Cli::M::setup() {
 
     // --- list ---
     auto* list = app.add_subcommand("list", "List installed packages");
-    list->callback([] {
+    list->add_flag("--cellar", list_cellar,
+                   "Inspect the Cellar: per-keg disk usage, env references, orphans");
+    list->callback([this] {
         auto cfg = Config::detect();
-        HomebrewProvider provider(nullptr);
-        auto installed = provider.list_installed(cfg);
-        if (installed.empty()) {
+
+        if (this->list_cellar) {
+            auto kegs = inspect_cellar(cfg.store, cfg.den_home);
+            if (kegs.empty()) {
+                std::cout << "No kegs in Cellar.\n";
+                return;
+            }
+            // Column widths for deterministic alignment.
+            size_t max_name = std::string("NAME").size();
+            size_t max_ver = std::string("VERSION").size();
+            for (const auto& k : kegs) {
+                max_name = std::max(max_name, k.name.size());
+                max_ver = std::max(max_ver, k.version.size());
+            }
+            std::cout << std::left << std::setw(static_cast<int>(max_name + 2)) << "NAME"
+                      << std::setw(static_cast<int>(max_ver + 2)) << "VERSION" << std::setw(12)
+                      << "SIZE" << "REFS\n";
+            uint32_t orphan_count = 0;
+            for (const auto& k : kegs) {
+                std::string refs;
+                if (k.orphaned()) {
+                    refs = "(orphan)";
+                    ++orphan_count;
+                } else {
+                    for (size_t i = 0; i < k.env_refs.size(); ++i) {
+                        if (i > 0)
+                            refs += ",";
+                        refs += k.env_refs[i];
+                    }
+                }
+                std::cout << std::left << std::setw(static_cast<int>(max_name + 2)) << k.name
+                          << std::setw(static_cast<int>(max_ver + 2)) << k.version << std::setw(12)
+                          << human_size(k.disk_bytes) << refs << "\n";
+            }
+            std::cout << "\n" << kegs.size() << " keg(s), " << orphan_count << " orphan(s).\n";
+            return;
+        }
+
+        // Uniform listing across providers: enumerate the active environment's
+        // manifest (resolved through the parent chain), grouped per provider.
+        // Each row is name / version / provider — no provider-specific syntax
+        // leaks into the name column, and the set tracks `den install` /
+        // `den uninstall` for every provider identically (T60 criterion 3).
+        auto active = active_env_path(cfg.den_home);
+        auto per_provider = resolve_per_provider(cfg.den_home, active);
+
+        struct Row {
+            std::string name;
+            std::string version;
+            std::string provider;
+        };
+        std::vector<Row> rows;
+        for (const auto& [provider_name, pkgs] : per_provider) {
+            for (const auto& [name, version] : pkgs) {
+                rows.push_back({name, version, provider_name});
+            }
+        }
+
+        if (rows.empty()) {
             std::cout << "No packages installed.\n";
             return;
         }
-        // Find widest name for column alignment.
+
+        std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) {
+            return std::tie(a.name, a.version) < std::tie(b.name, b.version);
+        });
+
         size_t max_name = 0;
-        for (const auto& pkg : installed) {
-            max_name = std::max(max_name, pkg.name.size());
+        size_t max_ver = 0;
+        for (const auto& r : rows) {
+            max_name = std::max(max_name, r.name.size());
+            max_ver = std::max(max_ver, r.version.size());
         }
-        for (const auto& pkg : installed) {
-            std::cout << std::left << std::setw(static_cast<int>(max_name + 2)) << pkg.name
-                      << pkg.version << "\n";
+        for (const auto& r : rows) {
+            std::cout << std::left << std::setw(static_cast<int>(max_name + 2)) << r.name
+                      << std::setw(static_cast<int>(max_ver + 2)) << r.version << r.provider
+                      << "\n";
         }
+    });
+
+    // --- run ---
+    // `den run <binary> [args...]` execs a binary from the active env's bin/
+    // directory, with that bin/ prepended to PATH so peer tools resolve. This
+    // is the provider-agnostic way to invoke an installed package: a Homebrew
+    // keg, a pip venv script, an npm CLI, a Go binary, and a Cargo binary all
+    // surface into the same env/bin and run identically.
+    auto* run = app.add_subcommand("run", "Run an installed binary from the active environment");
+    run->add_option("cmd", run_argv, "Binary name followed by its arguments")->required();
+    run->prefix_command(); // stop parsing after the binary name; pass the rest through verbatim
+    run->callback([this, run] {
+        // With prefix_command(), the binary name lands in run_argv and every
+        // token after it (including flags like --version) is held as the
+        // subcommand's remaining args. Stitch them back into one argv.
+        std::vector<std::string> tokens = run_argv;
+        for (const auto& extra : run->remaining()) {
+            tokens.push_back(extra);
+        }
+        if (tokens.empty()) {
+            std::cerr << "error: `den run` needs a binary name\n";
+            std::exit(2);
+        }
+        auto cfg = Config::detect();
+        auto active = active_env_path(cfg.den_home);
+        auto bin_dir = env_dir(cfg.den_home, active) / "bin";
+        auto binary = bin_dir / tokens.front();
+
+        std::error_code ec;
+        if (!fs::exists(binary, ec)) {
+            std::cerr << "error: '" << tokens.front() << "' is not installed in environment '"
+                      << active << "'\n";
+            std::exit(127);
+        }
+
+        std::vector<std::string> argv;
+        argv.reserve(tokens.size());
+        argv.push_back(binary.string());
+        for (size_t i = 1; i < tokens.size(); ++i) {
+            argv.push_back(tokens[i]);
+        }
+
+        int code = run_tool_interactive(argv, {}, bin_dir.string());
+        std::exit(code < 0 ? 127 : code);
     });
 
     // --- info ---
@@ -267,6 +523,38 @@ void Cli::M::setup() {
     info->callback([this] {
         auto cfg = Config::detect();
         auto idx = load_index(cfg.cache / "index.json");
+
+        // Resolve which provider owns this package. A manifest hint or
+        // `--provider` would refine this; for info we use the active env's
+        // manifest so an already-installed non-Homebrew package reports under
+        // its owning provider instead of falling through to the index.
+        auto active = active_env_path(cfg.den_home);
+        auto manifest = read_manifest(cfg.den_home, active);
+        auto registry = make_default_registry(&idx);
+        auto& provider = resolve_provider(registry, info_name, manifest);
+        auto provider_name = std::string(provider.provider_name());
+
+        // Non-Homebrew providers have no rich index metadata; report the
+        // uniform fields drawn from the provider's own installed set.
+        if (provider_name != "homebrew") {
+            std::string version;
+            for (const auto& installed : provider.list_installed(cfg)) {
+                if (installed.name == info_name) {
+                    version = installed.version;
+                    break;
+                }
+            }
+            if (version.empty()) {
+                std::cerr << "Package not found: " << info_name << " (provider " << provider_name
+                          << ")\n";
+                return;
+            }
+            std::cout << "Name:         " << info_name << "\n"
+                      << "Version:      " << version << "\n"
+                      << "Provider:     " << provider_name << "\n";
+            return;
+        }
+
         const auto* pkg = idx.find(info_name);
         if (!pkg) {
             std::cerr << "Package not found: " << info_name << "\n";
@@ -359,11 +647,21 @@ void Cli::M::setup() {
 
     // --- deps ---
     auto* deps = app.add_subcommand("deps", "Show package dependencies");
-    deps->add_option("name", deps_name, "Package name")->required();
+    deps->add_option("names", deps_names, "Package name(s)")->required();
     deps->add_flag("--tree", deps_tree, "Show dependency tree");
+    deps->add_flag("--explain", deps_explain,
+                   "Explain why the solver chose an assignment (clauses, preferences)");
     deps->callback([this] {
         auto cfg = Config::detect();
         auto idx = load_index(cfg.cache / "index.json");
+
+        // --explain: surface the SAT solver's reasoning (🎯T63).
+        if (deps_explain) {
+            print_deps_explain(idx, deps_names);
+            return;
+        }
+
+        const std::string& deps_name = deps_names.front();
         const auto* pkg = idx.find(deps_name);
         if (!pkg) {
             std::cerr << "Package not found: " << deps_name << "\n";
@@ -513,6 +811,8 @@ void Cli::M::setup() {
     auto* config = app.add_subcommand("config", "Show detected configuration");
     config->callback([] {
         auto cfg = Config::detect();
+        auto na = [](const std::optional<std::string>& v) { return v ? *v : std::string("n/a"); };
+
         std::cout << "den_home:          " << cfg.den_home.string() << "\n"
                   << "store:             " << cfg.store.string() << "\n"
                   << "cache:             " << cfg.cache.string() << "\n"
@@ -521,6 +821,29 @@ void Cli::M::setup() {
                   << "arch:              " << to_string(cfg.arch) << "\n"
                   << "macos_version:     "
                   << (cfg.macos_version ? cfg.macos_version->to_string() : "n/a") << "\n";
+
+        // Host toolchain / OS facts (🎯T66/T2).
+        auto facts = detect_host_facts();
+#ifdef __APPLE__
+        std::cout << "xcode_version:     " << na(facts.xcode_version) << "\n"
+                  << "clt_version:       " << na(facts.clt_version) << "\n"
+                  << "sdk_path:          " << na(facts.sdk_path) << "\n";
+#else
+        std::cout << "os_name:           " << na(facts.os_name) << "\n"
+                  << "os_version:        " << na(facts.os_version) << "\n"
+                  << "kernel:            " << na(facts.kernel) << "\n"
+                  << "glibc:             " << na(facts.glibc) << "\n";
+#endif
+
+        // Homebrew-config parity: echo the stable `brew config` keys.
+        if (facts.homebrew_config.empty()) {
+            std::cout << "homebrew_config:   n/a (brew not found)\n";
+        } else {
+            std::cout << "homebrew_config:\n";
+            for (const auto& [key, value] : facts.homebrew_config) {
+                std::cout << "  " << std::left << std::setw(28) << (key + ":") << value << "\n";
+            }
+        }
     });
 
     // --- env ---
@@ -702,10 +1025,26 @@ void Cli::M::setup() {
     });
 
     // --- migrate ---
-    auto* migrate = app.add_subcommand("migrate", "Migrate from Homebrew Cellar");
-    migrate->callback([] {
+    auto* migrate =
+        app.add_subcommand("migrate", "Migrate formulae, casks, taps, and services from Homebrew");
+    migrate->add_option("names", migrate_names,
+                        "Specific formulae/casks to migrate (default: everything)");
+    migrate->add_flag("--dry-run", migrate_dry_run,
+                      "Compute and print the migration summary without writing anything");
+    migrate->add_flag("--integrate-shell", migrate_integrate_shell,
+                      "Append `eval \"$(den init)\"` to your shell profile (opt-in)");
+    migrate->add_flag("--no-health-check", migrate_no_health,
+                      "Skip the post-migration health check");
+    migrate->callback([this] {
         auto cfg = Config::detect();
-        migrate_from_homebrew(cfg, {});
+        MigrateOptions opts;
+        opts.dry_run = migrate_dry_run;
+        opts.integrate_shell = migrate_integrate_shell;
+        opts.query_services = true; // real CLI path may consult `brew services`
+        migrate_from_homebrew(cfg, migrate_names, opts);
+        if (!migrate_dry_run && !migrate_no_health) {
+            check_migration_health(cfg, /*print=*/true);
+        }
     });
 
     // --- daemon ---
@@ -733,20 +1072,7 @@ void Cli::M::setup() {
             std::cout << "Daemon: not running\n";
 
         auto state = read_daemon_state(cfg.den_home);
-        if (state.last_check) {
-            auto ago = now_secs() - *state.last_check;
-            std::cout << "Last check: " << ago << "s ago\n";
-        } else {
-            std::cout << "Last check: never\n";
-        }
-
-        if (state.pending.empty()) {
-            std::cout << "Pending upgrades: none\n";
-        } else {
-            std::cout << "Pending upgrades:\n";
-            for (const auto& p : state.pending)
-                std::cout << "  " << p.name << " " << p.installed << " -> " << p.available << "\n";
-        }
+        format_daemon_status(std::cout, state);
 
         auto s = read_settings(cfg.den_home);
         std::cout << "Auto-download: " << (s.daemon.auto_download ? "on" : "off") << "\n";
@@ -833,7 +1159,18 @@ void Cli::M::setup() {
             ++count;
         }
 
-        if (count == 0) {
+        // Surface upgrades the daemon has deferred because a managed binary is
+        // in use (🎯T51 / 🎯T72), so the user understands why an available
+        // upgrade has not yet applied.
+        auto dstate = read_daemon_state(cfg.den_home);
+        if (!dstate.deferred.empty()) {
+            std::cout << "Deferred (managed binary in use):\n";
+            for (const auto& d : dstate.deferred) {
+                std::cout << "  " << std::left << std::setw(static_cast<int>(max_name + 2))
+                          << d.name << d.installed << " -> " << d.available << "  ["
+                          << (d.reason.empty() ? "in use" : d.reason) << "]\n";
+            }
+        } else if (count == 0) {
             std::cout << "All packages are up to date.\n";
         }
     });

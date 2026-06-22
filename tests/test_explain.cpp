@@ -120,7 +120,7 @@ TEST_SUITE("explain::integration") {
     //      - The word "clause" or "constraint" (clause-firing evidence).
     //      - The word "preference" or "stable" (preference application evidence).
     // -----------------------------------------------------------------------
-    TEST_CASE("deps --explain mentions clauses and preferences" * doctest::skip()) {
+    TEST_CASE("deps --explain mentions clauses and preferences") {
         TempDir tmp;
         // `den deps --explain pkgX` against a minimal index containing the
         // "constraint_resolution" scenario: libbar 1.5 and 2.0, pkgX needing >= 2.0.
@@ -154,7 +154,7 @@ TEST_SUITE("explain::integration") {
     //    clause explanation.  This covers the 🎯T30 acceptance criterion
     //    for the explain path.
     // -----------------------------------------------------------------------
-    TEST_CASE("deps --explain warns on forced unstable candidate" * doctest::skip()) {
+    TEST_CASE("deps --explain warns on forced unstable candidate") {
         TempDir tmp;
         // Scenario: libz has stable 1.3.1 and testing 1.4.0-rc1.
         // myapp requires libz >= 1.4.0, forcing the rc.
@@ -175,7 +175,7 @@ TEST_SUITE("explain::integration") {
     //    When no assignment exists, the --explain output must describe the
     //    conflict rather than silently failing or crashing.
     // -----------------------------------------------------------------------
-    TEST_CASE("deps --explain describes conflict for UNSAT scenario" * doctest::skip()) {
+    TEST_CASE("deps --explain describes conflict for UNSAT scenario") {
         TempDir tmp;
         // Scenario: pkgA needs libfoo >= 2.0, pkgB needs libfoo <= 1.9.
         // No version satisfies both.

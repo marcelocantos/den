@@ -47,6 +47,8 @@
 
 #include <doctest.h>
 
+#include "index/sat_solver.h"
+
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -130,46 +132,62 @@ struct Scenario {
 };
 
 // ---------------------------------------------------------------------------
-// Expected solver API (🎯T29 surface — not yet implemented).
+// Adapter: translate this harness's scenario model into the production solver
+// types (den::sat) and back.  The harness keeps its own structs so the corpus
+// schema stays decoupled from the solver's API; this thin bridge connects the
+// two.
 // ---------------------------------------------------------------------------
-//
-// When 🎯T29 lands, include its header here and delete this stub:
-//
-//   #include "index/sat_solver.h"
-//
-// The implementation must satisfy:
-//
-//   SolverResult sat_solve(
-//       const std::map<std::string, PackageSpec>& packages,
-//       const std::vector<VersionConstraint>& request);
-//
-// The solver must:
-//   • Treat each (package, version) pair as a boolean SAT variable.
-//   • Encode "at most one version of each package" as clauses.
-//   • Encode dependency constraints as implication clauses.
-//   • Encode conflicts_with as mutual-exclusion clauses.
-//   • Honour optional/recommended soft-deps: pull them in when available,
-//     treat recommended as higher-priority than optional.
-//   • Apply a preference function that biases toward:
-//       - stable > testing > developer > buggy > insecure  (🎯T30)
-//       - newer version over older  (tie-break)
-//       - already-installed version  (stability under upgrade)
-//   • Emit a warning in SolverResult::warnings when the chosen version
-//     has stability != Stable (message must contain "unstable").
-//   • Return satisfiable=false when no assignment exists.
 
-// Stub: returns a placeholder result so the file compiles before 🎯T29 lands.
-// DELETE THIS once the real implementation is available.
-[[maybe_unused]] static SolverResult
-stub_solver(const std::map<std::string, PackageSpec>& /*packages*/,
-            const std::vector<VersionConstraint>& /*request*/) {
-    // Deliberate: the stub marks every scenario as unsatisfied so the
-    // skip-guarded tests would fail if the skip were accidentally removed
-    // before the real solver exists.
-    SolverResult r;
-    r.satisfiable = false;
-    return r;
+namespace {
+
+den::sat::VersionConstraint to_sat(const VersionConstraint& vc) {
+    return {vc.package, vc.op, vc.version};
 }
+
+den::sat::Stability to_sat(Stability s) {
+    switch (s) {
+    case Stability::Stable:
+        return den::sat::Stability::Stable;
+    case Stability::Testing:
+        return den::sat::Stability::Testing;
+    case Stability::Developer:
+        return den::sat::Stability::Developer;
+    case Stability::Buggy:
+        return den::sat::Stability::Buggy;
+    case Stability::Insecure:
+        return den::sat::Stability::Insecure;
+    }
+    return den::sat::Stability::Stable;
+}
+
+den::sat::SolverResult sat_solve(const std::map<std::string, PackageSpec>& packages,
+                                 const std::vector<VersionConstraint>& request) {
+    std::map<std::string, den::sat::PackageSpec> sat_packages;
+    for (const auto& [name, spec] : packages) {
+        den::sat::PackageSpec sp;
+        sp.name = spec.name;
+        for (const auto& cand : spec.candidates) {
+            den::sat::CandidateVersion c;
+            c.version = cand.version;
+            c.stability = to_sat(cand.stability);
+            for (const auto& d : cand.depends_on)
+                c.depends_on.push_back(to_sat(d));
+            c.conflicts = cand.conflicts;
+            for (const auto& d : cand.optional_deps)
+                c.optional_deps.push_back(to_sat(d));
+            for (const auto& d : cand.recommended_deps)
+                c.recommended_deps.push_back(to_sat(d));
+            sp.candidates.push_back(std::move(c));
+        }
+        sat_packages[name] = std::move(sp);
+    }
+    std::vector<den::sat::VersionConstraint> sat_request;
+    for (const auto& r : request)
+        sat_request.push_back(to_sat(r));
+    return den::sat::solve(sat_packages, sat_request);
+}
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // Minimal YAML parser (covers dep_scenarios.yaml schema only)
@@ -445,20 +463,16 @@ static fs::path scenarios_path() {
 }
 
 // ---------------------------------------------------------------------------
-// Scenario runner
-//
-// Replace the body with a real solver call once 🎯T29 is available.
+// Scenario runner — drives the production SAT solver (🎯T29 / 🎯T30).
 // ---------------------------------------------------------------------------
 
 static SolverResult run_scenario(const Scenario& s) {
-    // 🎯T29 TODO: call the real solver here, e.g.:
-    //
-    //   return sat_solve(s.packages, s.request);
-    //
-    // Until then, return a stub that always fails so skip-removed tests
-    // are immediately visible as FAILED rather than silently passing.
-    (void)s;
-    return stub_solver(s.packages, s.request);
+    auto sat = sat_solve(s.packages, s.request);
+    SolverResult r;
+    r.satisfiable = sat.satisfiable;
+    r.assignment = sat.assignment;
+    r.warnings = sat.warnings;
+    return r;
 }
 
 // ---------------------------------------------------------------------------
@@ -536,7 +550,7 @@ TEST_SUITE("sat_solver::corpus") {
     // -----------------------------------------------------------------------
     // 1. Trivial: single package, single version.
     // -----------------------------------------------------------------------
-    TEST_CASE("trivial_single" * doctest::skip()) {
+    TEST_CASE("trivial_single") {
         auto path = scenarios_path();
         if (path.empty() || !fs::exists(path))
             return;
@@ -552,7 +566,7 @@ TEST_SUITE("sat_solver::corpus") {
     // -----------------------------------------------------------------------
     // 2. Linear dependency chain.
     // -----------------------------------------------------------------------
-    TEST_CASE("linear_dep_chain" * doctest::skip()) {
+    TEST_CASE("linear_dep_chain") {
         auto path = scenarios_path();
         if (path.empty() || !fs::exists(path))
             return;
@@ -570,7 +584,7 @@ TEST_SUITE("sat_solver::corpus") {
     // -----------------------------------------------------------------------
     // 3. Multi-version coinstallation.
     // -----------------------------------------------------------------------
-    TEST_CASE("multi_version_coinstall" * doctest::skip()) {
+    TEST_CASE("multi_version_coinstall") {
         auto path = scenarios_path();
         if (path.empty() || !fs::exists(path))
             return;
@@ -590,7 +604,7 @@ TEST_SUITE("sat_solver::corpus") {
     // -----------------------------------------------------------------------
     // 4. Version-constrained conflict → UNSAT.
     // -----------------------------------------------------------------------
-    TEST_CASE("version_conflict_unsat" * doctest::skip()) {
+    TEST_CASE("version_conflict_unsat") {
         auto path = scenarios_path();
         if (path.empty() || !fs::exists(path))
             return;
@@ -606,7 +620,7 @@ TEST_SUITE("sat_solver::corpus") {
     // -----------------------------------------------------------------------
     // 5. Constraint resolved by choosing the right version.
     // -----------------------------------------------------------------------
-    TEST_CASE("constraint_resolution" * doctest::skip()) {
+    TEST_CASE("constraint_resolution") {
         auto path = scenarios_path();
         if (path.empty() || !fs::exists(path))
             return;
@@ -624,7 +638,7 @@ TEST_SUITE("sat_solver::corpus") {
     // -----------------------------------------------------------------------
     // 6. Direct conflicts_with → UNSAT.
     // -----------------------------------------------------------------------
-    TEST_CASE("direct_conflict_unsat" * doctest::skip()) {
+    TEST_CASE("direct_conflict_unsat") {
         auto path = scenarios_path();
         if (path.empty() || !fs::exists(path))
             return;
@@ -639,7 +653,7 @@ TEST_SUITE("sat_solver::corpus") {
     // -----------------------------------------------------------------------
     // 7. Stability bias: solver picks stable over testing.
     // -----------------------------------------------------------------------
-    TEST_CASE("stability_prefer_stable" * doctest::skip()) {
+    TEST_CASE("stability_prefer_stable") {
         auto path = scenarios_path();
         if (path.empty() || !fs::exists(path))
             return;
@@ -661,7 +675,7 @@ TEST_SUITE("sat_solver::corpus") {
     // 8. Stability forced onto unstable candidate → warning emitted.
     //    (🎯T30 acceptance criterion)
     // -----------------------------------------------------------------------
-    TEST_CASE("stability_forced_unstable_warns" * doctest::skip()) {
+    TEST_CASE("stability_forced_unstable_warns") {
         auto path = scenarios_path();
         if (path.empty() || !fs::exists(path))
             return;
@@ -682,7 +696,7 @@ TEST_SUITE("sat_solver::corpus") {
     // -----------------------------------------------------------------------
     // 9. Diamond dependency resolved to compatible shared version.
     // -----------------------------------------------------------------------
-    TEST_CASE("diamond_shared_dep" * doctest::skip()) {
+    TEST_CASE("diamond_shared_dep") {
         auto path = scenarios_path();
         if (path.empty() || !fs::exists(path))
             return;
@@ -702,7 +716,7 @@ TEST_SUITE("sat_solver::corpus") {
     // -----------------------------------------------------------------------
     // 10. Optional dep pulled in when available in index.
     // -----------------------------------------------------------------------
-    TEST_CASE("optional_dep_included_when_available" * doctest::skip()) {
+    TEST_CASE("optional_dep_included_when_available") {
         auto path = scenarios_path();
         if (path.empty() || !fs::exists(path))
             return;
@@ -720,7 +734,7 @@ TEST_SUITE("sat_solver::corpus") {
     // -----------------------------------------------------------------------
     // 11. Recommended dep preferred over optional.
     // -----------------------------------------------------------------------
-    TEST_CASE("recommended_dep_preferred" * doctest::skip()) {
+    TEST_CASE("recommended_dep_preferred") {
         auto path = scenarios_path();
         if (path.empty() || !fs::exists(path))
             return;
@@ -740,7 +754,7 @@ TEST_SUITE("sat_solver::corpus") {
     // -----------------------------------------------------------------------
     // 12. Exact-version pinning honoured.
     // -----------------------------------------------------------------------
-    TEST_CASE("exact_version_pin" * doctest::skip()) {
+    TEST_CASE("exact_version_pin") {
         auto path = scenarios_path();
         if (path.empty() || !fs::exists(path))
             return;
@@ -756,7 +770,7 @@ TEST_SUITE("sat_solver::corpus") {
     // -----------------------------------------------------------------------
     // 13. Transitive conflict requires backtracking to older dep version.
     // -----------------------------------------------------------------------
-    TEST_CASE("transitive_backtrack" * doctest::skip()) {
+    TEST_CASE("transitive_backtrack") {
         auto path = scenarios_path();
         if (path.empty() || !fs::exists(path))
             return;
@@ -775,7 +789,7 @@ TEST_SUITE("sat_solver::corpus") {
     // -----------------------------------------------------------------------
     // 14. Cross-provider: explicit provider wins.
     // -----------------------------------------------------------------------
-    TEST_CASE("provider_choice" * doctest::skip()) {
+    TEST_CASE("provider_choice") {
         auto path = scenarios_path();
         if (path.empty() || !fs::exists(path))
             return;
@@ -797,7 +811,7 @@ TEST_SUITE("sat_solver::corpus") {
     // checks.  This catches regressions when new scenarios are added to the
     // YAML without adding matching individual test cases above.
     // -----------------------------------------------------------------------
-    TEST_CASE("all_scenarios_data_driven" * doctest::skip()) {
+    TEST_CASE("all_scenarios_data_driven") {
         auto path = scenarios_path();
         if (path.empty() || !fs::exists(path))
             return;

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -17,6 +18,27 @@ struct InstalledPackage {
     std::string version;
     fs::path path;
 };
+
+/// A keg (one installed version) enriched with Cellar-inspection metadata
+/// for `den list --cellar`.
+struct KegInfo {
+    std::string name;
+    std::string version;
+    fs::path path;
+    uint64_t disk_bytes = 0;           // recursive on-disk size of the keg
+    std::vector<std::string> env_refs; // environment paths referencing this keg, sorted
+    bool orphaned() const { return env_refs.empty(); }
+};
+
+/// Recursively sum the on-disk size of a keg directory. Follows no symlinks
+/// (counts the link entry, not its target) and tolerates transient I/O errors.
+uint64_t keg_disk_usage(const fs::path& keg);
+
+/// Inspect every keg in the Cellar: disk usage, the environments that
+/// reference it, and whether it is orphaned (referenced by no environment).
+/// References are derived from the environment manifests under den_home.
+/// The result is sorted by (name, version) for deterministic output.
+std::vector<KegInfo> inspect_cellar(const fs::path& store, const fs::path& den_home);
 
 /// Return the path for a specific package version in the store.
 /// Layout: store/<name>/<version>/

@@ -22,9 +22,23 @@ struct PendingUpgrade {
     std::string available;
 };
 
+// An upgrade the daemon staged but did not apply because one or more of the
+// installed keg's files were held open by a live process (🎯T51 / 🎯T72).
+// It is re-attempted on the next upgrade pass once the process exits.
+struct DeferredUpgrade {
+    std::string name;
+    std::string installed;
+    std::string available;
+    std::string reason; // human-readable, e.g. "binary in use"
+};
+
+// Signals to tests/consumers that DaemonState carries a `deferred` array.
+#define DAEMON_STATE_HAS_DEFERRED 1
+
 struct DaemonState {
     std::optional<uint64_t> last_check;
     std::vector<PendingUpgrade> pending;
+    std::vector<DeferredUpgrade> deferred;
     std::optional<uint64_t> last_upgrade;
     std::vector<std::string> errors;
 };

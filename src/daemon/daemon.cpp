@@ -4,6 +4,7 @@
 #include "daemon.h"
 #include "../activity/activity.h"
 #include "../core/error.h"
+#include "upgrade_pass.h"
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -253,6 +254,23 @@ DaemonState read_daemon_state(const fs::path& den_home) {
                 state.pending.push_back(std::move(pu));
             }
         }
+
+        if (j.contains("deferred") && j["deferred"].is_array()) {
+            for (const auto& d : j["deferred"]) {
+                if (!d.is_object())
+                    continue;
+                DeferredUpgrade du;
+                if (d.contains("name") && d["name"].is_string())
+                    du.name = d["name"].get<std::string>();
+                if (d.contains("installed") && d["installed"].is_string())
+                    du.installed = d["installed"].get<std::string>();
+                if (d.contains("available") && d["available"].is_string())
+                    du.available = d["available"].get<std::string>();
+                if (d.contains("reason") && d["reason"].is_string())
+                    du.reason = d["reason"].get<std::string>();
+                state.deferred.push_back(std::move(du));
+            }
+        }
     } catch (const std::exception& e) {
         SPDLOG_WARN("daemon: failed to read state from {}: {}", path.string(), e.what());
     }
@@ -274,6 +292,15 @@ void write_daemon_state(const fs::path& den_home, const DaemonState& state) {
             {{"name", p.name}, {"installed", p.installed}, {"available", p.available}});
     }
     j["pending"] = pending;
+
+    nlohmann::json deferred = nlohmann::json::array();
+    for (const auto& d : state.deferred) {
+        deferred.push_back({{"name", d.name},
+                            {"installed", d.installed},
+                            {"available", d.available},
+                            {"reason", d.reason}});
+    }
+    j["deferred"] = deferred;
 
     // Atomic write: write to .tmp then rename.
     fs::path tmp = state_path(den_home).string() + ".tmp";
@@ -366,26 +393,31 @@ void run_daemon(const Config& config) {
         }
 
         // Apply upgrades if auto_upgrade is enabled and we are in the window.
+        // run_upgrade_pass defers any package whose installed keg has files in
+        // use by a live process and re-attempts previously deferred items once
+        // their holding process has exited (🎯T51 / 🎯T72). It also records the
+        // activity log and bumps last_upgrade for any upgrades it applies.
         if (settings.auto_upgrade && !state.pending.empty()) {
             bool in_window = settings.upgrade_window.empty()
                                  ? true
                                  : in_maintenance_window(settings.upgrade_window);
             if (in_window) {
-                SPDLOG_INFO("daemon: auto-upgrading {} package(s)", state.pending.size());
-                log_daemon(den_home, "auto-upgrading " + std::to_string(state.pending.size()) +
+                SPDLOG_INFO("daemon: running upgrade pass over {} pending package(s)",
+                            state.pending.size());
+                log_daemon(den_home, "upgrade pass over " + std::to_string(state.pending.size()) +
                                          " package(s)");
-                // TODO: apply upgrades, clear state.pending on success.
-                state.last_upgrade = now_secs();
 
-                // Record upgrade activity.
-                {
-                    auto ts = now_secs();
-                    std::vector<ActivityEntry> entries;
-                    entries.reserve(state.pending.size());
-                    for (const auto& p : state.pending) {
-                        entries.push_back({ts, p.name, p.installed, p.available, "daemon"});
-                    }
-                    record_activity(den_home, entries);
+                UpgradePassResult res = run_upgrade_pass(config.store, den_home, state);
+
+                if (!res.applied.empty()) {
+                    log_daemon(den_home,
+                               "applied " + std::to_string(res.applied.size()) + " upgrade(s)");
+                }
+                if (!res.deferred.empty()) {
+                    SPDLOG_INFO("daemon: deferred {} upgrade(s) (managed binary in use)",
+                                res.deferred.size());
+                    log_daemon(den_home, "deferred " + std::to_string(res.deferred.size()) +
+                                             " upgrade(s) (managed binary in use)");
                 }
             } else {
                 SPDLOG_DEBUG("daemon: outside maintenance window '{}', skipping upgrade",

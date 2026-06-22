@@ -3,7 +3,13 @@
 
 #include "store.h"
 
+#include "../env/manifest.h"
+
 #include <spdlog/spdlog.h>
+
+#include <algorithm>
+#include <map>
+#include <set>
 
 namespace den {
 
@@ -90,6 +96,72 @@ std::optional<InstalledPackage> which_package(const fs::path& store, const fs::p
         .version = version,
         .path = pkg_path,
     };
+}
+
+uint64_t keg_disk_usage(const fs::path& keg) {
+    std::error_code ec;
+    if (!fs::exists(keg, ec) || !fs::is_directory(keg, ec)) {
+        return 0;
+    }
+
+    uint64_t total = 0;
+    // Do not follow symlinks: count the link entry itself, never its target —
+    // a keg may symlink into shared resources we must not double-count.
+    for (auto it = fs::recursive_directory_iterator(
+             keg, fs::directory_options::skip_permission_denied, ec);
+         it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        if (ec) {
+            SPDLOG_DEBUG("keg_disk_usage: iteration error under {}: {}", keg.string(),
+                         ec.message());
+            ec.clear();
+            continue;
+        }
+        std::error_code stat_ec;
+        if (it->is_symlink(stat_ec) || stat_ec) {
+            continue;
+        }
+        if (it->is_regular_file(stat_ec) && !stat_ec) {
+            auto sz = it->file_size(stat_ec);
+            if (!stat_ec) {
+                total += sz;
+            }
+        }
+    }
+    return total;
+}
+
+std::vector<KegInfo> inspect_cellar(const fs::path& store, const fs::path& den_home) {
+    // Build a map of "name@version" -> sorted set of referencing env paths by
+    // resolving every environment manifest.
+    std::map<std::string, std::set<std::string>> refs;
+    for (const auto& env_path : list_all(den_home)) {
+        auto resolved = resolve(den_home, env_path);
+        for (const auto& [name, version] : resolved) {
+            refs[name + "@" + version].insert(env_path);
+        }
+    }
+
+    std::vector<KegInfo> result;
+    for (const auto& pkg : list_installed(store)) {
+        KegInfo info;
+        info.name = pkg.name;
+        info.version = pkg.version;
+        info.path = pkg.path;
+        info.disk_bytes = keg_disk_usage(pkg.path);
+        auto it = refs.find(pkg.name + "@" + pkg.version);
+        if (it != refs.end()) {
+            info.env_refs.assign(it->second.begin(), it->second.end());
+        }
+        result.push_back(std::move(info));
+    }
+
+    std::sort(result.begin(), result.end(), [](const KegInfo& a, const KegInfo& b) {
+        if (a.name != b.name)
+            return a.name < b.name;
+        return a.version < b.version;
+    });
+
+    return result;
 }
 
 } // namespace den
