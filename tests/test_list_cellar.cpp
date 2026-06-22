@@ -200,25 +200,30 @@ TEST_SUITE("T66::list_cellar::store_unit") {
 }
 
 // ===========================================================================
-// Integration tests for `den list` (plain, no --cellar flag yet).
-// These verify the existing `den list` output against the fake Cellar.
+// Integration tests for Cellar inspection via `den list --cellar`.
+//
+// Note on semantics (🎯T66 + 🎯T60): plain `den list` enumerates the *active
+// environment's* installed packages across all providers (the multi-provider
+// view), not the raw Cellar. Cellar enumeration — every keg in the shared
+// store, regardless of environment — is the `--cellar` view. The fake-Cellar
+// fixture exercises that store-level view.
 // ===========================================================================
 
 TEST_SUITE("T66::list_cellar::integration") {
 
-    TEST_CASE("den list shows installed kegs from fake Cellar") {
+    TEST_CASE("den list --cellar shows installed kegs from fake Cellar") {
         TempDir tmp;
         auto cellar = tmp.path / "Cellar";
         auto den_home = tmp.path / "den";
         fs::create_directories(den_home);
         build_fake_cellar(cellar, den_home);
 
-        const auto out = run_den("list", den_home, cellar);
+        const auto out = run_den("list --cellar", den_home, cellar);
         CHECK(out.find("tree") != std::string::npos);
         CHECK(out.find("curl") != std::string::npos);
         CHECK(out.find("orphan") != std::string::npos);
-        // The "No packages installed" message must NOT appear.
-        CHECK(out.find("No packages installed") == std::string::npos);
+        // The empty-Cellar message must NOT appear.
+        CHECK(out.find("No kegs in Cellar") == std::string::npos);
     }
 
     // -----------------------------------------------------------------------
