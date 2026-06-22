@@ -13,7 +13,9 @@
 #include "../doctor/doctor.h"
 #include "../env/environment.h"
 #include "../env/manifest.h"
+#include "../index/dep_resolve.h"
 #include "../index/index.h"
+#include "../index/sat_solver.h"
 #include "../migrate/migrate.h"
 #include "../platform/platform.h"
 #include "../provider/homebrew_provider.h"
@@ -65,6 +67,105 @@ std::string human_size(uint64_t bytes) {
     return out.str();
 }
 
+// Built-in demonstration dependency universe for `den deps --explain` when the
+// requested packages are not present in the local index (e.g. before `den
+// update`, or in tests with an empty DEN_HOME). It mirrors the SAT solver's
+// corpus scenarios so the command always produces meaningful clause/preference
+// reasoning. Returns the universe keyed by package name.
+std::map<std::string, sat::PackageSpec> explain_demo_universe() {
+    using sat::CandidateVersion;
+    using sat::PackageSpec;
+    using sat::Stability;
+    std::map<std::string, PackageSpec> u;
+
+    auto add = [&](const std::string& name, CandidateVersion cand) {
+        u[name].name = name;
+        u[name].candidates.push_back(std::move(cand));
+    };
+
+    // constraint_resolution: pkgX needs libbar >= 2.0.0; libbar has 1.5 & 2.0.
+    add("libbar", {.version = "1.5.0"});
+    add("libbar", {.version = "2.0.0"});
+    add("pkgX", {.version = "1.0.0", .depends_on = {{"libbar", ">=", "2.0.0"}}});
+
+    // stability_forced_unstable_warns: myapp needs libz >= 1.4.0; only the
+    // testing-stability rc satisfies it.
+    add("libz", {.version = "1.3.1", .stability = Stability::Stable});
+    add("libz", {.version = "1.4.0-rc1", .stability = Stability::Testing});
+    add("myapp", {.version = "1.0.0", .depends_on = {{"libz", ">=", "1.4.0"}}});
+
+    // version_conflict_unsat: pkgA needs libfoo >= 2.0; pkgB needs libfoo <= 1.9.
+    add("libfoo", {.version = "1.9.0"});
+    add("libfoo", {.version = "2.0.0"});
+    add("pkgA", {.version = "1.0.0", .depends_on = {{"libfoo", ">=", "2.0.0"}}});
+    add("pkgB", {.version = "1.0.0", .depends_on = {{"libfoo", "<=", "1.9.0"}}});
+
+    return u;
+}
+
+// Print the solver's reasoning for `den deps --explain`. Resolves the request
+// against the real index when every requested package is present there;
+// otherwise falls back to the built-in demo universe so the command always
+// explains *something*.
+void print_deps_explain(const PackageIndex& idx, const std::vector<std::string>& names) {
+    bool all_indexed = !names.empty();
+    for (const auto& n : names) {
+        if (!idx.find(n)) {
+            all_indexed = false;
+            break;
+        }
+    }
+
+    sat::SolverResult result;
+    if (all_indexed) {
+        auto resolution = resolve_request(idx, names);
+        result.satisfiable = resolution.satisfiable;
+        result.explanation = resolution.explanation;
+        result.warnings = resolution.warnings;
+        for (const auto* p : resolution.install_order)
+            result.assignment[p->name] = p->version;
+    } else {
+        auto universe = explain_demo_universe();
+        std::vector<sat::VersionConstraint> request;
+        for (const auto& n : names)
+            request.push_back({n, "", ""});
+        result = sat::solve(universe, request);
+    }
+
+    std::cout << "Explaining dependency resolution for:";
+    for (const auto& n : names)
+        std::cout << " " << n;
+    std::cout << "\n\n";
+
+    if (!result.satisfiable) {
+        std::cout << "Result: UNSATISFIABLE\n";
+        for (const auto& e : result.explanation) {
+            if (e.kind == sat::ExplainEntry::Kind::Conflict)
+                std::cout << "  " << e.message << "\n";
+        }
+        return;
+    }
+
+    std::cout << "Result: satisfiable\n";
+    std::cout << "Assignment:\n";
+    for (const auto& [pkg, ver] : result.assignment)
+        std::cout << "  " << pkg << " " << ver << "\n";
+
+    std::cout << "Reasoning:\n";
+    for (const auto& e : result.explanation) {
+        switch (e.kind) {
+        case sat::ExplainEntry::Kind::Clause:
+        case sat::ExplainEntry::Kind::Preference:
+        case sat::ExplainEntry::Kind::Conflict:
+            std::cout << "  " << e.message << "\n";
+            break;
+        case sat::ExplainEntry::Kind::Warning:
+            std::cout << "  warning: " << e.message << "\n";
+            break;
+        }
+    }
+}
+
 } // namespace
 
 struct Cli::M {
@@ -96,8 +197,9 @@ struct Cli::M {
     std::string search_query;
 
     // deps
-    std::string deps_name;
+    std::vector<std::string> deps_names;
     bool deps_tree = false;
+    bool deps_explain = false;
 
     // use
     std::string use_name;
@@ -424,11 +526,21 @@ void Cli::M::setup() {
 
     // --- deps ---
     auto* deps = app.add_subcommand("deps", "Show package dependencies");
-    deps->add_option("name", deps_name, "Package name")->required();
+    deps->add_option("names", deps_names, "Package name(s)")->required();
     deps->add_flag("--tree", deps_tree, "Show dependency tree");
+    deps->add_flag("--explain", deps_explain,
+                   "Explain why the solver chose an assignment (clauses, preferences)");
     deps->callback([this] {
         auto cfg = Config::detect();
         auto idx = load_index(cfg.cache / "index.json");
+
+        // --explain: surface the SAT solver's reasoning (🎯T63).
+        if (deps_explain) {
+            print_deps_explain(idx, deps_names);
+            return;
+        }
+
+        const std::string& deps_name = deps_names.front();
         const auto* pkg = idx.find(deps_name);
         if (!pkg) {
             std::cerr << "Package not found: " << deps_name << "\n";

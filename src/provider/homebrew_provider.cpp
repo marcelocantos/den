@@ -10,6 +10,7 @@
 #include "../download/fetch.h"
 #include "../env/environment.h"
 #include "../env/manifest.h"
+#include "../index/dep_resolve.h"
 #include "../platform/platform.h"
 #include "../store/store.h"
 
@@ -23,50 +24,6 @@
 namespace den {
 
 namespace {
-
-std::vector<const Package*> resolve_install_order(const PackageIndex& idx, const fs::path& store,
-                                                  const std::string& name) {
-    std::vector<const Package*> order;
-    std::set<std::string> visited;
-    std::set<std::string> in_stack;
-
-    struct Resolver {
-        const PackageIndex& idx;
-        const fs::path& store;
-        std::vector<const Package*>& order;
-        std::set<std::string>& visited;
-        std::set<std::string>& in_stack;
-
-        void visit(const std::string& n) {
-            if (visited.count(n))
-                return;
-            if (in_stack.count(n)) {
-                SPDLOG_WARN("dependency cycle detected at '{}'", n);
-                return;
-            }
-
-            auto* pkg = idx.find(n);
-            if (!pkg) {
-                SPDLOG_WARN("dependency '{}' not found in index, skipping", n);
-                return;
-            }
-
-            in_stack.insert(n);
-            for (const auto& dep : pkg->dependencies) {
-                if (!is_installed(store, dep, "")) {
-                    visit(dep);
-                }
-            }
-            in_stack.erase(n);
-            visited.insert(n);
-            order.push_back(pkg);
-        }
-    };
-
-    Resolver r{idx, store, order, visited, in_stack};
-    r.visit(name);
-    return order;
-}
 
 // "ffmpeg" → "homebrew/core/ffmpeg"; "python@3.12" → "homebrew/core/python/3.12"
 std::string ghcr_repo_path(const std::string& name) {
@@ -207,12 +164,40 @@ InstallResult HomebrewProvider::install(const Config& config, std::string_view n
         }
     }
 
-    auto install_order = resolve_install_order(*idx_, config.store, name_str);
+    // Resolve the full install order via the SAT solver (🎯T63). It enforces
+    // version constraints, conflicts, and stability preferences across the
+    // transitive dependency closure — there is no greedy fallback path.
+    std::vector<std::string> installed_names;
+    installed_names.reserve(homebrew_pkgs.size());
+    for (const auto& [installed_name, _] : homebrew_pkgs)
+        installed_names.push_back(installed_name);
+
+    auto resolution = resolve_request(*idx_, {name_str}, installed_names);
+    if (!resolution.satisfiable) {
+        std::string detail;
+        for (const auto& e : resolution.explanation) {
+            if (e.kind == sat::ExplainEntry::Kind::Conflict) {
+                detail = e.message;
+                break;
+            }
+        }
+        throw UserError("cannot resolve dependencies for '" + name_str + "'" +
+                        (detail.empty() ? "" : ": " + detail));
+    }
+
+    // Surface stability warnings (🎯T30) to the user before installing.
+    for (const auto& w : resolution.warnings)
+        SPDLOG_WARN("{}", w);
 
     InstallResult result;
     result.resolved_version = pkg->version;
-    for (const auto* p : install_order) {
-        install_one(config, *p);
+    for (const auto* p : resolution.install_order) {
+        if (::den::is_installed(config.store, p->name, p->version)) {
+            // Already present in the shared Cellar — skip the download/extract.
+            SPDLOG_DEBUG("{} {} already installed", p->name, p->version);
+        } else {
+            install_one(config, *p);
+        }
         if (p->name != name_str) {
             result.auto_deps.push_back(p->name);
         }
