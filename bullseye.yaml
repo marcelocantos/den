@@ -1176,7 +1176,7 @@ targets:
     achieved: 2026-06-20
   T74:
     name: den v1.0 feature set is complete
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1197,9 +1197,10 @@ targets:
     - T72
     origin: manual
     discovered: 2026-06-07
+    achieved: 2026-06-22
   T75:
     name: v1.0 release candidate passes end-to-end validation
-    status: identified
+    status: converging
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1229,6 +1230,19 @@ targets:
     - T75
     origin: manual
     discovered: 2026-06-07
+  T77:
+    name: Go provider installs full module paths, not just bare aliases
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - '`den install --provider go <full/module/path>@<version>` (e.g. `honnef.co/go/tools/cmd/staticcheck@latest`) installs the binary and materialises it into the env bin/ without an ''invalid package name'' error.'
+    - '`den install --provider go <full/module/path>` (no version suffix) also succeeds end-to-end.'
+    - The go-provider package-name validation accepts `/`, `.`, and `@version` suffixes used by real Go module paths; the smoke step's `source_build_via_tap`/go scenarios can nominate a full module path and pass.
+    - Bare curated aliases (e.g. `staticcheck`, `gofumpt`) continue to work.
+    context: 'Surfaced during 🎯T75 RC-prep smoke-set work. The Go provider (🎯T60, shipped in PR #48) rejects `@version` suffixes ("invalid package name") and throws on `/` during materialise for full module paths; only the curated bare-alias form works end-to-end. This is a real gap in the multi-provider basket promised by 🎯T74 acceptance ("install across providers without manual workarounds") — documented as a ⏳ partial in docs/den-vs-brew.md and tracked here. Follow-up to 🎯T60.'
+    origin: manual
+    discovered: 2026-06-22
   T8:
     name: Bottle pouring
     status: achieved
