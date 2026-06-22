@@ -19,6 +19,7 @@
 #include "../index/sat_solver.h"
 #include "../migrate/migrate.h"
 #include "../platform/platform.h"
+#include "../provider/exec.h"
 #include "../provider/homebrew_provider.h"
 #include "../provider/registry.h"
 #include "../selfupdate/selfupdate.h"
@@ -40,6 +41,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace den {
@@ -236,6 +238,9 @@ struct Cli::M {
     // self-update
     bool selfupdate_check = false;
 
+    // run
+    std::vector<std::string> run_argv;
+
     // which
     std::string which_file;
 
@@ -262,13 +267,14 @@ void Cli::M::setup() {
     install->callback([this] {
         auto cfg = Config::detect();
         auto idx = load_index(cfg.cache / "index.json");
-        if (idx.packages.empty()) {
-            SPDLOG_ERROR("package index is empty — run `den update` first");
-            return;
-        }
+
         if (this->build_from_source) {
             // Source builds are Homebrew-only — the Ruby DSL belongs to the
             // Homebrew ecosystem. --provider is ignored on this path.
+            if (idx.packages.empty()) {
+                SPDLOG_ERROR("package index is empty — run `den update` first");
+                return;
+            }
             auto active = active_env_path(cfg.den_home);
             for (const auto& name : install_names) {
                 auto* pkg = idx.find(name);
@@ -291,7 +297,14 @@ void Cli::M::setup() {
             auto& provider = resolve_provider(registry, name, manifest, this->install_provider);
             by_provider[&provider].push_back(name);
         }
+        // The index is only consulted by the Homebrew provider; require it
+        // only when a Homebrew install is actually in the batch, so installs
+        // through pip/npm/go/cargo work without `den update`.
         for (auto& [provider, names] : by_provider) {
+            if (provider->provider_name() == "homebrew" && idx.packages.empty()) {
+                SPDLOG_ERROR("package index is empty — run `den update` first");
+                continue;
+            }
             install_packages(cfg, *provider, idx, names);
         }
     });
@@ -418,21 +431,90 @@ void Cli::M::setup() {
             return;
         }
 
-        HomebrewProvider provider(nullptr);
-        auto installed = provider.list_installed(cfg);
-        if (installed.empty()) {
+        // Uniform listing across providers: enumerate the active environment's
+        // manifest (resolved through the parent chain), grouped per provider.
+        // Each row is name / version / provider — no provider-specific syntax
+        // leaks into the name column, and the set tracks `den install` /
+        // `den uninstall` for every provider identically (T60 criterion 3).
+        auto active = active_env_path(cfg.den_home);
+        auto per_provider = resolve_per_provider(cfg.den_home, active);
+
+        struct Row {
+            std::string name;
+            std::string version;
+            std::string provider;
+        };
+        std::vector<Row> rows;
+        for (const auto& [provider_name, pkgs] : per_provider) {
+            for (const auto& [name, version] : pkgs) {
+                rows.push_back({name, version, provider_name});
+            }
+        }
+
+        if (rows.empty()) {
             std::cout << "No packages installed.\n";
             return;
         }
-        // Find widest name for column alignment.
+
+        std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) {
+            return std::tie(a.name, a.version) < std::tie(b.name, b.version);
+        });
+
         size_t max_name = 0;
-        for (const auto& pkg : installed) {
-            max_name = std::max(max_name, pkg.name.size());
+        size_t max_ver = 0;
+        for (const auto& r : rows) {
+            max_name = std::max(max_name, r.name.size());
+            max_ver = std::max(max_ver, r.version.size());
         }
-        for (const auto& pkg : installed) {
-            std::cout << std::left << std::setw(static_cast<int>(max_name + 2)) << pkg.name
-                      << pkg.version << "\n";
+        for (const auto& r : rows) {
+            std::cout << std::left << std::setw(static_cast<int>(max_name + 2)) << r.name
+                      << std::setw(static_cast<int>(max_ver + 2)) << r.version << r.provider
+                      << "\n";
         }
+    });
+
+    // --- run ---
+    // `den run <binary> [args...]` execs a binary from the active env's bin/
+    // directory, with that bin/ prepended to PATH so peer tools resolve. This
+    // is the provider-agnostic way to invoke an installed package: a Homebrew
+    // keg, a pip venv script, an npm CLI, a Go binary, and a Cargo binary all
+    // surface into the same env/bin and run identically.
+    auto* run = app.add_subcommand("run", "Run an installed binary from the active environment");
+    run->add_option("cmd", run_argv, "Binary name followed by its arguments")->required();
+    run->prefix_command(); // stop parsing after the binary name; pass the rest through verbatim
+    run->callback([this, run] {
+        // With prefix_command(), the binary name lands in run_argv and every
+        // token after it (including flags like --version) is held as the
+        // subcommand's remaining args. Stitch them back into one argv.
+        std::vector<std::string> tokens = run_argv;
+        for (const auto& extra : run->remaining()) {
+            tokens.push_back(extra);
+        }
+        if (tokens.empty()) {
+            std::cerr << "error: `den run` needs a binary name\n";
+            std::exit(2);
+        }
+        auto cfg = Config::detect();
+        auto active = active_env_path(cfg.den_home);
+        auto bin_dir = env_dir(cfg.den_home, active) / "bin";
+        auto binary = bin_dir / tokens.front();
+
+        std::error_code ec;
+        if (!fs::exists(binary, ec)) {
+            std::cerr << "error: '" << tokens.front() << "' is not installed in environment '"
+                      << active << "'\n";
+            std::exit(127);
+        }
+
+        std::vector<std::string> argv;
+        argv.reserve(tokens.size());
+        argv.push_back(binary.string());
+        for (size_t i = 1; i < tokens.size(); ++i) {
+            argv.push_back(tokens[i]);
+        }
+
+        int code = run_tool_interactive(argv, {}, bin_dir.string());
+        std::exit(code < 0 ? 127 : code);
     });
 
     // --- info ---
@@ -441,6 +523,38 @@ void Cli::M::setup() {
     info->callback([this] {
         auto cfg = Config::detect();
         auto idx = load_index(cfg.cache / "index.json");
+
+        // Resolve which provider owns this package. A manifest hint or
+        // `--provider` would refine this; for info we use the active env's
+        // manifest so an already-installed non-Homebrew package reports under
+        // its owning provider instead of falling through to the index.
+        auto active = active_env_path(cfg.den_home);
+        auto manifest = read_manifest(cfg.den_home, active);
+        auto registry = make_default_registry(&idx);
+        auto& provider = resolve_provider(registry, info_name, manifest);
+        auto provider_name = std::string(provider.provider_name());
+
+        // Non-Homebrew providers have no rich index metadata; report the
+        // uniform fields drawn from the provider's own installed set.
+        if (provider_name != "homebrew") {
+            std::string version;
+            for (const auto& installed : provider.list_installed(cfg)) {
+                if (installed.name == info_name) {
+                    version = installed.version;
+                    break;
+                }
+            }
+            if (version.empty()) {
+                std::cerr << "Package not found: " << info_name << " (provider " << provider_name
+                          << ")\n";
+                return;
+            }
+            std::cout << "Name:         " << info_name << "\n"
+                      << "Version:      " << version << "\n"
+                      << "Provider:     " << provider_name << "\n";
+            return;
+        }
+
         const auto* pkg = idx.find(info_name);
         if (!pkg) {
             std::cerr << "Package not found: " << info_name << "\n";
