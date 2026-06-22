@@ -172,7 +172,7 @@ TEST_SUITE("tap::remove_unresolves") {
     // 3. Re-tapping must re-enable resolution.
     //    Add → remove → add again → formula must be visible once more.
     // -----------------------------------------------------------------------
-    TEST_CASE("re-tapping re-enables formula resolution" * doctest::skip(true)) {
+    TEST_CASE("re-tapping re-enables formula resolution") {
         TempDir tmp;
         const std::string home = tmp.path.string();
 

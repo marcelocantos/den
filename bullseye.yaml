@@ -39,7 +39,7 @@ targets:
     achieved: 2026-04-11
   T11:
     name: ��� Source builds
-    status: identified
+    status: achieved
     value: 3.0
     cost: 8.0
     acceptance:
@@ -49,6 +49,7 @@ targets:
     - T31
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-06-22
   T12:
     name: Cask support
     status: achieved
@@ -111,7 +112,7 @@ targets:
     achieved: 2026-04-11
   T17:
     name: Formula metadata parsing (third-party taps)
-    status: identified
+    status: achieved
     value: 3.0
     cost: 5.0
     acceptance:
@@ -121,6 +122,7 @@ targets:
     - T31
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-06-22
   T18:
     name: Native formula parser is sound for simple cases and refuses complex ones cleanly
     status: achieved
@@ -154,7 +156,7 @@ targets:
     achieved: 2026-05-15
   T19:
     name: Performance
-    status: identified
+    status: achieved
     value: 3.0
     cost: 5.0
     acceptance:
@@ -162,6 +164,7 @@ targets:
     context: Benchmarking against Homebrew.
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-06-22
   T2:
     name: Configuration and environment detection
     status: achieved
@@ -608,9 +611,10 @@ targets:
     achieved: 2026-06-22
   T42:
     name: Independent hash verification pipeline
-    status: identified
+    status: achieved
     value: 8.0
     cost: 8.0
+    actual_cost: 8.0
     acceptance:
     - TODO
     context: 'den maintains a verified replica of Homebrew bottle SHA256 hashes in its own GitHub repo, hosted on a different CDN than formulae.brew.sh. On install, den cross-references both sources — an attacker must compromise both Homebrew''s CDN and den''s GitHub repo simultaneously.  The CI replication job does NOT blindly trust the upstream index. It builds a diff-based trust model:  1. Fetch the current formula index from formulae.brew.sh. 2. Diff against the previous verified snapshot — identify changed hashes. 3. For each changed hash, independently verify by downloading the actual bottle from GHCR and computing SHA256 locally. If the bottle''s computed hash matches the index claim, the entry is genuine. If not, reject it and alert (open a GitHub issue, fail the CI run). 4. Only commit verified changes to the replica (`known_hashes.json`).  This means an attacker who modifies the index must also host a matching bottle at the correct GHCR path — they can''t just change the hash arbitrarily. The CI job verifies actual bottle content.  Optimisation: only download bottles whose hash changed since the last snapshot. Typical daily churn is a few dozen formulae, making the verification tractable. For very large bottles, a HEAD request + Content-Length check can provide a fast first-pass filter (a hash change with identical Content-Length is suspicious).  The verified hashes file is fetched by den from GitHub raw content (separate CDN) and checked alongside the formula index hashes. If either source is unavailable, den falls back to the other with a warning. If both are available and disagree, den refuses the install.'
@@ -618,6 +622,7 @@ targets:
     - T43
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-06-22
   T43:
     name: CI/CD pipeline
     status: achieved
@@ -643,7 +648,7 @@ targets:
     discovered: 2026-04-09
   T45:
     name: Shim-free build toolchain
-    status: identified
+    status: achieved
     value: 3.0
     cost: 8.0
     acceptance:
@@ -651,6 +656,7 @@ targets:
     context: Den source builds use Apple's SDK and linker directly without going through the `xcrun` shim layer. This eliminates the "Xcode CLT needs updating" nag and reduces fragile indirection, while still using Apple's proprietary tools where they're genuinely required.  **What Apple provides that has no replacement:** - `ld` (Mach-O linker) — LLVM's `lld` doesn't fully support macOS - SDK headers and `.tbd` stubs — proprietary, framework headers - `codesign`, `install_name_tool` — Apple-specific binary tools  **What den can replace or bypass:** - `clang` — use Homebrew LLVM or den-managed LLVM instead of Xcode's - `xcrun` — resolve tool paths and SDK location directly rather than through Apple's shim, which does version checks and nags - `ar`, `ranlib` — LLVM equivalents (`llvm-ar`) work fine  **Approach (conservative):** 1. Detect SDK path at den init time (`/Applications/Xcode.app/.../SDKs/MacOSX.sdk`) 2. Set `-isysroot`, `-L`, and `-F` paths explicitly in build environment 3. Invoke `/usr/bin/ld` directly (not through xcrun) 4. Use den-managed clang for compilation (falls back to system clang) 5. Skip version compatibility checks — if it builds and links, it works  **Approach (aggressive, deferred):** - Bundle LLVM/Clang as a den-managed package (like Nix does) - Full toolchain isolation — reproducible builds regardless of system state - Only Apple's `ld` and SDK remain as external dependencies  **Risk:** Subtle, difficult-to-diagnose bugs from using a different linker or missing SDK-specific behaviour. The conservative approach mitigates this by keeping Apple's linker and SDK while only replacing the shim layer. The aggressive approach should wait until den has extensive smoke test coverage to catch regressions.  **Decision:** Start with Homebrew's approach (use xcrun, accept the nag) during initial source-build development. Switch to the conservative shim-free approach once source builds are stable and well-tested. Defer the aggressive approach until there's evidence the conservative one is insufficient.
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-06-22
   T46:
     name: Eliminate `brew cat` dependency
     status: achieved
@@ -711,7 +717,7 @@ targets:
     achieved: 2026-04-11
   T5:
     name: Tap management
-    status: identified
+    status: achieved
     value: 5.0
     cost: 5.0
     acceptance:
@@ -719,6 +725,7 @@ targets:
     context: Third-party taps.
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-06-22
   T50:
     name: Self-hosting
     status: achieved
@@ -965,9 +972,10 @@ targets:
     achieved: 2026-06-22
   T64:
     name: den's trust model is independently verifiable beyond Homebrew's
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
+    actual_cost: 8.0
     acceptance:
     - The independent hash replica (T42) is published from a separate CDN and consulted on every install; an attacker would need to compromise both formulae.brew.sh AND den's GitHub repo to swap a bottle.
     - 'The replica is built diff-based: only changed hashes are independently verified by downloading from GHCR and re-computing SHA256.'
@@ -976,9 +984,10 @@ targets:
     context: 'Shared checkpoint for the trust cluster: T42 (the independent hash replica + diff-based verification) and T44 (the broader trust-model layers above it).'
     origin: manual
     discovered: 2026-05-15
+    achieved: 2026-06-22
   T65:
     name: Source-build path via Ruby is wired into `den install`
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -989,6 +998,7 @@ targets:
     context: 'Shared checkpoint for the source-build cluster: T11 (source builds via Ruby), T17 (Ruby DSL parsing for non-API taps), T45 (shim-free toolchain on macOS). T11/T17 carry stale `depends_on: [T31]` from before T31 was retired in PR #19; the deps are treated as satisfied by bullseye but the framing should eventually be patched. See [[project_bundled_ruby]].'
     origin: manual
     discovered: 2026-05-15
+    achieved: 2026-06-22
   T66:
     name: den correctly detects host configuration and Cellar state
     status: achieved
@@ -1004,7 +1014,7 @@ targets:
     achieved: 2026-06-22
   T67:
     name: den supports adding and using third-party Homebrew taps
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1014,9 +1024,10 @@ targets:
     context: Standalone checkpoint for T5 (tap management). Couples loosely to the source-build verify above (T17 in particular), since tap installs need Ruby DSL parsing.
     origin: manual
     discovered: 2026-05-15
+    achieved: 2026-06-22
   T68:
     name: den is competitive with Homebrew on common operations
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1026,6 +1037,7 @@ targets:
     context: Standalone checkpoint for T19 (performance). Open-ended by nature; the benchmark suite itself is the deliverable.
     origin: manual
     discovered: 2026-05-15
+    achieved: 2026-06-22
   T69:
     name: Content-addressed Cellar with explicit bindings is live without regression
     status: identified

@@ -8,6 +8,7 @@
 #include "../download/archive.h"
 #include "../download/http.h"
 #include "../download/sha256.h"
+#include "../platform/platform.h"
 #include "../ruby/bundle.h"
 #include "../store/store.h"
 
@@ -37,12 +38,29 @@ std::pair<int, std::string> run(const std::string& cmd) {
     return {WIFEXITED(status) ? WEXITSTATUS(status) : -1, output};
 }
 
+// Single-quote a string for safe use as one shell word. Wraps in '...' and
+// escapes embedded single quotes as '\''. Values like "-isysroot /path" (with
+// spaces) and paths with shell metacharacters must be quoted or the shell would
+// word-split them — e.g. an env value "-isysroot /sdk" would otherwise run /sdk
+// as a command.
+std::string shell_quote(const std::string& s) {
+    std::string out = "'";
+    for (char c : s) {
+        if (c == '\'')
+            out += "'\\''";
+        else
+            out += c;
+    }
+    out += "'";
+    return out;
+}
+
 int run_in_dir(const fs::path& dir, const std::string& cmd,
                const std::map<std::string, std::string>& env = {}) {
     std::string env_str;
     for (const auto& [k, v] : env)
-        env_str += k + "=" + v + " ";
-    std::string full_cmd = "cd " + dir.string() + " && " + env_str + cmd;
+        env_str += k + "=" + shell_quote(v) + " ";
+    std::string full_cmd = "cd " + shell_quote(dir.string()) + " && " + env_str + cmd;
     SPDLOG_INFO("build: {}", full_cmd);
     int rc = std::system(full_cmd.c_str());
     return WIFEXITED(rc) ? WEXITSTATUS(rc) : -1;
@@ -87,6 +105,43 @@ BuildRecipe parse_formula_source(const std::string& formula_output) {
     return recipe;
 }
 
+// 🎯T45 — Shim-free toolchain environment for macOS source builds.
+//
+// Homebrew historically routes the compiler through an `xcrun` shim, which nags
+// the user to update the Command Line Tools and breaks reproducibility. den
+// instead resolves the SDK path directly via host facts (🎯T66) and points the
+// linker at /usr/bin/ld, so no xcrun invocation is ever constructed.
+//
+// On Linux this is a no-op: the system toolchain needs no SDK steering.
+void apply_shim_free_toolchain(std::map<std::string, std::string>& env) {
+#ifdef __APPLE__
+    auto facts = detect_host_facts();
+    if (facts.sdk_path && fs::is_directory(*facts.sdk_path)) {
+        // SDKROOT is honoured by clang/ld directly without xcrun. -isysroot
+        // covers build systems (autotools, plain make) that read CFLAGS but
+        // ignore SDKROOT.
+        env["SDKROOT"] = *facts.sdk_path;
+        const std::string isysroot = "-isysroot " + *facts.sdk_path;
+        for (const char* var : {"CFLAGS", "CXXFLAGS", "OBJCFLAGS"}) {
+            if (env.count(var))
+                env[var] += " " + isysroot;
+            else
+                env[var] = isysroot;
+        }
+    } else {
+        SPDLOG_DEBUG("shim-free build: no SDK path from host facts; relying on compiler defaults");
+    }
+    // Resolve the system linker directly. /usr/bin/ld is the stable toolchain
+    // entry point; this avoids `xcrun -f ld` while staying on the active CLT.
+    std::error_code ec;
+    if (fs::is_regular_file("/usr/bin/ld", ec)) {
+        env["LD"] = "/usr/bin/ld";
+    }
+#else
+    (void)env;
+#endif
+}
+
 } // namespace
 
 std::string fetch_formula_source(const PackageIndex& idx, const std::string& name) {
@@ -94,6 +149,25 @@ std::string fetch_formula_source(const PackageIndex& idx, const std::string& nam
     if (!pkg || !pkg->ruby_source_path) {
         SPDLOG_DEBUG("no ruby_source_path for '{}' in index", name);
         return "";
+    }
+
+    // Tap formulae (🎯T67): ruby_source_path is an absolute path to a local .rb
+    // file that merge_taps_into_index materialised. Read it directly — no
+    // network, no Homebrew. The check is a filesystem stat, so a relative
+    // homebrew-core path ("Formula/t/tree.rb") naturally falls through to the
+    // GitHub fetch below.
+    {
+        std::error_code ec;
+        if (fs::is_regular_file(*pkg->ruby_source_path, ec)) {
+            std::ifstream f(*pkg->ruby_source_path);
+            if (f) {
+                std::string source((std::istreambuf_iterator<char>(f)),
+                                   std::istreambuf_iterator<char>());
+                SPDLOG_INFO("read tap formula source for '{}' from {} ({} bytes)", name,
+                            *pkg->ruby_source_path, source.size());
+                return source;
+            }
+        }
     }
 
     auto url =
@@ -273,6 +347,9 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx, const 
         env["CPATH"] = cpath;
     if (!library_path.empty())
         env["LIBRARY_PATH"] = library_path;
+
+    // 🎯T45: steer the compiler/linker via host facts, not an xcrun shim.
+    apply_shim_free_toolchain(env);
 
     // Try formula-parsed build commands first.
     int rc = 0;

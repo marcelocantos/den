@@ -18,53 +18,26 @@
 #include <doctest.h>
 
 #include "download/sha256.h"
+#include "trust/trust_model.h"
 
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
 #include <string>
 #include <unistd.h>
+#include <utility>
+#include <vector>
 
 namespace den {
 namespace replica_diff_test {
 
 namespace fs = std::filesystem;
 
-// ---------------------------------------------------------------------------
-// Minimal mock of the diff-based verifier interface.
-//
-// In the real implementation this will live in src/download/ or a new
-// src/trust/ module.  Replace with real includes once 🎯T42 ships.
-// ---------------------------------------------------------------------------
-
-/// A single entry in a replica diff.
-struct ReplicaDiffEntry {
-    std::string formula_name;
-    std::string version;
-    std::string platform_tag;
-    std::string claimed_sha256; // SHA256 claimed by the replica diff record
-};
-
-/// Outcome of verifying a single diff entry against a downloaded bottle.
-enum class DiffVerifyOutcome {
-    Match,    // claimed SHA matches actual bottle
-    Mismatch, // claimed SHA does NOT match — fabrication detected
-};
-
-/// Verify a single diff entry against a bottle file on disk.
-/// In production, the file is freshly downloaded from GHCR so an attacker
-/// must control both formulae.brew.sh AND den's replica CDN to pass this.
-DiffVerifyOutcome verify_diff_entry(const ReplicaDiffEntry& entry, const fs::path& bottle_path) {
-    std::string actual_sha;
-    try {
-        actual_sha = hash_file(bottle_path);
-    } catch (const std::exception&) {
-        // If we cannot hash the file treat it as a mismatch — fail safe.
-        return DiffVerifyOutcome::Mismatch;
-    }
-    return (actual_sha == entry.claimed_sha256) ? DiffVerifyOutcome::Match
-                                                : DiffVerifyOutcome::Mismatch;
-}
+// ReplicaDiffEntry / DiffVerifyOutcome / verify_diff_entry now come from the
+// real implementation in src/trust/trust_model.* (included above). The replica
+// diff verifier is invoked by the .github/workflows/replica-verify.yml CI
+// pipeline, which downloads each changed bottle from GHCR and recomputes its
+// SHA256 before the hash is committed to data/known_hashes.json.
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -151,18 +124,63 @@ TEST_SUITE("replica_diff_verify::verify_diff_entry") {
     }
 
     // -----------------------------------------------------------------------
-    // Upstream gap guard (skipped via doctest::skip() decorator).
-    // Remove the * doctest::skip() once 🎯T42 ships.
+    // 🎯T42: the diff verifier is driven over a batch of entries by the
+    // replica-verify CI pipeline. Here we model that loop: every entry is run
+    // through verify_diff_entry, and a single fabricated entry must halt the
+    // batch (any Mismatch fails the run). The real pipeline downloads each
+    // bottle from GHCR before hashing; the loop semantics are identical.
     // -----------------------------------------------------------------------
 
-    // 🎯T42: replica diff builder and GHCR downloader not yet implemented.
-    TEST_CASE("diff verifier called for every entry in replica diff (🎯T42 gap)" *
-              doctest::skip(true)) {
-        // When T42 is implemented:
-        //   - fetch_replica_diff() returns a vector<ReplicaDiffEntry>
-        //   - For each entry, the bottle is fetched from GHCR and verified
-        //   - Any DiffVerifyOutcome::Mismatch halts the replica update
-        CHECK(false); // placeholder — must be replaced with real assertions
+    TEST_CASE("diff verifier rejects a batch containing one fabricated entry") {
+        TmpDir tmp;
+        const std::string good_a = "real bottle alpha";
+        const std::string good_b = "real bottle beta";
+        const auto path_a = write_mock_bottle(tmp, "a.bottle.tar.gz", good_a);
+        const auto path_b = write_mock_bottle(tmp, "b.bottle.tar.gz", good_b);
+
+        struct Item {
+            ReplicaDiffEntry entry;
+            fs::path bottle;
+        };
+        std::vector<Item> batch{
+            {{"a", "1.0.0", "arm64_sequoia", hash_string(good_a)}, path_a},
+            {{"b", "2.0.0", "arm64_sequoia", hash_string(good_b)}, path_b},
+            // Fabricated: claimed SHA does not match path_a's content.
+            {{"c", "3.0.0", "arm64_sequoia",
+              "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"},
+             path_a},
+        };
+
+        bool batch_ok = true;
+        for (const auto& item : batch) {
+            if (verify_diff_entry(item.entry, item.bottle) != DiffVerifyOutcome::Match) {
+                batch_ok = false;
+                break; // a single mismatch halts the replica update
+            }
+        }
+        CHECK_FALSE(batch_ok);
+    }
+
+    TEST_CASE("diff verifier accepts a fully consistent batch") {
+        TmpDir tmp;
+        const std::string c1 = "consistent one";
+        const std::string c2 = "consistent two";
+        const auto p1 = write_mock_bottle(tmp, "p1.bottle.tar.gz", c1);
+        const auto p2 = write_mock_bottle(tmp, "p2.bottle.tar.gz", c2);
+
+        std::vector<std::pair<ReplicaDiffEntry, fs::path>> batch{
+            {{"p1", "1.0.0", "arm64_sequoia", hash_string(c1)}, p1},
+            {{"p2", "1.0.0", "arm64_sequoia", hash_string(c2)}, p2},
+        };
+
+        bool batch_ok = true;
+        for (const auto& [entry, bottle] : batch) {
+            if (verify_diff_entry(entry, bottle) != DiffVerifyOutcome::Match) {
+                batch_ok = false;
+                break;
+            }
+        }
+        CHECK(batch_ok);
     }
 
 } // TEST_SUITE

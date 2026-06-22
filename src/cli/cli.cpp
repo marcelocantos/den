@@ -27,17 +27,21 @@
 #include "../smoke/runner.h"
 #include "../store/store.h"
 #include "../supervisor/supervisor.h"
+#include "../tap/tap.h"
+#include "../trust/trust_model.h"
 
 #include <CLI11.hpp>
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <set>
 #include <sstream>
 #include <string>
@@ -248,6 +252,12 @@ struct Cli::M {
     int log_count = 20;
     bool log_json = false;
 
+    // tap
+    std::vector<std::string> tap_args; // [add name [source]]
+    bool tap_list_flag = false;
+    std::string tap_remove_name;
+    std::string tap_url;
+
     void setup();
 };
 
@@ -267,6 +277,9 @@ void Cli::M::setup() {
     install->callback([this] {
         auto cfg = Config::detect();
         auto idx = load_index(cfg.cache / "index.json");
+        // Merge third-party taps (🎯T67) so tapped formulae resolve by both
+        // their bare and "user/repo/name" forms before any provider runs.
+        merge_taps_into_index(cfg, idx);
 
         if (this->build_from_source) {
             // Source builds are Homebrew-only — the Ruby DSL belongs to the
@@ -523,6 +536,8 @@ void Cli::M::setup() {
     info->callback([this] {
         auto cfg = Config::detect();
         auto idx = load_index(cfg.cache / "index.json");
+        // Tapped formulae (🎯T67) are queryable by `den info` once merged.
+        merge_taps_into_index(cfg, idx);
 
         // Resolve which provider owns this package. A manifest hint or
         // `--provider` would refine this; for info we use the active env's
@@ -807,6 +822,35 @@ void Cli::M::setup() {
         }
     });
 
+    // --- replica-verify (🎯T42/T64) ---
+    // Diff-based replica verifier used by the replica-verify CI pipeline.
+    // Given a downloaded bottle and its claimed SHA256, recompute the digest
+    // and report match/mismatch. Exit 0 on match, non-zero on mismatch so the
+    // workflow can fail the run. Hidden from --help (an internal CI tool).
+    auto* rv = app.add_subcommand("replica-verify",
+                                  "Verify a downloaded bottle against a claimed SHA256 (CI tool)");
+    rv->group(""); // hide from help listing
+    auto rv_args = std::make_shared<std::array<std::string, 4>>();
+    auto rv_bottle = std::make_shared<std::string>();
+    rv->add_option("--name", (*rv_args)[0], "Formula name")->required();
+    rv->add_option("--version", (*rv_args)[1], "Formula version")->required();
+    rv->add_option("--tag", (*rv_args)[2], "Platform tag")->required();
+    rv->add_option("--sha256", (*rv_args)[3], "Claimed SHA256 digest")->required();
+    rv->add_option("--bottle", *rv_bottle, "Path to the downloaded bottle file")->required();
+    rv->callback([rv_args, rv_bottle] {
+        ReplicaDiffEntry entry{(*rv_args)[0], (*rv_args)[1], (*rv_args)[2], (*rv_args)[3]};
+        auto outcome = verify_diff_entry(entry, fs::path(*rv_bottle));
+        if (outcome == DiffVerifyOutcome::Match) {
+            std::cout << "MATCH " << entry.formula_name << " " << entry.version << " "
+                      << entry.platform_tag << "\n";
+        } else {
+            std::cout << "MISMATCH " << entry.formula_name << " " << entry.version << " "
+                      << entry.platform_tag << "\n";
+            throw UserError("replica diff verification failed for " + entry.formula_name + " " +
+                            entry.version + " (" + entry.platform_tag + ")");
+        }
+    });
+
     // --- config ---
     auto* config = app.add_subcommand("config", "Show detected configuration");
     config->callback([] {
@@ -1022,6 +1066,51 @@ void Cli::M::setup() {
     settings_cmd->callback([] {
         auto cfg = Config::detect();
         std::cout << display_all_settings(cfg.den_home) << "\n";
+    });
+
+    // --- tap (🎯T67: third-party Homebrew taps) ---
+    auto* tap = app.add_subcommand("tap", "Add, list, or remove third-party formula taps");
+    tap->add_option("args", tap_args, "`add <user/repo> [source]` to tap; bare for list")
+        ->expected(0, 3);
+    tap->add_flag("--list", tap_list_flag, "List registered taps");
+    tap->add_option("--remove", tap_remove_name, "Remove a registered tap (user/repo)");
+    tap->add_option("--url", tap_url, "Clone source for `tap add` (git URL or local path)");
+    tap->callback([this] {
+        auto cfg = Config::detect();
+
+        // --remove takes priority.
+        if (!tap_remove_name.empty()) {
+            tap_remove(cfg, tap_remove_name);
+            std::cout << "Untapped " << tap_remove_name << "\n";
+            return;
+        }
+
+        // `tap add <name> [source]` — also accepts `--url <source>`.
+        if (!tap_args.empty() && tap_args.front() == "add") {
+            if (tap_args.size() < 2) {
+                std::cerr << "error: `den tap add` needs a tap name (user/repo)\n";
+                std::exit(2);
+            }
+            const std::string& name = tap_args[1];
+            std::string source = tap_args.size() >= 3 ? tap_args[2] : tap_url;
+            if (source.empty()) {
+                // Default to GitHub's canonical homebrew-tap URL for user/repo.
+                source = "https://github.com/" + name + ".git";
+            }
+            auto added = tap_add(cfg, name, source);
+            std::cout << "Tapped " << added.name << "\n";
+            return;
+        }
+
+        // Bare `den tap` or `den tap --list`: print registered taps.
+        auto taps = tap_list(cfg);
+        if (taps.empty()) {
+            std::cout << "No taps registered.\n";
+            return;
+        }
+        for (const auto& t : taps) {
+            std::cout << t.name << "\n";
+        }
     });
 
     // --- migrate ---

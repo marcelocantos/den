@@ -57,7 +57,23 @@ inline void from_json(const nlohmann::json& j, SearchSettings& s) {
         s.provider = j["provider"].get<std::string>();
 }
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Settings, daemon, search)
+inline void to_json(nlohmann::json& j, const TapSettings& t) {
+    j = nlohmann::json::object();
+    for (const auto& [name, url] : t.taps)
+        j[name] = url;
+}
+
+inline void from_json(const nlohmann::json& j, TapSettings& t) {
+    t = TapSettings{};
+    if (!j.is_object())
+        return;
+    for (const auto& [name, url] : j.items()) {
+        if (url.is_string())
+            t.taps[name] = url.get<std::string>();
+    }
+}
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Settings, daemon, search, taps)
 
 // ---------------------------------------------------------------------------
 // File helpers

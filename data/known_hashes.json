@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-06-22T00:00:00Z",
+  "source": "https://formulae.brew.sh + GHCR diff-verification (.github/workflows/replica-verify.yml)",
+  "note": "den's independent hash replica (🎯T42). Served from raw.githubusercontent.com, a SEPARATE origin/CDN from formulae.brew.sh. Each entry's SHA256 is re-verified by downloading the bottle from GHCR and recomputing the digest before it is committed here. Keys are '<formula>--<version>--<platform_tag>'.",
+  "hashes": {
+    "tree--2.3.2--arm64_tahoe": "d1967d2ed08717f963addb249ea6b8ca11c26ecb59efba34f2860853a06bedc7",
+    "tree--2.3.2--arm64_sequoia": "ef367d0a5e74970e2f5042479fe4000a8b324ac075520c66f8457f1cb06ca668",
+    "tree--2.3.2--arm64_sonoma": "006880fab518e0dcab2e2c906be4378996138e370199de0898e9dffb701395a9",
+    "tree--2.3.2--sonoma": "0d8db41e5e26a0ffd2b7b0df8a8e0dd43a24f458ed34e2bf16352271066fcd74",
+    "tree--2.3.2--arm64_linux": "cb6d74ecafcc8b6d736e538b46be79249457e6c417e18b83de65b405b8495557",
+    "tree--2.3.2--x86_64_linux": "b98eef11e53b024a3e9422fbeabeb6c9b13d70ea884087703e7e1536820b3c5c",
+    "jq--1.8.2--arm64_tahoe": "f6ec821177b4c55fefb4c58f8e6f5d8386a5fce0a3c5d8811c4d6a0cc818dead",
+    "jq--1.8.2--arm64_sequoia": "29c079abc7e165583b7fc4d3feba7a21a12160a414a7d4202731f7ffa2e349de",
+    "jq--1.8.2--arm64_sonoma": "c5710de7fe77793fda8d4c550e5450b9fd77f9caf4a90c01be3a0969a8c078e8",
+    "jq--1.8.2--sonoma": "0a471afde49b03dd7a8a1100c2581dc35ae49b3877a9c37fa219aeccdb998154",
+    "jq--1.8.2--arm64_linux": "30137e8a68ffb92bc8e16494f1509f0c08b404cae8a0842e15b63f46e4baf028",
+    "jq--1.8.2--x86_64_linux": "c3e26f0bff91db3e6606c3fc23ebe5dc2b1e9854252e6e4a3e03b17f7a3cde4e"
+  }
+}

@@ -7,15 +7,24 @@ on:
   workflow_dispatch:
     inputs:
       runs:
-        description: "hyperfine repetitions per op"
+        description: "hyperfine repetitions per read-only op"
         required: false
         default: "10"
+      install_runs:
+        description: "hyperfine repetitions per install/upgrade op"
+        required: false
+        default: "5"
+
+# Allow the job to push committed benchmark snapshots back to the repo so
+# trends accumulate across releases (acceptance: results recorded over time).
+permissions:
+  contents: write
 
 jobs:
   bench:
     name: Benchmark
     runs-on: macos-14
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v6
@@ -45,21 +54,48 @@ jobs:
       - name: Run benchmark
         run: |
           RUNS="${{ github.event.inputs.runs || '10' }}"
+          INSTALL_RUNS="${{ github.event.inputs.install_runs || '5' }}"
+          # --with-install measures install + upgrade too; it mutates the
+          # CI runner's Cellar but cleans up the test package on exit.
           scripts/bench/compare-brew.sh \
-            --output-dir bench-output \
-            --runs "${RUNS}"
+            --output-dir bench/results \
+            --runs "${RUNS}" \
+            --install-runs "${INSTALL_RUNS}" \
+            --with-install
+
+      - name: Check T68 contract
+        run: |
+          # Fail the job if den is no longer at least as fast as brew, or if a
+          # measured op regressed against the previous committed snapshot.
+          scripts/bench/compare-results.sh
+
+      - name: Commit benchmark snapshot
+        # Persist results into the repo so a trend accrues across releases.
+        # Only the scheduled/dispatch runs on the default branch push back.
+        if: github.ref == 'refs/heads/master'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add bench/results/
+          if git diff --cached --quiet; then
+            echo "No new benchmark snapshot to commit."
+          else
+            git commit -m "bench: den-vs-brew snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ) [skip ci]"
+            git push origin HEAD:master
+          fi
 
       - name: Upload benchmark results
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: bench-results-${{ github.run_id }}
-          path: bench-output/
+          path: bench/results/
           retention-days: 90
 
       - name: Post summary
         if: always()
         run: |
-          JSONFILE="$(ls bench-output/bench-*.json 2>/dev/null | sort | tail -1)"
+          JSONFILE="$(ls bench/results/bench-*.json 2>/dev/null | sort | tail -1)"
           if [[ -z "${JSONFILE}" ]]; then
             echo "No benchmark output file found." >> "${GITHUB_STEP_SUMMARY}"
             exit 0
@@ -68,10 +104,10 @@ jobs:
           {
             echo "## Benchmark results — den vs brew"
             echo ""
-            echo "| op | tool | mean (s) | stddev (s) | min (s) | max (s) |"
-            echo "|----|------|----------|------------|---------|---------|"
-            jq -r '.[] | "| \(.op) | \(.tool) | \(.mean_s) | \(.stddev_s) | \(.min_s) | \(.max_s) |"' \
-              "${JSONFILE}" 2>/dev/null || echo "| — | — | (parse error) | — | — | — |"
+            echo "| op | tool | mean (ms) | stddev (ms) |"
+            echo "|----|------|-----------|-------------|"
+            jq -r '.[] | select(.mean_s != null) | "| \(.op) | \(.tool) | \((.mean_s*1000)|floor) | \((.stddev_s*1000)|floor) |"' \
+              "${JSONFILE}" 2>/dev/null || echo "| — | — | (parse error) | — |"
             echo ""
-            echo "Full results: artifact \`bench-results-${{ github.run_id }}\`"
+            echo "Full results: artifact \`bench-results-${{ github.run_id }}\` and committed to \`bench/results/\`."
           } >> "${GITHUB_STEP_SUMMARY}"
