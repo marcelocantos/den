@@ -3,6 +3,8 @@
 
 #include "doctor.h"
 
+#include "../platform/platform.h"
+
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
@@ -250,6 +252,31 @@ void check_file_permissions(const Config& config, std::vector<Finding>& findings
 }
 
 // ---------------------------------------------------------------------------
+// Check 8: host toolchain (🎯T66/T2)
+// On macOS, the source-build path needs the Command Line Tools and an SDK.
+// Surface their absence as warnings. Output is deterministic (no timestamps).
+// ---------------------------------------------------------------------------
+void check_host_toolchain(const Config& config, std::vector<Finding>& findings) {
+    SPDLOG_DEBUG("check: host toolchain");
+    (void)config;
+
+    auto facts = detect_host_facts();
+#ifdef __APPLE__
+    if (!facts.clt_version) {
+        warn(findings, "Command Line Tools not detected "
+                       "(run `xcode-select --install` to enable source builds)");
+    }
+    if (!facts.sdk_path) {
+        warn(findings, "macOS SDK path not detected (xcrun --show-sdk-path failed)");
+    }
+#else
+    if (!facts.glibc) {
+        warn(findings, "glibc version not detected (getconf GNU_LIBC_VERSION failed)");
+    }
+#endif
+}
+
+// ---------------------------------------------------------------------------
 // Rendering helpers
 // ---------------------------------------------------------------------------
 
@@ -279,6 +306,7 @@ std::vector<Finding> doctor(const Config& config) {
     check_broken_symlinks(config, findings);
     check_missing_packages(config, findings);
     check_file_permissions(config, findings);
+    check_host_toolchain(config, findings);
 
     // Summary output.
     int warnings = 0;

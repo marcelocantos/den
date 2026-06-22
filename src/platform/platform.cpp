@@ -6,12 +6,176 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <array>
+#include <cctype>
+#include <cstdio>
+#include <fstream>
+#include <sstream>
+#include <string_view>
 
-#ifdef __APPLE__
 #include <sys/utsname.h>
-#endif
+#include <sys/wait.h>
 
 namespace den {
+
+namespace {
+
+/// Trim ASCII whitespace from both ends.
+std::string trim(const std::string& s) {
+    size_t b = 0;
+    size_t e = s.size();
+    while (b < e && std::isspace(static_cast<unsigned char>(s[b])))
+        ++b;
+    while (e > b && std::isspace(static_cast<unsigned char>(s[e - 1])))
+        --e;
+    return s.substr(b, e - b);
+}
+
+} // namespace
+
+std::optional<std::string> capture_command(const std::string& cmd) {
+    // Discard stderr so a tool that prints a diagnostic on failure stays quiet.
+    std::string full = cmd + " 2>/dev/null";
+    FILE* pipe = ::popen(full.c_str(), "r");
+    if (!pipe) {
+        SPDLOG_DEBUG("capture_command: popen failed for '{}'", cmd);
+        return std::nullopt;
+    }
+    std::string out;
+    std::array<char, 4096> buf{};
+    while (std::fgets(buf.data(), static_cast<int>(buf.size()), pipe) != nullptr) {
+        out += buf.data();
+    }
+    int status = ::pclose(pipe);
+    int rc = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    if (rc != 0) {
+        SPDLOG_DEBUG("capture_command: '{}' exited {}", cmd, rc);
+        return std::nullopt;
+    }
+    auto trimmed = trim(out);
+    if (trimmed.empty()) {
+        return std::nullopt;
+    }
+    return trimmed;
+}
+
+namespace {
+
+#ifdef __APPLE__
+
+/// Parse the `version:` line out of `pkgutil --pkg-info` output.
+std::optional<std::string> parse_pkgutil_version(const std::string& info) {
+    std::istringstream ss(info);
+    std::string line;
+    while (std::getline(ss, line)) {
+        constexpr std::string_view kPrefix = "version: ";
+        if (line.rfind(kPrefix, 0) == 0) {
+            return trim(line.substr(kPrefix.size()));
+        }
+    }
+    return std::nullopt;
+}
+
+/// Extract the version token from `xcodebuild -version` ("Xcode 26.5\n...").
+std::optional<std::string> parse_xcode_version(const std::string& out) {
+    std::istringstream ss(out);
+    std::string word;
+    if (ss >> word && word == "Xcode" && (ss >> word)) {
+        return word;
+    }
+    return std::nullopt;
+}
+
+#else // Linux
+
+/// Read NAME / VERSION_ID from /etc/os-release.
+void read_os_release(std::optional<std::string>& name, std::optional<std::string>& version) {
+    std::ifstream f("/etc/os-release");
+    if (!f)
+        return;
+    std::string line;
+    while (std::getline(f, line)) {
+        auto eq = line.find('=');
+        if (eq == std::string::npos)
+            continue;
+        std::string key = line.substr(0, eq);
+        std::string val = line.substr(eq + 1);
+        // Strip surrounding double quotes.
+        if (val.size() >= 2 && val.front() == '"' && val.back() == '"') {
+            val = val.substr(1, val.size() - 2);
+        }
+        if (key == "NAME")
+            name = trim(val);
+        else if (key == "VERSION_ID")
+            version = trim(val);
+    }
+}
+
+#endif
+
+/// Lines in `brew config` whose values are timestamps (relative ages or tap
+/// JSON freshness dates); these change over time and would break output
+/// stability, so they are dropped.
+bool is_volatile_brew_key(const std::string& key) {
+    return key == "Last commit" || key == "Core tap last commit" ||
+           key == "Core cask tap last commit" || key == "Core tap JSON" ||
+           key == "Core cask tap JSON";
+}
+
+/// Parse the stable `KEY: value` lines from `brew config`, preserving order.
+std::vector<std::pair<std::string, std::string>> parse_brew_config(const std::string& out) {
+    std::vector<std::pair<std::string, std::string>> result;
+    std::istringstream ss(out);
+    std::string line;
+    while (std::getline(ss, line)) {
+        auto colon = line.find(": ");
+        if (colon == std::string::npos)
+            continue;
+        std::string key = trim(line.substr(0, colon));
+        std::string val = trim(line.substr(colon + 2));
+        if (key.empty() || is_volatile_brew_key(key))
+            continue;
+        result.emplace_back(std::move(key), std::move(val));
+    }
+    return result;
+}
+
+} // namespace
+
+HostFacts detect_host_facts() {
+    HostFacts facts;
+
+#ifdef __APPLE__
+    if (auto v = capture_command("xcodebuild -version")) {
+        facts.xcode_version = parse_xcode_version(*v);
+    }
+    if (auto info = capture_command("pkgutil --pkg-info=com.apple.pkg.CLTools_Executables")) {
+        facts.clt_version = parse_pkgutil_version(*info);
+    }
+    facts.sdk_path = capture_command("xcrun --show-sdk-path");
+#else
+    read_os_release(facts.os_name, facts.os_version);
+    struct utsname uts{};
+    if (uname(&uts) == 0) {
+        facts.kernel = std::string(uts.release);
+    }
+    // glibc version via `getconf GNU_LIBC_VERSION` ("glibc 2.35").
+    if (auto v = capture_command("getconf GNU_LIBC_VERSION")) {
+        std::istringstream ss(*v);
+        std::string label;
+        std::string ver;
+        if (ss >> label >> ver) {
+            facts.glibc = ver;
+        }
+    }
+#endif
+
+    if (auto cfg = capture_command("brew config")) {
+        facts.homebrew_config = parse_brew_config(*cfg);
+    }
+
+    return facts;
+}
 
 Arch detect_arch() {
 #if defined(__aarch64__) || defined(__arm64__)

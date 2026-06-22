@@ -87,7 +87,7 @@ static std::string run_den_fresh(const std::string& args) {
 // Tests
 // ===========================================================================
 
-TEST_SUITE("T66::doctor_output" * doctest::skip(true)) {
+TEST_SUITE("T66::doctor_output") {
 
     // -----------------------------------------------------------------------
     // PASS — den doctor runs and emits a summary line.
@@ -147,74 +147,56 @@ TEST_SUITE("T66::doctor_output" * doctest::skip(true)) {
         CHECK(out.find("macos_version:") != std::string::npos);
     }
 
+#ifdef __APPLE__
     // -----------------------------------------------------------------------
-    // SKIP — Xcode version not yet reported by den doctor / den config.
-    //
-    // When implemented, remove the MESSAGE and add:
-    //   CHECK(out.find("Xcode") != std::string::npos);
-    //   CHECK(out.find("xcode_version") != std::string::npos);   (or similar key)
+    // den config reports the Xcode version field (🎯T66/T2).
     // -----------------------------------------------------------------------
-    TEST_CASE("SKIP: den config reports Xcode version [T2 gap]") {
-        MESSAGE("SKIP — Xcode version not yet reported. Upstream gap: T2.");
-        // Confirm the field is absent so we know when to remove this skip.
+    TEST_CASE("den config reports Xcode version") {
         const auto out = run_den_fresh("config");
-        const bool has_xcode = out.find("xcode_version") != std::string::npos ||
-                               out.find("Xcode version") != std::string::npos;
-        if (has_xcode) {
-            MESSAGE("T2 gap closed — remove the SKIP marker in test_doctor_output.cpp");
-        }
-        // Not a failure — just documentation.
+        CHECK(out.find("xcode_version:") != std::string::npos);
     }
 
     // -----------------------------------------------------------------------
-    // SKIP — CLT version not yet reported by den doctor / den config.
+    // den config reports the Command Line Tools version field (🎯T66/T2).
     // -----------------------------------------------------------------------
-    TEST_CASE("SKIP: den config reports CLT version [T2 gap]") {
-        MESSAGE("SKIP — Command Line Tools version not yet reported. Upstream gap: T2.");
+    TEST_CASE("den config reports CLT version") {
         const auto out = run_den_fresh("config");
-        const bool has_clt = out.find("clt_version") != std::string::npos ||
-                             out.find("cltools_version") != std::string::npos ||
-                             out.find("Command Line Tools") != std::string::npos;
-        if (has_clt) {
-            MESSAGE("T2 gap closed — remove the SKIP marker in test_doctor_output.cpp");
-        }
+        CHECK(out.find("clt_version:") != std::string::npos);
     }
 
     // -----------------------------------------------------------------------
-    // SKIP — SDK path not yet reported.
+    // den config reports the SDK path field (🎯T66/T2).
     // -----------------------------------------------------------------------
-    TEST_CASE("SKIP: den config reports SDK path [T2 gap]") {
-        MESSAGE("SKIP — SDK path not yet reported. Upstream gap: T2.");
+    TEST_CASE("den config reports SDK path") {
         const auto out = run_den_fresh("config");
-        const bool has_sdk = out.find("sdk_path") != std::string::npos ||
-                             out.find("sdk:") != std::string::npos ||
-                             out.find("MacOSX.sdk") != std::string::npos;
-        if (has_sdk) {
-            MESSAGE("T2 gap closed — remove the SKIP marker in test_doctor_output.cpp");
-        }
+        CHECK(out.find("sdk_path:") != std::string::npos);
     }
+#endif
 
     // -----------------------------------------------------------------------
-    // SKIP — Homebrew-config parity (brew config output keys not mirrored).
+    // den config mirrors the Homebrew `brew config` keys (🎯T66/T2).
+    // The section header is always present; when brew is installed the
+    // standard HOMEBREW_VERSION key is echoed under it.
     // -----------------------------------------------------------------------
-    TEST_CASE("SKIP: den config mirrors Homebrew config keys [T2 gap]") {
-        MESSAGE("SKIP — Homebrew-config parity not yet implemented. Upstream gap: T2.");
-        // brew config includes: HOMEBREW_VERSION, ORIGIN, HEAD, path, etc.
-        // den config should echo at minimum HOMEBREW_PREFIX and HOMEBREW_CELLAR
-        // from environment, plus the computed ones. The ones already present pass
-        // above; the additional brew config parity is the remaining gap.
-        //
-        // Expected future keys (examples):
-        //   homebrew_version:    <value>
-        //   homebrew_repository: <path>
+    TEST_CASE("den config mirrors Homebrew config keys") {
+        const auto out = run_den_fresh("config");
+        CHECK(out.find("homebrew_config") != std::string::npos);
+        // When brew is present, parity keys appear; otherwise the section
+        // degrades gracefully to "n/a (brew not found)".
+        const bool has_parity = out.find("HOMEBREW_VERSION:") != std::string::npos;
+        const bool degraded = out.find("brew not found") != std::string::npos;
+        CHECK((has_parity || degraded));
     }
 
 #ifdef __linux__
     // -----------------------------------------------------------------------
-    // SKIP (Linux) — Linux-equivalent host facts not yet in doctor.
+    // den config reports Linux-equivalent host facts (🎯T66/T2).
     // -----------------------------------------------------------------------
-    TEST_CASE("SKIP: den doctor reports Linux host facts [T2 gap]") {
-        MESSAGE("SKIP — Linux host-fact checks (OS version, glibc, etc.) not yet implemented.");
+    TEST_CASE("den config reports Linux host facts") {
+        const auto out = run_den_fresh("config");
+        CHECK(out.find("os_name:") != std::string::npos);
+        CHECK(out.find("kernel:") != std::string::npos);
+        CHECK(out.find("glibc:") != std::string::npos);
     }
 #endif
 

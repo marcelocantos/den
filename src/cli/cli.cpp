@@ -29,11 +29,13 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -42,6 +44,26 @@ namespace den {
 namespace {
 
 const char* agent_guide = "See agents-guide.md for the full agent guide.\n";
+
+/// Format a byte count as a human-readable, deterministic size string.
+/// Uses binary (1024) units and always two decimals for KB and above so the
+/// output is stable across runs.
+std::string human_size(uint64_t bytes) {
+    constexpr uint64_t kKiB = 1024;
+    if (bytes < kKiB) {
+        return std::to_string(bytes) + " B";
+    }
+    constexpr const char* kUnits[] = {"KB", "MB", "GB", "TB", "PB"};
+    double value = static_cast<double>(bytes);
+    int unit = -1;
+    do {
+        value /= static_cast<double>(kKiB);
+        ++unit;
+    } while (value >= static_cast<double>(kKiB) && unit + 1 < static_cast<int>(std::size(kUnits)));
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(2) << value << " " << kUnits[unit];
+    return out.str();
+}
 
 } // namespace
 
@@ -63,6 +85,9 @@ struct Cli::M {
     // upgrade
     std::vector<std::string> upgrade_names;
     std::string upgrade_provider;
+
+    // list
+    bool list_cellar = false;
 
     // info
     std::string info_name;
@@ -242,8 +267,48 @@ void Cli::M::setup() {
 
     // --- list ---
     auto* list = app.add_subcommand("list", "List installed packages");
-    list->callback([] {
+    list->add_flag("--cellar", list_cellar,
+                   "Inspect the Cellar: per-keg disk usage, env references, orphans");
+    list->callback([this] {
         auto cfg = Config::detect();
+
+        if (this->list_cellar) {
+            auto kegs = inspect_cellar(cfg.store, cfg.den_home);
+            if (kegs.empty()) {
+                std::cout << "No kegs in Cellar.\n";
+                return;
+            }
+            // Column widths for deterministic alignment.
+            size_t max_name = std::string("NAME").size();
+            size_t max_ver = std::string("VERSION").size();
+            for (const auto& k : kegs) {
+                max_name = std::max(max_name, k.name.size());
+                max_ver = std::max(max_ver, k.version.size());
+            }
+            std::cout << std::left << std::setw(static_cast<int>(max_name + 2)) << "NAME"
+                      << std::setw(static_cast<int>(max_ver + 2)) << "VERSION" << std::setw(12)
+                      << "SIZE" << "REFS\n";
+            uint32_t orphan_count = 0;
+            for (const auto& k : kegs) {
+                std::string refs;
+                if (k.orphaned()) {
+                    refs = "(orphan)";
+                    ++orphan_count;
+                } else {
+                    for (size_t i = 0; i < k.env_refs.size(); ++i) {
+                        if (i > 0)
+                            refs += ",";
+                        refs += k.env_refs[i];
+                    }
+                }
+                std::cout << std::left << std::setw(static_cast<int>(max_name + 2)) << k.name
+                          << std::setw(static_cast<int>(max_ver + 2)) << k.version << std::setw(12)
+                          << human_size(k.disk_bytes) << refs << "\n";
+            }
+            std::cout << "\n" << kegs.size() << " keg(s), " << orphan_count << " orphan(s).\n";
+            return;
+        }
+
         HomebrewProvider provider(nullptr);
         auto installed = provider.list_installed(cfg);
         if (installed.empty()) {
@@ -513,6 +578,8 @@ void Cli::M::setup() {
     auto* config = app.add_subcommand("config", "Show detected configuration");
     config->callback([] {
         auto cfg = Config::detect();
+        auto na = [](const std::optional<std::string>& v) { return v ? *v : std::string("n/a"); };
+
         std::cout << "den_home:          " << cfg.den_home.string() << "\n"
                   << "store:             " << cfg.store.string() << "\n"
                   << "cache:             " << cfg.cache.string() << "\n"
@@ -521,6 +588,29 @@ void Cli::M::setup() {
                   << "arch:              " << to_string(cfg.arch) << "\n"
                   << "macos_version:     "
                   << (cfg.macos_version ? cfg.macos_version->to_string() : "n/a") << "\n";
+
+        // Host toolchain / OS facts (🎯T66/T2).
+        auto facts = detect_host_facts();
+#ifdef __APPLE__
+        std::cout << "xcode_version:     " << na(facts.xcode_version) << "\n"
+                  << "clt_version:       " << na(facts.clt_version) << "\n"
+                  << "sdk_path:          " << na(facts.sdk_path) << "\n";
+#else
+        std::cout << "os_name:           " << na(facts.os_name) << "\n"
+                  << "os_version:        " << na(facts.os_version) << "\n"
+                  << "kernel:            " << na(facts.kernel) << "\n"
+                  << "glibc:             " << na(facts.glibc) << "\n";
+#endif
+
+        // Homebrew-config parity: echo the stable `brew config` keys.
+        if (facts.homebrew_config.empty()) {
+            std::cout << "homebrew_config:   n/a (brew not found)\n";
+        } else {
+            std::cout << "homebrew_config:\n";
+            for (const auto& [key, value] : facts.homebrew_config) {
+                std::cout << "  " << std::left << std::setw(28) << (key + ":") << value << "\n";
+            }
+        }
     });
 
     // --- env ---
