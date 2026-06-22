@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "cli.h"
+#include "daemon_status.h"
 #include "install.h"
 #include "shell.h"
 
@@ -935,20 +936,7 @@ void Cli::M::setup() {
             std::cout << "Daemon: not running\n";
 
         auto state = read_daemon_state(cfg.den_home);
-        if (state.last_check) {
-            auto ago = now_secs() - *state.last_check;
-            std::cout << "Last check: " << ago << "s ago\n";
-        } else {
-            std::cout << "Last check: never\n";
-        }
-
-        if (state.pending.empty()) {
-            std::cout << "Pending upgrades: none\n";
-        } else {
-            std::cout << "Pending upgrades:\n";
-            for (const auto& p : state.pending)
-                std::cout << "  " << p.name << " " << p.installed << " -> " << p.available << "\n";
-        }
+        format_daemon_status(std::cout, state);
 
         auto s = read_settings(cfg.den_home);
         std::cout << "Auto-download: " << (s.daemon.auto_download ? "on" : "off") << "\n";
@@ -1035,7 +1023,18 @@ void Cli::M::setup() {
             ++count;
         }
 
-        if (count == 0) {
+        // Surface upgrades the daemon has deferred because a managed binary is
+        // in use (🎯T51 / 🎯T72), so the user understands why an available
+        // upgrade has not yet applied.
+        auto dstate = read_daemon_state(cfg.den_home);
+        if (!dstate.deferred.empty()) {
+            std::cout << "Deferred (managed binary in use):\n";
+            for (const auto& d : dstate.deferred) {
+                std::cout << "  " << std::left << std::setw(static_cast<int>(max_name + 2))
+                          << d.name << d.installed << " -> " << d.available << "  ["
+                          << (d.reason.empty() ? "in use" : d.reason) << "]\n";
+            }
+        } else if (count == 0) {
             std::cout << "All packages are up to date.\n";
         }
     });

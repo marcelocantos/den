@@ -32,8 +32,13 @@
 
 #include "daemon/daemon.h"
 
+#include <filesystem>
 #include <sstream>
 #include <string>
+
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
 
 namespace den {
 namespace test {
