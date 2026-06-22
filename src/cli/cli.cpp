@@ -218,6 +218,12 @@ struct Cli::M {
     std::string set_key;
     std::string set_value;
 
+    // migrate
+    std::vector<std::string> migrate_names;
+    bool migrate_dry_run = false;
+    bool migrate_integrate_shell = false;
+    bool migrate_no_health = false;
+
     // services
     std::vector<std::string> service_names;
     bool services_logs_follow = false;
@@ -905,10 +911,26 @@ void Cli::M::setup() {
     });
 
     // --- migrate ---
-    auto* migrate = app.add_subcommand("migrate", "Migrate from Homebrew Cellar");
-    migrate->callback([] {
+    auto* migrate =
+        app.add_subcommand("migrate", "Migrate formulae, casks, taps, and services from Homebrew");
+    migrate->add_option("names", migrate_names,
+                        "Specific formulae/casks to migrate (default: everything)");
+    migrate->add_flag("--dry-run", migrate_dry_run,
+                      "Compute and print the migration summary without writing anything");
+    migrate->add_flag("--integrate-shell", migrate_integrate_shell,
+                      "Append `eval \"$(den init)\"` to your shell profile (opt-in)");
+    migrate->add_flag("--no-health-check", migrate_no_health,
+                      "Skip the post-migration health check");
+    migrate->callback([this] {
         auto cfg = Config::detect();
-        migrate_from_homebrew(cfg, {});
+        MigrateOptions opts;
+        opts.dry_run = migrate_dry_run;
+        opts.integrate_shell = migrate_integrate_shell;
+        opts.query_services = true; // real CLI path may consult `brew services`
+        migrate_from_homebrew(cfg, migrate_names, opts);
+        if (!migrate_dry_run && !migrate_no_health) {
+            check_migration_health(cfg, /*print=*/true);
+        }
     });
 
     // --- daemon ---

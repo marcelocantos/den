@@ -19,8 +19,10 @@ struct Config {
     fs::path cache;    // ~/.den/cache/
 
     // Homebrew paths.
-    fs::path homebrew_prefix; // /opt/homebrew
-    fs::path homebrew_cellar; // /opt/homebrew/Cellar (same as store)
+    fs::path homebrew_prefix;   // /opt/homebrew
+    fs::path homebrew_cellar;   // /opt/homebrew/Cellar (same as store)
+    fs::path homebrew_caskroom; // /opt/homebrew/Caskroom
+    fs::path homebrew_taps;     // /opt/homebrew/Library/Taps
 
     // Platform.
     Arch arch;

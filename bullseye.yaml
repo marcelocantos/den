@@ -1055,7 +1055,7 @@ targets:
     discovered: 2026-05-15
   T71:
     name: brew-to-den migration succeeds end-to-end on a real Homebrew install
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1066,6 +1066,7 @@ targets:
     context: Standalone checkpoint for T37 (full brew-to-den migration). End-to-end on a real install is the only meaningful test — synthetic fixtures will miss the gnarly edge cases that motivate this target.
     origin: manual
     discovered: 2026-05-15
+    achieved: 2026-06-22
   T72:
     name: Daemon defers upgrades while managed binaries are in use
     status: identified

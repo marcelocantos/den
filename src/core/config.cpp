@@ -43,6 +43,8 @@ Config Config::detect() {
     c.homebrew_prefix = env_or("HOMEBREW_PREFIX", "/home/linuxbrew/.linuxbrew");
 #endif
     c.homebrew_cellar = env_or("HOMEBREW_CELLAR", c.homebrew_prefix / "Cellar");
+    c.homebrew_caskroom = env_or("HOMEBREW_CASKROOM", c.homebrew_prefix / "Caskroom");
+    c.homebrew_taps = c.homebrew_prefix / "Library" / "Taps";
     c.store = c.homebrew_cellar; // Shared Cellar — bottles pour at expected prefix
 
     return c;

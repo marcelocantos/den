@@ -23,6 +23,7 @@
 #include "core/config.h"
 #include "migrate/migrate.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -31,6 +32,7 @@
 #include <stdexcept>
 #include <string>
 #include <unistd.h>
+#include <vector>
 
 namespace den {
 namespace test {
@@ -305,30 +307,260 @@ TEST_SUITE("migration::fixture") {
     }
 
     // -------------------------------------------------------------------------
-    // SKIPPED: Caskroom migration
+    // 7. Caskroom scanning (was SKIPPED — now implemented for T37/T71)
     // -------------------------------------------------------------------------
-    // SKIP — src/migrate/ does not scan Caskroom/.
-    // Upstream gap: T37 / T71 acceptance requires cask support.
-    // When implemented, fixture should include:
-    //   <brew_root>/Caskroom/visual-studio-code/1.88.0/.metadata/
-    // and the manifest should gain a "casks" key.
+    // Build a Caskroom mirroring Homebrew's real layout: each cask token dir
+    // holds version subdirs that are siblings of a `.metadata` bookkeeping dir.
+    static fs::path build_fixture_caskroom(const fs::path& root) {
+        const fs::path caskroom = root / "Caskroom";
+
+        // visual-studio-code 1.88.0
+        const fs::path vscode = caskroom / "visual-studio-code";
+        fs::create_directories(vscode / "1.88.0" / "Visual Studio Code.app");
+        fs::create_directories(vscode / ".metadata" / "1.88.0");
+        std::ofstream(vscode / ".metadata" / "INSTALL_RECEIPT.json") << "{}\n";
+
+        // audacity 3.7.8
+        const fs::path audacity = caskroom / "audacity";
+        fs::create_directories(audacity / "3.7.8");
+        fs::create_directories(audacity / ".metadata");
+
+        return caskroom;
+    }
+
+    TEST_CASE("scan_homebrew_caskroom finds casks and ignores .metadata") {
+        MigTmpDir root;
+        const auto caskroom = build_fixture_caskroom(root.path);
+
+        const auto casks = scan_homebrew_caskroom(caskroom);
+        REQUIRE(casks.size() == 2);
+
+        std::map<std::string, std::string> found;
+        for (const auto& c : casks) {
+            found[c.name] = c.version;
+        }
+        CHECK(found["visual-studio-code"] == "1.88.0");
+        CHECK(found["audacity"] == "3.7.8");
+
+        // No version named ".metadata" leaks through.
+        for (const auto& c : casks) {
+            CHECK(c.version != ".metadata");
+        }
+    }
+
+    TEST_CASE("migrate_from_homebrew records casks in manifest") {
+        MigTmpDir root;
+        const auto cellar = build_fixture_cellar(root.path);
+        const auto caskroom = build_fixture_caskroom(root.path);
+
+        Config cfg;
+        cfg.homebrew_cellar = cellar;
+        cfg.homebrew_caskroom = caskroom;
+        cfg.den_home = root.path / "den_home";
+
+        const auto summary = migrate_from_homebrew(cfg, {});
+        CHECK(summary.casks == 2);
+
+        const auto manifest = read_manifest(cfg.den_home);
+        REQUIRE(manifest.contains("casks"));
+        const auto& casks = manifest["casks"];
+        CHECK(casks["visual-studio-code"].get<std::string>() == "1.88.0");
+        CHECK(casks["audacity"].get<std::string>() == "3.7.8");
+    }
 
     // -------------------------------------------------------------------------
-    // SKIPPED: Tap import
+    // 8. Tap import (was SKIPPED — now implemented for T37)
     // -------------------------------------------------------------------------
-    // SKIP — src/migrate/ does not read Library/Taps/.
-    // Upstream gap: T37 requires taps to be re-added as den tap sources.
-    // When implemented, fixture should include:
-    //   <brew_root>/Library/Taps/homebrew/homebrew-cask/
-    // and a "taps" key should appear in the manifest or a separate tap index.
+    static fs::path build_fixture_taps(const fs::path& root) {
+        const fs::path taps = root / "Library" / "Taps";
+        // Homebrew lays taps out as <user>/homebrew-<repo>.
+        fs::create_directories(taps / "homebrew" / "homebrew-cask");
+        fs::create_directories(taps / "homebrew" / "homebrew-core");
+        fs::create_directories(taps / "marcelocantos" / "homebrew-tap");
+        // A stray non-tap directory must be ignored.
+        fs::create_directories(taps / "homebrew" / "not-a-tap");
+        return taps;
+    }
+
+    TEST_CASE("scan_homebrew_taps canonicalises tap names") {
+        MigTmpDir root;
+        const auto taps = build_fixture_taps(root.path);
+
+        const auto found = scan_homebrew_taps(taps);
+        REQUIRE(found.size() == 3);
+
+        std::vector<std::string> names;
+        for (const auto& t : found) {
+            names.push_back(t.name);
+        }
+        // Sorted by name.
+        CHECK(names[0] == "homebrew/cask");
+        CHECK(names[1] == "homebrew/core");
+        CHECK(names[2] == "marcelocantos/tap");
+    }
+
+    TEST_CASE("migrate_from_homebrew records taps in manifest") {
+        MigTmpDir root;
+        const auto cellar = build_fixture_cellar(root.path);
+        const auto taps = build_fixture_taps(root.path);
+
+        Config cfg;
+        cfg.homebrew_cellar = cellar;
+        cfg.homebrew_taps = taps;
+        cfg.den_home = root.path / "den_home";
+
+        const auto summary = migrate_from_homebrew(cfg, {});
+        CHECK(summary.taps == 3);
+
+        const auto manifest = read_manifest(cfg.den_home);
+        REQUIRE(manifest.contains("taps"));
+        std::vector<std::string> tap_names;
+        for (const auto& t : manifest["taps"]) {
+            tap_names.push_back(t.get<std::string>());
+        }
+        std::sort(tap_names.begin(), tap_names.end());
+        REQUIRE(tap_names.size() == 3);
+        CHECK(tap_names[0] == "homebrew/cask");
+        CHECK(tap_names[1] == "homebrew/core");
+        CHECK(tap_names[2] == "marcelocantos/tap");
+    }
 
     // -------------------------------------------------------------------------
-    // SKIPPED: brew services migration
+    // 9. brew services migration (was SKIPPED — now implemented for T37)
     // -------------------------------------------------------------------------
-    // SKIP — src/migrate/ does not inspect brew services.
-    // Upstream gap: T37 acceptance requires migrated services to remain running.
-    // When implemented, the fixture would need a fake `brew services list` output
-    // and the migration should record service state in the manifest or launchd.
+    TEST_CASE("parse_brew_services_json extracts running services") {
+        const std::string json = R"([
+            {"name":"postgresql@16","status":"started","user":"alice",
+             "file":"/Users/alice/Library/LaunchAgents/homebrew.mxcl.postgresql@16.plist"},
+            {"name":"redis","status":"started","user":"alice",
+             "file":"/Users/alice/Library/LaunchAgents/homebrew.mxcl.redis.plist"},
+            {"name":"emacs","status":"none","user":null,"file":"/opt/homebrew/opt/emacs/x.plist"}
+        ])";
+
+        const auto svcs = parse_brew_services_json(json);
+        REQUIRE(svcs.size() == 3);
+
+        std::map<std::string, bool> running;
+        for (const auto& s : svcs) {
+            running[s.name] = s.running;
+        }
+        CHECK(running["postgresql@16"] == true);
+        CHECK(running["redis"] == true);
+        CHECK(running["emacs"] == false);
+    }
+
+    TEST_CASE("parse_brew_services_json tolerates malformed input") {
+        CHECK(parse_brew_services_json("{ not json").empty());
+        CHECK(parse_brew_services_json("{}").empty()); // object, not array
+        CHECK(parse_brew_services_json("[]").empty());
+    }
+
+    TEST_CASE("scan_launchagent_plists finds homebrew.mxcl plists") {
+        MigTmpDir root;
+        const fs::path agents = root.path / "LaunchAgents";
+        fs::create_directories(agents);
+        std::ofstream(agents / "homebrew.mxcl.ollama.plist") << "<plist/>\n";
+        std::ofstream(agents / "homebrew.mxcl.sawmill.plist") << "<plist/>\n";
+        // Non-homebrew plist must be ignored.
+        std::ofstream(agents / "com.apple.something.plist") << "<plist/>\n";
+
+        const auto svcs = scan_launchagent_plists(agents);
+        REQUIRE(svcs.size() == 2);
+        std::vector<std::string> names;
+        for (const auto& s : svcs) {
+            names.push_back(s.name);
+        }
+        CHECK(names[0] == "ollama");
+        CHECK(names[1] == "sawmill");
+    }
+
+    TEST_CASE("migrate_from_homebrew records services from injected json") {
+        MigTmpDir root;
+        const auto cellar = build_fixture_cellar(root.path);
+
+        Config cfg;
+        cfg.homebrew_cellar = cellar;
+        cfg.den_home = root.path / "den_home";
+
+        MigrateOptions opts;
+        opts.brew_services_json = R"([
+            {"name":"redis","status":"started","user":"bob",
+             "file":"/Users/bob/Library/LaunchAgents/homebrew.mxcl.redis.plist"}
+        ])";
+
+        const auto summary = migrate_from_homebrew(cfg, {}, opts);
+        CHECK(summary.services == 1);
+
+        const auto manifest = read_manifest(cfg.den_home);
+        REQUIRE(manifest.contains("services"));
+        REQUIRE(manifest["services"].size() == 1);
+        const auto& svc = manifest["services"][0];
+        CHECK(svc["name"].get<std::string>() == "redis");
+        CHECK(svc["running"].get<bool>() == true);
+    }
+
+    // -------------------------------------------------------------------------
+    // 10. Dry-run writes nothing
+    // -------------------------------------------------------------------------
+    TEST_CASE("migrate_from_homebrew --dry-run writes no manifest") {
+        MigTmpDir root;
+        const auto cellar = build_fixture_cellar(root.path);
+        const auto caskroom = build_fixture_caskroom(root.path);
+
+        Config cfg;
+        cfg.homebrew_cellar = cellar;
+        cfg.homebrew_caskroom = caskroom;
+        cfg.den_home = root.path / "den_home";
+
+        MigrateOptions opts;
+        opts.dry_run = true;
+
+        const auto summary = migrate_from_homebrew(cfg, {}, opts);
+        // Summary still reflects what *would* be migrated.
+        CHECK(summary.formulae == 3);
+        CHECK(summary.casks == 2);
+
+        // But nothing is written.
+        CHECK_FALSE(fs::exists(cfg.den_home / "manifests" / "ROOT.json"));
+    }
+
+    // -------------------------------------------------------------------------
+    // 11. Post-migration health check passes against a consistent fixture
+    // -------------------------------------------------------------------------
+    TEST_CASE("check_migration_health passes for a freshly migrated fixture") {
+        MigTmpDir root;
+        const auto cellar = build_fixture_cellar(root.path);
+        const auto caskroom = build_fixture_caskroom(root.path);
+
+        Config cfg;
+        cfg.homebrew_cellar = cellar;
+        cfg.homebrew_caskroom = caskroom;
+        cfg.den_home = root.path / "den_home";
+
+        migrate_from_homebrew(cfg, {});
+        const auto report = check_migration_health(cfg, /*print=*/false);
+
+        CHECK(report.healthy());
+        CHECK(report.formulae_ok == 3);
+        CHECK(report.casks_ok == 2);
+    }
+
+    TEST_CASE("check_migration_health flags a missing keg") {
+        MigTmpDir root;
+        const auto cellar = build_fixture_cellar(root.path);
+
+        Config cfg;
+        cfg.homebrew_cellar = cellar;
+        cfg.den_home = root.path / "den_home";
+
+        migrate_from_homebrew(cfg, {});
+
+        // Remove a keg so the manifest now references a non-existent path.
+        fs::remove_all(cellar / "git");
+
+        const auto report = check_migration_health(cfg, /*print=*/false);
+        CHECK_FALSE(report.healthy());
+    }
 
 } // TEST_SUITE migration::fixture
 
