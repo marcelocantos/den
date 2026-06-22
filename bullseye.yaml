@@ -164,7 +164,7 @@ targets:
     discovered: 2026-04-09
   T2:
     name: Configuration and environment detection
-    status: identified
+    status: achieved
     value: 3.0
     cost: 2.0
     acceptance:
@@ -172,6 +172,7 @@ targets:
     context: Xcode/CLT version detection, full Homebrew config parity.
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-06-22
   T20:
     name: Cellar migration
     status: achieved
@@ -533,7 +534,7 @@ targets:
     achieved: 2026-04-11
   T37:
     name: Full brew-to-den migration
-    status: identified
+    status: achieved
     value: 8.0
     cost: 8.0
     acceptance:
@@ -541,9 +542,10 @@ targets:
     context: '`den migrate` becomes a complete, automated migration from Homebrew to den. The user runs one command and den takes over entirely.  **What it imports:**  1. **Formulae** (current T20) — scan Cellar, build root manifest, materialise. Distinguish on-request vs dependency installs from INSTALL_RECEIPT.json.  2. **Casks** — scan Caskroom, record installed casks and versions in the manifest''s `casks` map. Verify the apps exist in /Applications.  3. **Taps** — read Homebrew''s tap list from Library/Taps/, record in den''s config so den knows about third-party sources.  4. **Services** — detect running `brew services`, migrate their plists to den''s service management (T33 when available, or the current launchctl approach as fallback).  5. **Shell integration** — detect the user''s shell, add `eval "$(den init)"` to the right profile file if not already present. Offer to comment out `eval "$(brew shellenv)"`.  6. **Verification** — after migration, run a health check: - All manifest packages resolve to kegs in the Cellar - All expected binaries are accessible via the den environment - `pkg-config` resolves key libraries - Running services are still running - Print a summary: N formulae, N casks, N services migrated  7. **Rollback instructions** — print how to undo if something breaks (uncomment brew shellenv, `den daemon stop`).  **Safety:** - Non-destructive — den reads Homebrew''s state but never modifies it. Both can coexist indefinitely. - Idempotent — safe to run multiple times (picks up new installs). - Dry-run mode — `den migrate --dry-run` shows what would happen.'
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-06-22
   T38:
     name: Python provider (subsume virtualenv)
-    status: identified
+    status: achieved
     value: 8.0
     cost: 8.0
     acceptance:
@@ -553,9 +555,10 @@ targets:
     - T23
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-06-22
   T39:
     name: Node.js/npm provider
-    status: identified
+    status: achieved
     value: 5.0
     cost: 5.0
     acceptance:
@@ -565,9 +568,10 @@ targets:
     - T23
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-06-22
   T4:
     name: Cellar inspection improvements
-    status: identified
+    status: achieved
     value: 3.0
     cost: 3.0
     acceptance:
@@ -575,9 +579,10 @@ targets:
     context: Show disk usage, which envs reference a keg, all-Cellar listing.
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-06-22
   T40:
     name: Go provider
-    status: identified
+    status: achieved
     value: 3.0
     cost: 3.0
     acceptance:
@@ -587,9 +592,10 @@ targets:
     - T23
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-06-22
   T41:
     name: Cargo provider
-    status: identified
+    status: achieved
     value: 3.0
     cost: 3.0
     acceptance:
@@ -599,6 +605,7 @@ targets:
     - T23
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-06-22
   T42:
     name: Independent hash verification pipeline
     status: identified
@@ -729,7 +736,7 @@ targets:
     achieved: 2026-04-11
   T51:
     name: Safe automatic upgrades
-    status: identified
+    status: achieved
     value: 5.0
     cost: 5.0
     acceptance:
@@ -739,6 +746,7 @@ targets:
     - T13
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-06-22
   T52:
     name: Restart services after upgrade
     status: identified
@@ -902,7 +910,7 @@ targets:
     achieved: 2026-04-11
   T60:
     name: Multi-provider package management is wired end-to-end
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -913,6 +921,7 @@ targets:
     context: 'Acts as the shared checkpoint for the multi-provider work cluster: T23 (the trait), T38 (Python), T39 (Node), T40 (Go), T41 (Cargo). The cluster has been a tunnel because all four leaves are work targets with no downstream verification — this verify target gives the decision-maker a checkpoint to steer toward.'
     origin: manual
     discovered: 2026-05-15
+    achieved: 2026-06-22
   T61:
     name: den's built-in supervisor manages services without launchctl
     status: identified
@@ -982,7 +991,7 @@ targets:
     discovered: 2026-05-15
   T66:
     name: den correctly detects host configuration and Cellar state
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -992,6 +1001,7 @@ targets:
     context: 'Groups two host-introspection work targets: T2 (config/env detection) and T4 (Cellar inspection improvements).'
     origin: manual
     discovered: 2026-05-15
+    achieved: 2026-06-22
   T67:
     name: den supports adding and using third-party Homebrew taps
     status: identified
@@ -1069,7 +1079,7 @@ targets:
     achieved: 2026-06-22
   T72:
     name: Daemon defers upgrades while managed binaries are in use
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -1080,6 +1090,7 @@ targets:
     context: Standalone checkpoint for T51 (safe automatic upgrades). Critical user-trust property — automatic upgrades that yank the rug out from under running processes will get den uninstalled fast.
     origin: manual
     discovered: 2026-05-15
+    achieved: 2026-06-22
   T73:
     name: den publishes a fully-validated release candidate
     status: achieved
