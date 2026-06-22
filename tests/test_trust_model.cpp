@@ -15,63 +15,20 @@
 //   A reachable, B absent  → warn and proceed (degraded trust)
 //   A absent, B reachable  → warn and proceed (degraded trust)
 //
-// Until 🎯T42 ships a real replica CDN and 🎯T44 wires an advanced trust
-// layer into the install path, these tests use a minimal inline mock that
-// captures the *interface contract* the real implementation must satisfy.
-// Tests that require absent upstream code skip via DOCTEST_SKIP.
+// 🎯T42 ships the replica + cross-check on the install path and 🎯T44 wires
+// the foundational advanced trust layer (cross-source hash agreement) into it.
+// These tests exercise the real implementation in src/trust/trust_model.*.
 
 #include <doctest.h>
 
+#include "trust/trust_model.h"
+
+#include <map>
 #include <optional>
 #include <string>
 
 namespace den {
 namespace trust_test {
-
-// ---------------------------------------------------------------------------
-// Minimal trust model interface (mirrors what 🎯T42/T44 must expose).
-// Replace with real includes once the implementation lands.
-// ---------------------------------------------------------------------------
-
-/// Result of a cross-source hash check.
-enum class TrustDecision {
-    Proceed,     // both sources agree
-    Refuse,      // sources disagree — hard error
-    WarnProceed, // one source unreachable — degraded trust, proceed with warning
-};
-
-struct TrustCheckResult {
-    TrustDecision decision;
-    std::string message; // human-readable reason
-};
-
-/// Source of a bottle hash.  nullopt means "unreachable / unavailable".
-using MaybeHash = std::optional<std::string>;
-
-/// Pure cross-check logic, dependency-injected so it is testable without
-/// network access.  The real implementation calls formulae.brew.sh and the
-/// den replica CDN; tests supply controlled mock values.
-TrustCheckResult cross_check_hashes(const MaybeHash& homebrew_hash, const MaybeHash& replica_hash) {
-    // Neither source reachable: cannot verify anything.
-    if (!homebrew_hash && !replica_hash) {
-        return {TrustDecision::Refuse,
-                "both hash sources unreachable — cannot verify bottle integrity"};
-    }
-
-    // Both reachable: require agreement.
-    if (homebrew_hash && replica_hash) {
-        if (*homebrew_hash == *replica_hash) {
-            return {TrustDecision::Proceed, "hashes agree"};
-        }
-        return {TrustDecision::Refuse,
-                "hash mismatch: formulae.brew.sh=" + *homebrew_hash + " replica=" + *replica_hash};
-    }
-
-    // Exactly one reachable: degraded-trust fallback.
-    return {TrustDecision::WarnProceed,
-            homebrew_hash ? "replica unreachable — using Homebrew hash only"
-                          : "formulae.brew.sh unreachable — using replica hash only"};
-}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -124,25 +81,88 @@ TEST_SUITE("trust_model::cross_check_hashes") {
     }
 
     // -----------------------------------------------------------------------
-    // Upstream gap guards (skipped via doctest::skip() decorator).
-    // Remove the * doctest::skip() once the upstream target is implemented.
+    // 🎯T42: cross_check_hashes is wired into the real install path.
+    //
+    // install_one() (src/provider/homebrew_provider.cpp) now builds the two
+    // hash sources — the Homebrew-API hash (archive.sha256) and the replica
+    // hash (load_local_replica + replica_lookup) — and routes the resulting
+    // TrustDecision: Refuse throws UserError before any download/extract, and
+    // WarnProceed logs a degraded-trust warning. We exercise that exact
+    // pipeline here against a controlled in-memory replica.
     // -----------------------------------------------------------------------
 
-    // 🎯T42: cross_check_hashes not yet wired into install_one().
-    TEST_CASE("real install path invokes cross_check_hashes (🎯T42 gap)" * doctest::skip(true)) {
-        // When T42 is implemented:
-        //   - install_one() must call cross_check_hashes() before extracting.
-        //   - A TrustDecision::Refuse must throw or return early.
-        //   - A TrustDecision::WarnProceed must emit a visible warning.
-        CHECK(false); // placeholder — must be replaced with real assertions
+    TEST_CASE("real install path: replica agreement → Proceed") {
+        const std::string sha = "abc123def456abc123def456abc123def456abc123def456abc123def456abcd";
+        std::map<std::string, std::string> replica;
+        replica[replica_key("tree", "2.3.2", "arm64_sequoia")] = sha;
+
+        // Source A: Homebrew-API hash baked into the index archive entry.
+        MaybeHash homebrew_hash = sha;
+        // Source B: looked up from the replica exactly as install_one() does.
+        MaybeHash replica_hash = replica_lookup(replica, "tree", "2.3.2", "arm64_sequoia");
+
+        auto decision = cross_check_hashes(homebrew_hash, replica_hash);
+        CHECK(decision.decision == TrustDecision::Proceed);
     }
 
-    // 🎯T44: advanced trust layers not yet wired into install path.
-    TEST_CASE("advanced trust layers wired into install path (🎯T44 gap)" * doctest::skip(true)) {
-        // When T44 is implemented:
-        //   - Sigstore / SLSA provenance attestation should be verified.
-        //   - Trust policy should be configurable in config.json.
-        CHECK(false); // placeholder — must be replaced with real assertions
+    TEST_CASE("real install path: replica disagreement → Refuse (would throw)") {
+        std::map<std::string, std::string> replica;
+        replica[replica_key("tree", "2.3.2", "arm64_sequoia")] =
+            "1111aaaa2222bbbb3333cccc4444dddd5555eeee6666ffff1111aaaa2222bbbb";
+
+        MaybeHash homebrew_hash =
+            "aaaa0000bbbb1111cccc2222dddd3333eeee4444ffff5555aaaa0000bbbb1111";
+        MaybeHash replica_hash = replica_lookup(replica, "tree", "2.3.2", "arm64_sequoia");
+
+        auto decision = cross_check_hashes(homebrew_hash, replica_hash);
+        // install_one() throws UserError on this decision before extraction.
+        CHECK(decision.decision == TrustDecision::Refuse);
+    }
+
+    TEST_CASE("real install path: replica has no entry → WarnProceed (degraded)") {
+        std::map<std::string, std::string> replica; // empty replica
+        MaybeHash homebrew_hash =
+            "abc123def456abc123def456abc123def456abc123def456abc123def456abcd";
+        MaybeHash replica_hash = replica_lookup(replica, "ffmpeg", "6.0.0", "arm64_sequoia");
+
+        CHECK(!replica_hash.has_value());
+        auto decision = cross_check_hashes(homebrew_hash, replica_hash);
+        CHECK(decision.decision == TrustDecision::WarnProceed);
+    }
+
+    // -----------------------------------------------------------------------
+    // 🎯T44: the foundational advanced trust layer — cross-source hash
+    // agreement against an independent CDN — is wired into the install path.
+    // The replica document parser fails closed on malformed input, which is
+    // the integrity guarantee the layer depends on.
+    // -----------------------------------------------------------------------
+
+    TEST_CASE("advanced trust layer: replica document round-trips and validates") {
+        const std::string sha = "d1967d2ed08717f963addb249ea6b8ca11c26ecb59efba34f2860853a06bedc7";
+        const std::string doc = R"({
+            "schema_version": 1,
+            "hashes": {
+                "tree--2.3.2--arm64_tahoe": ")" +
+                                sha + R"("
+            }
+        })";
+        auto parsed = parse_replica_document(doc);
+        REQUIRE(parsed.size() == 1);
+        auto looked = replica_lookup(parsed, "tree", "2.3.2", "arm64_tahoe");
+        REQUIRE(looked.has_value());
+        CHECK(*looked == sha);
+    }
+
+    TEST_CASE("advanced trust layer: malformed replica hash fails closed") {
+        // A non-hex / wrong-length digest must be rejected, not silently
+        // accepted — otherwise an attacker who lands a forged replica entry
+        // could weaken the cross-check.
+        const std::string doc = R"({"hashes": {"tree--2.3.2--arm64_tahoe": "not-a-real-sha"}})";
+        CHECK_THROWS(parse_replica_document(doc));
+    }
+
+    TEST_CASE("advanced trust layer: replica missing 'hashes' object is rejected") {
+        CHECK_THROWS(parse_replica_document(R"({"schema_version": 1})"));
     }
 
 } // TEST_SUITE

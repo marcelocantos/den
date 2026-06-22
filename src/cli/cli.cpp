@@ -28,17 +28,20 @@
 #include "../store/store.h"
 #include "../supervisor/supervisor.h"
 #include "../tap/tap.h"
+#include "../trust/trust_model.h"
 
 #include <CLI11.hpp>
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <set>
 #include <sstream>
 #include <string>
@@ -816,6 +819,35 @@ void Cli::M::setup() {
         auto findings = doctor(cfg);
         if (findings.empty()) {
             std::cout << "Your system is ready to brew.\n";
+        }
+    });
+
+    // --- replica-verify (🎯T42/T64) ---
+    // Diff-based replica verifier used by the replica-verify CI pipeline.
+    // Given a downloaded bottle and its claimed SHA256, recompute the digest
+    // and report match/mismatch. Exit 0 on match, non-zero on mismatch so the
+    // workflow can fail the run. Hidden from --help (an internal CI tool).
+    auto* rv = app.add_subcommand("replica-verify",
+                                  "Verify a downloaded bottle against a claimed SHA256 (CI tool)");
+    rv->group(""); // hide from help listing
+    auto rv_args = std::make_shared<std::array<std::string, 4>>();
+    auto rv_bottle = std::make_shared<std::string>();
+    rv->add_option("--name", (*rv_args)[0], "Formula name")->required();
+    rv->add_option("--version", (*rv_args)[1], "Formula version")->required();
+    rv->add_option("--tag", (*rv_args)[2], "Platform tag")->required();
+    rv->add_option("--sha256", (*rv_args)[3], "Claimed SHA256 digest")->required();
+    rv->add_option("--bottle", *rv_bottle, "Path to the downloaded bottle file")->required();
+    rv->callback([rv_args, rv_bottle] {
+        ReplicaDiffEntry entry{(*rv_args)[0], (*rv_args)[1], (*rv_args)[2], (*rv_args)[3]};
+        auto outcome = verify_diff_entry(entry, fs::path(*rv_bottle));
+        if (outcome == DiffVerifyOutcome::Match) {
+            std::cout << "MATCH " << entry.formula_name << " " << entry.version << " "
+                      << entry.platform_tag << "\n";
+        } else {
+            std::cout << "MISMATCH " << entry.formula_name << " " << entry.version << " "
+                      << entry.platform_tag << "\n";
+            throw UserError("replica diff verification failed for " + entry.formula_name + " " +
+                            entry.version + " (" + entry.platform_tag + ")");
         }
     });
 

@@ -4,6 +4,7 @@
 #include "doctor.h"
 
 #include "../platform/platform.h"
+#include "trust_checks.h"
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -307,6 +308,7 @@ std::vector<Finding> doctor(const Config& config) {
     check_missing_packages(config, findings);
     check_file_permissions(config, findings);
     check_host_toolchain(config, findings);
+    check_trust_model(config, findings);
 
     // Summary output.
     int warnings = 0;

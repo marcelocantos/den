@@ -89,3 +89,8 @@ endif()
 
 # --- Install ---
 install(TARGETS den RUNTIME DESTINATION bin)
+
+# 🎯T42/T64: ship the independent trust replica snapshot alongside the binary
+# so `den install` and `den doctor` can cross-check bottle hashes offline. The
+# runtime resolves it via ../share/den/known_hashes.json relative to bin/.
+install(FILES ${CMAKE_SOURCE_DIR}/data/known_hashes.json DESTINATION share/den)

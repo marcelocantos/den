@@ -13,6 +13,7 @@
 #include "../index/dep_resolve.h"
 #include "../platform/platform.h"
 #include "../store/store.h"
+#include "../trust/trust_model.h"
 
 #include <spdlog/spdlog.h>
 
@@ -52,6 +53,47 @@ bool install_one(const Config& config, const Package& pkg) {
     }
 
     const auto& archive = pkg.archives.at(*best);
+
+    // 🎯T42/T64: independent trust cross-check BEFORE we download or extract.
+    //
+    // Source A is the hash Homebrew's API gave us (archive.sha256, baked into
+    // the index). Source B is den's replica snapshot, served from a SEPARATE
+    // origin (raw.githubusercontent.com). An attacker must compromise BOTH to
+    // swap a bottle: they would need a matching SHA256 in Homebrew's API *and*
+    // in den's GitHub replica (which is diff-verified against GHCR in CI).
+    //
+    // We consult the bundled local snapshot here. fetch from the live CDN is
+    // intentionally avoided on the hot install path (network cost, offline
+    // installs); the replica-verify CI pipeline keeps the bundled snapshot
+    // fresh and GHCR-verified.
+    {
+        MaybeHash homebrew_hash = archive.sha256.empty() ? std::nullopt : MaybeHash(archive.sha256);
+        MaybeHash replica_hash;
+        try {
+            auto replica = load_local_replica(config);
+            replica_hash = replica_lookup(replica, pkg.name, pkg.version, *best);
+        } catch (const std::exception& e) {
+            // A corrupt replica snapshot leaves the replica source unreachable
+            // (nullopt) rather than aborting — the cross-check then degrades to
+            // single-source with a warning.
+            SPDLOG_WARN("trust replica unavailable for {} {}: {}", pkg.name, pkg.version, e.what());
+        }
+
+        TrustCheckResult trust = cross_check_hashes(homebrew_hash, replica_hash);
+        switch (trust.decision) {
+        case TrustDecision::Proceed:
+            SPDLOG_INFO("trust: {} {} cross-checked against replica — {}", pkg.name, pkg.version,
+                        trust.message);
+            break;
+        case TrustDecision::WarnProceed:
+            SPDLOG_WARN("trust: {} {} — {} (degraded trust)", pkg.name, pkg.version, trust.message);
+            break;
+        case TrustDecision::Refuse:
+            throw UserError("refusing to install '" + pkg.name + " " + pkg.version +
+                            "': independent trust check failed — " + trust.message);
+        }
+    }
+
     std::cout << "==> Downloading " << pkg.name << " " << pkg.version << "\n";
 
     auto cache_dir = config.cache / "archives";

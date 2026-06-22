@@ -24,10 +24,14 @@
 
 #include "core/config.h"
 #include "doctor/doctor.h"
+#include "doctor/trust_checks.h"
 
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <iostream>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <unistd.h>
@@ -72,64 +76,8 @@ static Config make_isolated_config(const fs::path& home) {
     return cfg;
 }
 
-// ---------------------------------------------------------------------------
-// Mock trust-status report (mirrors the future interface from 🎯T42 / T44).
-// Replace with real includes once the implementation lands.
-// ---------------------------------------------------------------------------
-
-enum class ReplicaStatus {
-    Active,   // replica CDN reachable and in sync
-    Degraded, // replica unreachable; falling back to Homebrew-only
-    Unknown,  // never synced
-};
-
-struct TrustReport {
-    bool homebrew_source_active = true;
-    bool replica_source_active = false; // becomes true once 🎯T42 ships
-    ReplicaStatus replica_status = ReplicaStatus::Unknown;
-    std::optional<std::string> last_replica_sync_iso8601; // nullopt = never synced
-    std::vector<std::string> active_advanced_layers;      // empty until 🎯T44
-};
-
-/// Summarise the trust report into doctor-style Finding messages.
-static std::vector<Finding> findings_from_trust_report(const TrustReport& report) {
-    std::vector<Finding> findings;
-
-    if (!report.homebrew_source_active) {
-        findings.push_back(
-            {Severity::Error, "trust: Homebrew hash source (formulae.brew.sh) is inactive"});
-    }
-
-    if (!report.replica_source_active) {
-        findings.push_back({Severity::Warning,
-                            "trust: den replica hash source is inactive — "
-                            "operating in degraded trust mode (single source only); "
-                            "await 🎯T42 to enable full independent verification"});
-    }
-
-    if (report.replica_source_active) {
-        switch (report.replica_status) {
-        case ReplicaStatus::Active:
-            // No finding — healthy state.
-            break;
-        case ReplicaStatus::Degraded:
-            findings.push_back(
-                {Severity::Warning, "trust: replica CDN unreachable — last sync: " +
-                                        report.last_replica_sync_iso8601.value_or("never")});
-            break;
-        case ReplicaStatus::Unknown:
-            findings.push_back({Severity::Warning, "trust: replica has never synced"});
-            break;
-        }
-    }
-
-    if (report.active_advanced_layers.empty() && report.replica_source_active) {
-        findings.push_back(
-            {Severity::Warning, "trust: no advanced trust layers active (🎯T44 not yet wired)"});
-    }
-
-    return findings;
-}
+// ReplicaStatus / TrustReport / findings_from_trust_report now come from the
+// real implementation in src/doctor/trust_checks.* (included above).
 
 // ---------------------------------------------------------------------------
 // Tests — existing doctor() interface
@@ -254,26 +202,55 @@ TEST_SUITE("doctor_trust::trust_report_to_findings") {
     }
 
     // -----------------------------------------------------------------------
-    // Upstream gap guards (skipped via doctest::skip() decorator).
-    // Remove the * doctest::skip() once the upstream target is implemented.
+    // 🎯T42/T44: doctor() calls check_trust_model() and prints a trust block.
     // -----------------------------------------------------------------------
 
-    // 🎯T42/T44: doctor() does not yet call check_trust_model().
-    TEST_CASE("doctor() emits trust section in output (🎯T42 + T44 gap)" * doctest::skip(true)) {
-        // When T42+T44 are implemented, doctor() must:
-        //   - Call a check_trust_model(config, findings) helper.
-        //   - Report which hash sources are active.
-        //   - Report the last replica sync timestamp.
-        //   - Report which advanced trust layers are active.
-        CHECK(false); // placeholder — must be replaced with real assertions
+    /// Capture everything written to std::cout while `fn` runs.
+    static std::string capture_stdout(const std::function<void()>& fn) {
+        std::ostringstream buf;
+        std::streambuf* old = std::cout.rdbuf(buf.rdbuf());
+        try {
+            fn();
+        } catch (...) {
+            std::cout.rdbuf(old);
+            throw;
+        }
+        std::cout.rdbuf(old);
+        return buf.str();
     }
 
-    // 🎯T42: CLI integration test requires real replica state.
-    TEST_CASE("den doctor CLI output contains trust section (🎯T42 gap)" * doctest::skip(true)) {
-        // When T42 is implemented, running `den doctor` should print a block like:
-        //   [trust] replica: active, last sync: 2026-05-17T00:00:00Z
-        //   [trust] sources: formulae.brew.sh + den-replica-cdn
-        CHECK(false); // placeholder — must be replaced with real assertions
+    // doctor() must emit a [trust] status block describing the active sources.
+    TEST_CASE("doctor() emits trust section in output (🎯T42 + T44)") {
+        TmpDir tmp;
+        auto cfg = make_isolated_config(tmp.path);
+        std::string out = capture_stdout([&] { (void)doctor(cfg); });
+        CHECK(out.find("[trust]") != std::string::npos);
+        CHECK(out.find("formulae.brew.sh") != std::string::npos);
+        // Sources line names both the Homebrew API and the den replica posture.
+        CHECK(out.find("replica") != std::string::npos);
+    }
+
+    // check_trust_model() drives the CLI-visible block. With a real replica
+    // snapshot present it must report active sources and a sync line.
+    TEST_CASE("trust block reports replica state (🎯T42)") {
+        TmpDir tmp;
+        auto cfg = make_isolated_config(tmp.path);
+
+        // Seed an isolated replica snapshot so the block reports it as active.
+        fs::create_directories(tmp.path / "trust");
+        std::ofstream f(tmp.path / "trust" / "known_hashes.json");
+        f << R"({"schema_version":1,"hashes":{)"
+          << R"("tree--2.3.2--arm64_sequoia":")"
+          << "ef367d0a5e74970e2f5042479fe4000a8b324ac075520c66f8457f1cb06ca668"
+          << R"("}})";
+        f.close();
+
+        std::vector<Finding> findings;
+        std::string out = capture_stdout([&] { check_trust_model(cfg, findings); });
+        CHECK(out.find("[trust] sources:") != std::string::npos);
+        CHECK(out.find("den-replica-cdn") != std::string::npos);
+        CHECK(out.find("[trust] replica: active") != std::string::npos);
+        CHECK(out.find("entries: 1") != std::string::npos);
     }
 
 } // TEST_SUITE

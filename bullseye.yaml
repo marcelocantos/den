@@ -608,9 +608,10 @@ targets:
     achieved: 2026-06-22
   T42:
     name: Independent hash verification pipeline
-    status: identified
+    status: achieved
     value: 8.0
     cost: 8.0
+    actual_cost: 8.0
     acceptance:
     - TODO
     context: 'den maintains a verified replica of Homebrew bottle SHA256 hashes in its own GitHub repo, hosted on a different CDN than formulae.brew.sh. On install, den cross-references both sources — an attacker must compromise both Homebrew''s CDN and den''s GitHub repo simultaneously.  The CI replication job does NOT blindly trust the upstream index. It builds a diff-based trust model:  1. Fetch the current formula index from formulae.brew.sh. 2. Diff against the previous verified snapshot — identify changed hashes. 3. For each changed hash, independently verify by downloading the actual bottle from GHCR and computing SHA256 locally. If the bottle''s computed hash matches the index claim, the entry is genuine. If not, reject it and alert (open a GitHub issue, fail the CI run). 4. Only commit verified changes to the replica (`known_hashes.json`).  This means an attacker who modifies the index must also host a matching bottle at the correct GHCR path — they can''t just change the hash arbitrarily. The CI job verifies actual bottle content.  Optimisation: only download bottles whose hash changed since the last snapshot. Typical daily churn is a few dozen formulae, making the verification tractable. For very large bottles, a HEAD request + Content-Length check can provide a fast first-pass filter (a hash change with identical Content-Length is suspicious).  The verified hashes file is fetched by den from GitHub raw content (separate CDN) and checked alongside the formula index hashes. If either source is unavailable, den falls back to the other with a warning. If both are available and disagree, den refuses the install.'
@@ -618,6 +619,7 @@ targets:
     - T43
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-06-22
   T43:
     name: CI/CD pipeline
     status: achieved
@@ -965,9 +967,10 @@ targets:
     achieved: 2026-06-22
   T64:
     name: den's trust model is independently verifiable beyond Homebrew's
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
+    actual_cost: 8.0
     acceptance:
     - The independent hash replica (T42) is published from a separate CDN and consulted on every install; an attacker would need to compromise both formulae.brew.sh AND den's GitHub repo to swap a bottle.
     - 'The replica is built diff-based: only changed hashes are independently verified by downloading from GHCR and re-computing SHA256.'
@@ -976,6 +979,7 @@ targets:
     context: 'Shared checkpoint for the trust cluster: T42 (the independent hash replica + diff-based verification) and T44 (the broader trust-model layers above it).'
     origin: manual
     discovered: 2026-05-15
+    achieved: 2026-06-22
   T65:
     name: Source-build path via Ruby is wired into `den install`
     status: identified

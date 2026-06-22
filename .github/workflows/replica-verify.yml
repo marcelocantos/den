@@ -1,0 +1,103 @@
+# 🎯T42/T64: independent hash replica — diff-based GHCR verification.
+#
+# den's trust model consults TWO independent hash sources on every install:
+#   A. formulae.brew.sh / Homebrew's API
+#   B. den's own replica (data/known_hashes.json), served from
+#      raw.githubusercontent.com — a SEPARATE origin/CDN.
+#
+# This pipeline keeps source B honest. It is diff-based: it compares the
+# current bottle SHA256s reported by formulae.brew.sh against the committed
+# snapshot and, for every CHANGED hash, downloads the bottle from GHCR and
+# recomputes the SHA256 (via `den replica-verify`). A mismatch — meaning the
+# Homebrew API and the actual GHCR artifact disagree — fails the run and opens
+# an issue rather than committing a forged hash. Verified changes are committed
+# back to data/known_hashes.json.
+#
+# Because GHCR access and the live formulae.brew.sh API are only reachable from
+# CI, this workflow cannot be exercised locally; the verifier logic it calls
+# (verify_diff_entry / `den replica-verify`) is covered by den_tests.
+
+name: Replica Verify
+
+on:
+  schedule:
+    # Daily — keep the replica fresh as Homebrew rebuilds bottles.
+    - cron: "17 5 * * *"
+  workflow_dispatch: {}
+  push:
+    branches: [master]
+    paths:
+      - "data/known_hashes.json"
+      - "scripts/replica_verify.py"
+      - ".github/workflows/replica-verify.yml"
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: replica-verify
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Diff-verify replica against GHCR
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: brew install cmake ninja libarchive
+
+      - name: Build den
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix libarchive)"
+          cmake --build build --target den
+
+      - name: Diff formulae.brew.sh against the replica and verify changed hashes
+        id: verify
+        env:
+          DEN_BIN: ${{ github.workspace }}/build/den
+        run: python3 scripts/replica_verify.py
+
+      - name: Open issue on verification failure
+        if: failure() && steps.verify.conclusion == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = "Replica verification failed: GHCR bottle hash mismatch";
+            const body = [
+              "The diff-based replica verifier detected a SHA256 mismatch between",
+              "formulae.brew.sh and the actual bottle downloaded from GHCR.",
+              "",
+              "This means den's two independent hash sources disagree for a",
+              "changed bottle. The replica snapshot was NOT updated.",
+              "",
+              `See the failed run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            ].join("\n");
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: "open", labels: "replica-verify",
+            });
+            if (existing.data.length === 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, body, labels: ["replica-verify", "security"],
+              });
+            }
+
+      - name: Commit verified replica changes
+        if: success()
+        run: |
+          if git diff --quiet -- data/known_hashes.json; then
+            echo "No replica changes to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/known_hashes.json
+          git commit -m "chore(trust): refresh GHCR-verified replica hashes"
+          git push
