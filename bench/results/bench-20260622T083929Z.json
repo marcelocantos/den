@@ -1,0 +1,12 @@
+[
+  {"timestamp":"20260622T083929Z","op":"list","tool":"den-list","mean_s":0.00511511342,"stddev_s":0.0007147524316537395,"min_s":0.00416925882,"max_s":0.00648438482,"status":"ok"}
+  ,{"timestamp":"20260622T083929Z","op":"list","tool":"brew-list","mean_s":0.03071990922,"stddev_s":0.0020211612655548186,"min_s":0.027616966819999998,"max_s":0.03405330082,"status":"ok"}
+  ,{"timestamp":"20260622T083929Z","op":"info","tool":"den-info","mean_s":0.13137638580000002,"stddev_s":0.0016322659454106022,"min_s":0.1283932653,"max_s":0.1342003903,"status":"ok"}
+  ,{"timestamp":"20260622T083929Z","op":"info","tool":"brew-info","mean_s":0.7791824399,"stddev_s":0.014908779997820792,"min_s":0.7564576813000001,"max_s":0.8060624733000001,"status":"ok"}
+  ,{"timestamp":"20260622T083929Z","op":"search","tool":"den-search","mean_s":0.1348813802,"stddev_s":0.0013188742455522387,"min_s":0.13222906410000002,"max_s":0.1370349391,"status":"ok"}
+  ,{"timestamp":"20260622T083929Z","op":"search","tool":"brew-search","mean_s":0.8223570508000002,"stddev_s":0.013944192876391578,"min_s":0.7976539381,"max_s":0.8399552721,"status":"ok"}
+  ,{"timestamp":"20260622T083929Z","op":"install","tool":"den-install","mean_s":0.13339159834,"stddev_s":0.0014699079210839998,"min_s":0.13185751534,"max_s":0.13561005634,"status":"ok"}
+  ,{"timestamp":"20260622T083929Z","op":"install","tool":"brew-install","mean_s":3.10310714898,"stddev_s":0.07939970765277736,"min_s":3.0307552157799997,"max_s":3.2295675497799996,"status":"ok"}
+  ,{"timestamp":"20260622T083929Z","op":"upgrade","tool":"den-upgrade","mean_s":0.13234032903999998,"stddev_s":0.001544247108380724,"min_s":0.12976944134,"max_s":0.13437898334,"status":"ok"}
+  ,{"timestamp":"20260622T083929Z","op":"upgrade","tool":"brew-upgrade","mean_s":0.76500427094,"stddev_s":0.013081864831980617,"min_s":0.7511268458400001,"max_s":0.7928183878400001,"status":"ok"}
+]
