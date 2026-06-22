@@ -38,8 +38,7 @@ jobs:
   build:
     name: Build & unit tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # continue-on-error: true until 🎯T11 is live.
-    continue-on-error: true
+    # 🎯T11/🎯T65 are live: the build + unit-test job now gates.
     strategy:
       fail-fast: false
       matrix:
@@ -83,8 +82,7 @@ jobs:
     name: Source-build smoke — macOS (${{ github.event.inputs.formula || 'tree' }})
     runs-on: macos-14
     needs: build
-    # continue-on-error: true until 🎯T11 is live.
-    continue-on-error: true
+    # 🎯T11/🎯T65 live: the daily macOS source build now gates.
     if: >-
       github.event.inputs.platform == '' ||
       github.event.inputs.platform == 'all' ||
@@ -133,14 +131,15 @@ jobs:
         # Allowed to fail if the index fetch is not yet wired (🎯T11 absent).
         continue-on-error: true
 
-      - name: Source-build ${{ env.DEFAULT_FORMULA }} (🎯T11)
+      - name: Source-build ${{ env.DEFAULT_FORMULA }} (🎯T11/🎯T65)
         id: source_build
         run: |
           ./build/den install --build-from-source "$DEFAULT_FORMULA" 2>&1 | tee "$RUNNER_TEMP/source-build.log"
-          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          rc=${PIPESTATUS[0]}
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+          exit "$rc"
         env:
           DEN_HOME: ${{ env.DEN_HOME }}
-        continue-on-error: true
 
       - name: Check ${{ env.DEFAULT_FORMULA }} binary works after source build
         if: steps.source_build.outputs.exit_code == '0'
@@ -162,11 +161,11 @@ jobs:
       - name: Check xcrun was NOT invoked (🎯T45)
         run: |
           if [ -f "$RUNNER_TEMP/xcrun-spy/invocations.log" ]; then
-            echo "::warning::xcrun was invoked during source build (T45 not satisfied):"
+            echo "::error::xcrun was invoked during source build (🎯T45 not satisfied):"
             cat "$RUNNER_TEMP/xcrun-spy/invocations.log"
-          else
-            echo "xcrun spy: no invocations detected (T45 satisfied)."
+            exit 1
           fi
+          echo "xcrun spy: no invocations detected (🎯T45 satisfied)."
 
       - name: Upload build log
         if: always()
@@ -185,8 +184,8 @@ jobs:
     name: Source-build smoke — Linux (${{ github.event.inputs.formula || 'tree' }})
     runs-on: ubuntu-latest
     needs: build
-    # continue-on-error: true until 🎯T11 / 🎯T47 are live.
-    continue-on-error: true
+    # 🎯T11/🎯T65 live: 'tree' is parser-Simple, so the native fallback builds
+    # it without Portable Ruby. The daily Linux source build now gates.
     if: >-
       github.event.inputs.platform == '' ||
       github.event.inputs.platform == 'all' ||
@@ -220,14 +219,15 @@ jobs:
           DEN_HOME: ${{ env.DEN_HOME }}
         continue-on-error: true
 
-      - name: Source-build ${{ env.DEFAULT_FORMULA }} (🎯T11 + 🎯T47 Portable Ruby)
+      - name: Source-build ${{ env.DEFAULT_FORMULA }} (🎯T11/🎯T65 native parser path)
         id: source_build_linux
         run: |
           ./build/den install --build-from-source "$DEFAULT_FORMULA" 2>&1 | tee "$RUNNER_TEMP/source-build-linux.log"
-          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          rc=${PIPESTATUS[0]}
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+          exit "$rc"
         env:
           DEN_HOME: ${{ env.DEN_HOME }}
-        continue-on-error: true
 
       - name: Verify ${{ env.DEFAULT_FORMULA }} binary (post-build)
         if: steps.source_build_linux.outputs.exit_code == '0'
@@ -252,16 +252,14 @@ jobs:
           if-no-files-found: ignore
 
   # ------------------------------------------------------------------
-  # 🎯T17: Third-party tap DSL smoke (workflow_dispatch only until T17 live).
+  # 🎯T67/🎯T17: Third-party tap DSL smoke. Uses the in-repo fixture tap so
+  # the check is deterministic and offline — it asserts that a tapped formula
+  # resolves through den's tap registry, the heart of the T67 acceptance.
   # ------------------------------------------------------------------
   tap-source-build:
-    name: Tap source-build smoke (🎯T17)
+    name: Tap resolution smoke (🎯T67/🎯T17)
     runs-on: macos-14
     needs: build
-    # Only runs on explicit dispatch until T17 is live.
-    if: github.event_name == 'workflow_dispatch'
-    # continue-on-error: true until 🎯T17 is live.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
         with:
@@ -283,11 +281,19 @@ jobs:
           mkdir -p "$DEN_HOME"
           echo "DEN_HOME=$DEN_HOME" >> "$GITHUB_ENV"
 
-      - name: Test tap install path (🎯T17)
+      - name: Tap the fixture and resolve its formula (🎯T67)
         run: |
-          # Attempt to install from a third-party tap (no JSON API).
-          # Until T17 is fully wired, this is expected to fail gracefully.
-          ./build/den install marcelocantos/jevon 2>&1 | tee "$RUNNER_TEMP/tap-build.log" || true
+          ./build/den tap add fixture/fake-tap --url "$GITHUB_WORKSPACE/tests/fixtures/fake-tap"
+          ./build/den tap --list | tee "$RUNNER_TEMP/tap-build.log"
+          # The tapped formula must resolve via `den info` (bare and qualified).
+          ./build/den info hello-tap | tee -a "$RUNNER_TEMP/tap-build.log"
+          ./build/den info fixture/fake-tap/hello-tap | tee -a "$RUNNER_TEMP/tap-build.log"
+          # After removal it must become unresolvable.
+          ./build/den tap --remove fixture/fake-tap
+          if ./build/den info hello-tap | grep -q "Version:"; then
+            echo "::error::tapped formula still resolves after --remove"
+            exit 1
+          fi
         env:
           DEN_HOME: ${{ env.DEN_HOME }}
 

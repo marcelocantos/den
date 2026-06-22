@@ -105,7 +105,7 @@ static fs::path fixture_tap_path() {
 // Tests
 // ---------------------------------------------------------------------------
 
-TEST_SUITE("tap::management" * doctest::skip(true)) {
+TEST_SUITE("tap::management") {
 
     // -----------------------------------------------------------------------
     // 1. den tap add <local-path>

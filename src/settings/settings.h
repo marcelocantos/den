@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 
@@ -25,9 +26,17 @@ struct SearchSettings {
     std::optional<std::string> provider; // e.g. "formulae.brew.sh"
 };
 
+// Registry of third-party Homebrew taps (🎯T67). Keys are tap names in
+// "user/repo" form; values are the clone source (a git URL or a local path).
+// Persisted under the "taps" object in config.json.
+struct TapSettings {
+    std::map<std::string, std::string> taps;
+};
+
 struct Settings {
     DaemonSettings daemon;
     SearchSettings search;
+    TapSettings taps;
 };
 
 // Read settings from <den_home>/config.json.  Returns defaults if the
