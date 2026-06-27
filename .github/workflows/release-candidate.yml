@@ -167,7 +167,13 @@ jobs:
           VERSION="${{ github.event.inputs.version }}"
           archive="den-${VERSION}-${{ matrix.target }}.tar.gz"
           tar czf "${archive}" -C build den
-          sha256sum "${archive}" > "${archive}.sha256"
+          # Portable SHA256: macOS runners have `shasum`, not `sha256sum`.
+          # Both emit the same "<hash>  <file>" format consumed downstream.
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${archive}" > "${archive}.sha256"
+          else
+            shasum -a 256 "${archive}" > "${archive}.sha256"
+          fi
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v7
