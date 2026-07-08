@@ -1243,6 +1243,23 @@ targets:
     context: 'Surfaced during 🎯T75 RC-prep smoke-set work. The Go provider (🎯T60, shipped in PR #48) rejects `@version` suffixes ("invalid package name") and throws on `/` during materialise for full module paths; only the curated bare-alias form works end-to-end. This is a real gap in the multi-provider basket promised by 🎯T74 acceptance ("install across providers without manual workarounds") — documented as a ⏳ partial in docs/den-vs-brew.md and tracked here. Follow-up to 🎯T60.'
     origin: manual
     discovered: 2026-06-22
+  T78:
+    name: den's confirmed Fable-audit defects are remediated (command injection, path/symlink escapes, fail-safe manifest)
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - 'CRITICAL (F1): `den install -s <name>` validates the package name with `is_valid_package_name` before any store-path or shell use, and `extract_build_recipe` invokes `brew info` via argv (no `/bin/sh -c`); a metacharacter name is rejected and executes nothing.'
+    - 'F2: `extract_archive` confines all writes to dest for symlink entries — absolute or `..` symlink targets are rejected (or SECURE_SYMLINKS enabled); a crafted symlink-escape bottle writes nothing outside dest.'
+    - 'F3: `env_slug` produces a slug that can never act as a filesystem navigation component; `den env remove ..` and `den env create /..` cannot escape `den_home/{manifests,envs}`.'
+    - 'F4: self-update refuses to replace the running binary unless a valid SHA256 checksum was fetched and matched; a release lacking a `.sha256` asset aborts rather than overwriting.'
+    - 'F5: `read_manifest` distinguishes absent from corrupt; a present-but-unparseable `manifest.json` aborts the mutation (no clobber) instead of returning an empty manifest the next write truncates.'
+    context: 'Fable-5 deep audit 2026-07 (recon → finders → two-lens verify → synthesis); all findings two-lens confirmed (reachability + invariant-validity), 0 refuted. F1 is a confirmed CRITICAL (command injection via `den install -s`). Full report: docs/audit/fable-2026-07.md.'
+    tags:
+    - fable-audit
+    - security
+    origin: manual
+    discovered: 2026-07-08
   T8:
     name: Bottle pouring
     status: achieved
