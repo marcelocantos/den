@@ -73,7 +73,9 @@ The harness checks for this at preflight and warns (but does not abort) if `Slee
 Build den locally, then:
 
 ```sh
-make harness-macos              # binary mode: test the locally-built binary
+make harness-macos              # isolated DEN_HOME smoke (sandboxed)
+make soak-macos                 # real ~/.den soak on the test host
+make remote-check               # both (harness then soak); logs under logs/
 ```
 
 Or to test a published release:

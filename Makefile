@@ -6,7 +6,7 @@
 BUILD_DIR := build
 CMAKE_FLAGS := -G Ninja -DCMAKE_BUILD_TYPE=Release
 
-.PHONY: bullseye configure build test format format-fix clean-tree harness-linux harness-macos
+.PHONY: bullseye configure build test format format-fix clean-tree harness-linux harness-macos soak-macos remote-check
 
 bullseye: configure build test format clean-tree
 
@@ -52,5 +52,13 @@ harness-linux: build/den
 # Not in CI — runs are dev-triggered only.
 harness-macos: build/den
 	tests/harness/macos/run.sh --binary build/den
+
+# Real ~/.den soak on den-test-mac (migrate, install, run binaries, shell-env).
+soak-macos: build/den
+	tests/harness/macos/run-soak.sh --binary build/den
+
+# Full remote conviction: isolated harness + real-home soak.
+remote-check: build/den
+	scripts/remote-check.sh
 
 build/den: build

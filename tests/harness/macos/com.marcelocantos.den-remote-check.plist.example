@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Weekly remote conviction loop (harness + soak) against den-test-mac.
+
+  Install (on the machine that can SSH to den-test-mac):
+    1. Edit ProgramArguments paths below to your checkout.
+    2. cp tests/harness/macos/com.marcelocantos.den-remote-check.plist.example \
+         ~/Library/LaunchAgents/com.marcelocantos.den-remote-check.plist
+    3. launchctl load ~/Library/LaunchAgents/com.marcelocantos.den-remote-check.plist
+
+  Logs: ~/Library/Logs/den-remote-check.{out,err}.log
+  Also: <repo>/tests/harness/macos/logs/remote-check-*
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.marcelocantos.den-remote-check</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>cd /Users/marcelo/work/github.com/marcelocantos/den &amp;&amp; ./scripts/remote-check.sh</string>
+  </array>
+  <!-- Sundays 10:15 local -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key>
+    <integer>0</integer>
+    <key>Hour</key>
+    <integer>10</integer>
+    <key>Minute</key>
+    <integer>15</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/Users/marcelo/Library/Logs/den-remote-check.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/marcelo/Library/Logs/den-remote-check.err.log</string>
+  <key>WorkingDirectory</key>
+  <string>/Users/marcelo/work/github.com/marcelocantos/den</string>
+</dict>
+</plist>

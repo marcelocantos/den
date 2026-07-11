@@ -60,9 +60,12 @@ ExtractResult extract_archive(const fs::path& archive_path, const fs::path& dest
     fs::create_directories(dest);
 
     // Use a single write_disk extractor for the whole archive.
-    // Do NOT use ARCHIVE_EXTRACT_SECURE_SYMLINKS — Homebrew bottles
-    // contain internal symlinks (e.g. .brew/ directory) that are safe.
-    // Our own is_path_unsafe check handles traversal attacks.
+    // SECURE_NODOTDOT rejects .. pathnames. We do not enable
+    // SECURE_SYMLINKS: Homebrew bottles use relative links like
+    // ../../bin/git inside the keg, and libarchive's SECURE_SYMLINKS
+    // interaction with rewritten dest paths is too aggressive. Escape
+    // via symlink target is blocked by the explicit resolve-under-dest
+    // check below.
     ArchivePtr disk(archive_write_disk_new(), archive_read_free);
     archive_write_disk_set_options(disk.get(), ARCHIVE_EXTRACT_TIME | ARCHIVE_EXTRACT_PERM |
                                                    ARCHIVE_EXTRACT_SECURE_NODOTDOT);
@@ -84,6 +87,24 @@ ExtractResult extract_archive(const fs::path& archive_path, const fs::path& dest
         const char* hardlink = archive_entry_hardlink(entry);
         if (hardlink != nullptr && is_path_unsafe(hardlink)) {
             throw ArchiveError("archive contains unsafe hardlink: " + std::string(hardlink));
+        }
+
+        // Security: symlink target must resolve under dest. Absolute targets
+        // always escape. Relative targets with `..` are OK only when the
+        // lexically-normal path still lives under dest (Homebrew bottles use
+        // e.g. ../../bin/git inside the keg).
+        const char* symlink_target = archive_entry_symlink(entry);
+        if (symlink_target != nullptr) {
+            const fs::path dest_n = fs::absolute(dest).lexically_normal();
+            const fs::path link_parent = fs::absolute(dest / entry_path).parent_path();
+            const fs::path resolved =
+                (link_parent / fs::path(symlink_target)).lexically_normal();
+            const fs::path rel = resolved.lexically_relative(dest_n);
+            const bool escapes = rel.empty() || rel.native().starts_with("..");
+            if (escapes) {
+                throw ArchiveError("archive symlink escapes dest: " + entry_path + " -> " +
+                                   std::string(symlink_target));
+            }
         }
 
         // Track the common root directory.

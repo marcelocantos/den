@@ -217,8 +217,9 @@ struct Cli::M {
     std::string env_remove_name;
     std::string env_use_name;
 
-    // init
+    // init / shell-env
     std::string init_shell;
+    std::string shell_env_name;
 
     // set
     std::string set_key;
@@ -1024,6 +1025,16 @@ void Cli::M::setup() {
         print_shell_init(cfg, shell);
     });
 
+    // --- shell-env (eval'd by init / den env use wrapper; not a user command) ---
+    auto* shell_env =
+        app.add_subcommand("shell-env", "Print env switch exports for eval (used by den init)");
+    shell_env->add_option("env", shell_env_name,
+                          "Environment path or slug (default: active; / = root)");
+    shell_env->callback([this] {
+        auto cfg = Config::detect();
+        print_env_switch(cfg, shell_env_name);
+    });
+
     // --- status ---
     auto* status = app.add_subcommand("status", "Show environment status");
     status->callback([] {
@@ -1520,7 +1531,9 @@ void Cli::M::setup() {
                 std::cout << "Unable to determine the latest version.\n";
                 return;
             }
-            if (latest == DEN_VERSION) {
+            // Compare numerically: a GitHub "latest" older than this binary
+            // (e.g. 0.12.0 vs 1.0.0) is not an available update.
+            if (sat::version_compare(latest, DEN_VERSION) <= 0) {
                 std::cout << "den " << DEN_VERSION << " is the latest version.\n";
             } else {
                 std::cout << "den " << latest << " is available (current: " << DEN_VERSION
