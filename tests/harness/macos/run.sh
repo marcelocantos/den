@@ -326,9 +326,10 @@ SKIP=0
 if [[ -f "$LOG" ]]; then
     while IFS= read -r line; do
         case "$line" in
-            PASS:*) (( PASS++ )); (( TOTAL++ )) ;;
-            FAIL:*) (( FAIL++ )); (( TOTAL++ )) ;;
-            SKIP:*) (( SKIP++ )); (( TOTAL++ )) ;;
+            # Use $((…)) not ((var++)): under set -e, ((0++)) is exit 1.
+            PASS:*) PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1)) ;;
+            FAIL:*) FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1)) ;;
+            SKIP:*) SKIP=$((SKIP + 1)); TOTAL=$((TOTAL + 1)) ;;
         esac
     done < "$LOG"
 fi

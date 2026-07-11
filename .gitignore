@@ -14,3 +14,7 @@ tests/harness/*/logs/
 
 # Claude Code internal state (worktrees, transcripts)
 /.claude/
+
+# harness / soak run logs
+tests/harness/macos/logs/
+tests/harness/linux/logs/
