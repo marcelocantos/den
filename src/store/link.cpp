@@ -98,7 +98,8 @@ bool is_valid_package_name(const std::string& name) {
     if (name.find("..") != std::string::npos) {
         return false;
     }
-    static const std::regex pattern(R"([a-zA-Z0-9_][a-zA-Z0-9_.+\-]*(@[a-zA-Z0-9]+)?)");
+    // Versioned formulae like python@3.12 use dots after @.
+    static const std::regex pattern(R"([a-zA-Z0-9_][a-zA-Z0-9_.+\-]*(@[a-zA-Z0-9][a-zA-Z0-9.]*)?)");
     return std::regex_match(name, pattern);
 }
 

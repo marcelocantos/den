@@ -9,7 +9,9 @@
 #include "../download/http.h"
 #include "../download/sha256.h"
 #include "../platform/platform.h"
+#include "../provider/exec.h"
 #include "../ruby/bundle.h"
+#include "../store/link.h"
 #include "../store/store.h"
 
 #include <spdlog/spdlog.h>
@@ -188,23 +190,29 @@ BuildRecipe extract_build_recipe(const PackageIndex& idx, const std::string& nam
         return parse_formula_source(source);
     }
 
-    // Fallback: try brew info JSON for source URL/checksum.
-    auto [rc, json_out] = run("brew info --json=v1 " + name + " 2>/dev/null");
-    if (rc != 0)
+    // Fallback: brew info JSON for source URL/checksum. argv-based (no shell)
+    // so a metacharacter name cannot inject commands even if validation regresses.
+    auto brew = run_tool({"brew", "info", "--json=v1", name});
+    if (!brew.spawned || brew.exit_code != 0)
         throw UserError("cannot find formula for '" + name + "'");
     BuildRecipe recipe;
     std::smatch match;
     std::regex url_re(R"RE("url"\s*:\s*"([^"]+)")RE");
     std::regex sha_re(R"RE("checksum"\s*:\s*"([0-9a-f]{64})")RE");
-    if (std::regex_search(json_out, match, url_re))
+    if (std::regex_search(brew.output, match, url_re))
         recipe.source_url = match[1].str();
-    if (std::regex_search(json_out, match, sha_re))
+    if (std::regex_search(brew.output, match, sha_re))
         recipe.source_sha256 = match[1].str();
     return recipe;
 }
 
 fs::path build_from_source(const Config& config, const PackageIndex& idx, const std::string& name,
                            const std::string& version) {
+    // Validate before any store path, shell, or brew fallback uses the name.
+    if (!is_valid_package_name(name)) {
+        throw UserError("invalid package name: " + name);
+    }
+
     auto dest = package_path(config.store, name, version);
     if (fs::is_directory(dest) && !fs::is_empty(dest)) {
         SPDLOG_INFO("{} {} already built", name, version);

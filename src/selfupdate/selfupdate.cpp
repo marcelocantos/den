@@ -6,11 +6,13 @@
 #include "../core/error.h"
 #include "../download/http.h"
 #include "../download/sha256.h"
+#include "../index/sat_solver.h"
 #include "../platform/platform.h"
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
+#include <cctype>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -104,7 +106,10 @@ std::optional<UpdateInfo> check_for_update(const Config& cfg) {
     // Strip leading 'v'.
     std::string latest = tag.starts_with("v") ? tag.substr(1) : tag;
 
-    if (latest == DEN_VERSION) {
+    // Numeric version compare (not string equality): GitHub's "latest" may be
+    // an older GA (e.g. 0.12.0) while this binary is already 1.0.0 / an RC
+    // ahead of the last stable tag. Only offer an update when latest is newer.
+    if (sat::version_compare(latest, DEN_VERSION) <= 0) {
         return std::nullopt;
     }
 
@@ -139,30 +144,54 @@ std::optional<UpdateInfo> check_for_update(const Config& cfg) {
     };
 }
 
+namespace {
+
+bool is_sha256_hex(const std::string& s) {
+    if (s.size() != 64) {
+        return false;
+    }
+    for (unsigned char c : s) {
+        if (!std::isxdigit(c)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
 void apply_update(const UpdateInfo& info, const Config& cfg) {
+    (void)cfg;
     auto exe = self_exe();
 
-    // Download the checksum file to get expected hash.
+    // Fail closed: never replace the running binary without a verified SHA256.
+    if (info.checksum_url.empty()) {
+        throw UserError(
+            "self-update refused: release has no .sha256 asset — refusing to install unverified "
+            "bytes");
+    }
+
+    auto checksum_content = fetch_url(info.checksum_url);
+    // Format: "<hash>  <filename>\n"
     std::string expected_hash;
-    if (!info.checksum_url.empty()) {
-        auto checksum_content = fetch_url(info.checksum_url);
-        // Format: "<hash>  <filename>\n"
+    {
         std::istringstream ss(checksum_content);
         ss >> expected_hash;
+    }
+    if (!is_sha256_hex(expected_hash)) {
+        throw UserError(
+            "self-update refused: checksum asset is missing or not a 64-char hex SHA256");
     }
 
     // Download the tarball.
     std::cout << "Downloading den " << info.latest_version << "...\n";
     auto tarball_data = fetch_url(info.download_url);
 
-    // Verify checksum if available.
-    if (!expected_hash.empty()) {
-        auto actual = hash_string(tarball_data);
-        if (actual != expected_hash) {
-            throw UserError("SHA256 mismatch: expected " + expected_hash + ", got " + actual);
-        }
-        SPDLOG_INFO("checksum verified");
+    auto actual = hash_string(tarball_data);
+    if (actual != expected_hash) {
+        throw UserError("SHA256 mismatch: expected " + expected_hash + ", got " + actual);
     }
+    SPDLOG_INFO("checksum verified");
 
     // Extract to a temp directory.
     auto tmp_dir = fs::temp_directory_path() / "den-self-update";

@@ -1520,7 +1520,9 @@ void Cli::M::setup() {
                 std::cout << "Unable to determine the latest version.\n";
                 return;
             }
-            if (latest == DEN_VERSION) {
+            // Compare numerically: a GitHub "latest" older than this binary
+            // (e.g. 0.12.0 vs 1.0.0) is not an available update.
+            if (sat::version_compare(latest, DEN_VERSION) <= 0) {
                 std::cout << "den " << DEN_VERSION << " is the latest version.\n";
             } else {
                 std::cout << "den " << latest << " is available (current: " << DEN_VERSION

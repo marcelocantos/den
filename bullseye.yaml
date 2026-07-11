@@ -1245,9 +1245,10 @@ targets:
     discovered: 2026-06-22
   T78:
     name: den's confirmed Fable-audit defects are remediated (command injection, path/symlink escapes, fail-safe manifest)
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
+    actual_cost: 5.0
     acceptance:
     - 'CRITICAL (F1): `den install -s <name>` validates the package name with `is_valid_package_name` before any store-path or shell use, and `extract_build_recipe` invokes `brew info` via argv (no `/bin/sh -c`); a metacharacter name is rejected and executes nothing.'
     - 'F2: `extract_archive` confines all writes to dest for symlink entries — absolute or `..` symlink targets are rejected (or SECURE_SYMLINKS enabled); a crafted symlink-escape bottle writes nothing outside dest.'
@@ -1260,6 +1261,7 @@ targets:
     - security
     origin: manual
     discovered: 2026-07-08
+    achieved: 2026-07-11
   T8:
     name: Bottle pouring
     status: achieved

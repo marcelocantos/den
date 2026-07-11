@@ -86,6 +86,17 @@ ExtractResult extract_archive(const fs::path& archive_path, const fs::path& dest
             throw ArchiveError("archive contains unsafe hardlink: " + std::string(hardlink));
         }
 
+        // Security: reject symlink targets that escape dest. Absolute targets
+        // or `..` components let a later regular-file entry write through the
+        // link outside dest (libarchive does not O_NOFOLLOW parent dirs).
+        // Homebrew bottles use relative internal symlinks (e.g. .brew/) which
+        // pass this check without needing ARCHIVE_EXTRACT_SECURE_SYMLINKS.
+        const char* symlink_target = archive_entry_symlink(entry);
+        if (symlink_target != nullptr && is_path_unsafe(symlink_target)) {
+            throw ArchiveError("archive contains unsafe symlink target: " +
+                               std::string(symlink_target));
+        }
+
         // Track the common root directory.
         fs::path rel(entry_path);
         std::string top = rel.begin()->string();

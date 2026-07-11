@@ -302,10 +302,14 @@ printf 'Copying smoke.sh to remote ...\n'
 scp "$SMOKE_SH" "${SSH_HOST}:${DEN_HOME_REMOTE}/smoke.sh"
 
 # Run smoke on the remote host; tee output to local log.
+# Prepend Homebrew (and common toolchain bins) so non-interactive SSH sessions
+# see brew/npm/go/cargo the same way a login shell would — without this,
+# migrate_from_brew and language-provider steps SKIP even when tools are installed.
 printf '\nRunning smoke set on %s ...\n\n' "$SSH_HOST"
 EXIT_CODE=0
 ssh "$SSH_HOST" \
-    "DEN_BIN='${DEN_BIN_REMOTE}' DEN_HOME='${DEN_HOME_REMOTE}' TEST_PKG='${TEST_PKG}' \
+    "export PATH=\"/opt/homebrew/bin:/usr/local/bin:\$HOME/.cargo/bin:\$HOME/go/bin:\$PATH\"; \
+     DEN_BIN='${DEN_BIN_REMOTE}' DEN_HOME='${DEN_HOME_REMOTE}' TEST_PKG='${TEST_PKG}' \
      bash '${DEN_HOME_REMOTE}/smoke.sh'" \
     2>&1 | tee "${LOGS_DIR}/run.log" || EXIT_CODE=$?
 

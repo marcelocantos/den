@@ -64,21 +64,19 @@ std::string env_slug(const std::string& env_path) {
         path = path.substr(1);
     }
 
-    // Replace "/" with the path separator in the slug and percent-encode
-    // dashes within components.
+    // Percent-encode `/`, `-`, `%`, and `.` so no slug can act as a filesystem
+    // navigation component. Leaving `.` unencoded made env_slug("..") == ".."
+    // and `den env remove ..` resolve to den_home itself (Fable F3).
     std::string result;
     for (size_t i = 0; i < path.size(); ++i) {
         char c = path[i];
         if (c == '/') {
-            result += '%';
-            result += '2';
-            result += 'F';
+            result += "%2F";
         } else if (c == '-') {
-            result += '%';
-            result += '2';
-            result += 'D';
+            result += "%2D";
+        } else if (c == '.') {
+            result += "%2E";
         } else if (c == '%') {
-            // Escape literal percent signs.
             result += "%25";
         } else {
             result += c;
@@ -160,7 +158,12 @@ Manifest read_manifest(const fs::path& den_home, const std::string& env_path) {
             m.origin = j["origin"].get<std::string>();
         }
     } catch (const json::exception& e) {
-        SPDLOG_WARN("failed to parse manifest {}: {}", path.string(), e.what());
+        // Fail closed: a present-but-corrupt file must not look like an empty
+        // manifest. Callers (with_manifest read-modify-write) would otherwise
+        // clobber every package on the next mutation (Fable F5).
+        throw UserError("corrupt manifest " + path.string() + ": " + e.what() +
+                        " — refusing to treat as empty (fix or restore the file before "
+                        "mutating packages)");
     }
 
     return m;
