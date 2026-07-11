@@ -113,19 +113,29 @@ TEST_SUITE("fable::F2_archive_symlink") {
         CHECK(fs::is_empty(attacker));
     }
 
-    TEST_CASE("extract_archive rejects .. in symlink targets") {
+    TEST_CASE("extract_archive allows relative in-keg .. symlinks like Homebrew bottles") {
         TmpDir tmp;
-        auto archive_path = tmp.path / "evil2.tar";
+        auto archive_path = tmp.path / "ok.tar";
         auto dest = tmp.path / "dest";
         fs::create_directories(dest);
-        auto stage = tmp.path / "stage";
-        fs::create_directories(stage / "pkg");
+        auto stage = tmp.path / "stage" / "pkg";
+        fs::create_directories(stage / "bin");
+        fs::create_directories(stage / "share" / "doc");
+        {
+            std::ofstream out(stage / "bin" / "tool");
+            out << "#!/bin/sh\necho ok\n";
+        }
         std::error_code ec;
-        fs::create_directory_symlink(fs::path("../../outside"), stage / "pkg" / "link", ec);
+        // share/doc/tool -> ../../bin/tool (same pattern as git bottles)
+        fs::create_directory_symlink(fs::path("../../bin/tool"), stage / "share" / "doc" / "tool",
+                                     ec);
         REQUIRE_FALSE(ec);
-        auto tar = run_tool({"tar", "-cf", archive_path.string(), "-C", stage.string(), "pkg"});
+        auto tar =
+            run_tool({"tar", "-cf", archive_path.string(), "-C", (tmp.path / "stage").string(),
+                      "pkg"});
         REQUIRE(tar.exit_code == 0);
-        CHECK_THROWS_AS(extract_archive(archive_path, dest), ArchiveError);
+        CHECK_NOTHROW(extract_archive(archive_path, dest));
+        CHECK(fs::is_symlink(dest / "pkg" / "share" / "doc" / "tool"));
     }
 }
 

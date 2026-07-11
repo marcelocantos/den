@@ -3,6 +3,9 @@
 
 #include "shell.h"
 
+#include "../env/environment.h"
+#include "../env/manifest.h"
+
 #include <spdlog/spdlog.h>
 
 #include <iostream>
@@ -96,15 +99,16 @@ void emit_posix_init(const Config& config, const std::string& shell) {
                  "\n"
                  "den() {\n"
                  "  if [ \"$1\" = \"env\" ] && [ \"$2\" = \"use\" ]; then\n"
-                 "    eval \"$(command den shell-env \"${3:-default}\")\"\n"
+                 "    command den env use \"${3:-/}\"\n"
+                 "    eval \"$(command den shell-env \"${3:-/}\")\"\n"
                  "  else\n"
                  "    command den \"$@\"\n"
                  "  fi\n"
                  "}\n"
                  "\n"
-                 "# Activate the default environment on shell startup.\n"
+                 "# Activate the active den environment on shell startup.\n"
                  "if [ -z \"$DEN_ENV\" ]; then\n"
-                 "  eval \"$(command den shell-env default 2>/dev/null || true)\"\n"
+                 "  eval \"$(command den shell-env 2>/dev/null || true)\"\n"
                  "fi\n";
 }
 
@@ -120,16 +124,16 @@ void emit_fish_init(const Config& config) {
            "\n"
            "function den\n"
            "    if test (count $argv) -ge 2 -a \"$argv[1]\" = \"env\" -a \"$argv[2]\" = \"use\"\n"
-           "        eval (command den shell-env (count $argv -ge 3 && echo $argv[3] || echo "
-           "default))\n"
+           "        command den env use (count $argv -ge 3 && echo $argv[3] || echo /)\n"
+           "        eval (command den shell-env (count $argv -ge 3 && echo $argv[3] || echo /))\n"
            "    else\n"
            "        command den $argv\n"
            "    end\n"
            "end\n"
            "\n"
-           "# Activate the default environment on shell startup.\n"
+           "# Activate the active den environment on shell startup.\n"
            "if not set -q DEN_ENV\n"
-           "    eval (command den shell-env default 2>/dev/null; or true)\n"
+           "    eval (command den shell-env 2>/dev/null; or true)\n"
            "end\n";
 }
 
@@ -153,6 +157,13 @@ void emit_posix_env(const Config& config, const std::string& env_slug) {
               << "export DEN_ENV=" << dquote(env_slug) << "\n"
               << "export PATH=\"" << build_path_posix(env_bin, den_bin) << "\"\n"
               << "export LIBRARY_PATH=\"" << e(env_lib) << ":${LIBRARY_PATH:-}\"\n"
+#ifdef __APPLE__
+              // Bottles often load via absolute /opt/homebrew/opt paths; when
+              // den pours a newer keg than brew's opt link, fall back to the
+              // env's lib/ (and the Cellar) so dyld can still resolve.
+              << "export DYLD_FALLBACK_LIBRARY_PATH=\"" << e(env_lib)
+              << ":/opt/homebrew/lib:${DYLD_FALLBACK_LIBRARY_PATH:-}\"\n"
+#endif
               << "export CPATH=\"" << e(env_inc) << ":${CPATH:-}\"\n"
               << "export PKG_CONFIG_PATH=\"" << e(env_pc) << ":${PKG_CONFIG_PATH:-}\"\n"
               << "export CMAKE_PREFIX_PATH=\"" << e(env_cmake) << ":${CMAKE_PREFIX_PATH:-}\"\n"
@@ -203,7 +214,24 @@ void print_shell_init(const Config& config, const std::string& shell) {
     }
 }
 
-void print_env_switch(const Config& config, const std::string& env_slug) {
+void print_env_switch(const Config& config, const std::string& env_arg) {
+    // Resolve env path → filesystem slug under ~/.den/envs/.
+    //   (empty)|default → active env (usually "/")
+    //   /path            → env_slug(path)
+    //   ROOT             → root env
+    //   bare name        → env_slug("/" + name)
+    std::string path;
+    if (env_arg.empty() || env_arg == "default") {
+        path = active_env_path(config.den_home);
+    } else if (env_arg == "ROOT" || env_arg == "/") {
+        path = "/";
+    } else if (!env_arg.empty() && env_arg[0] == '/') {
+        path = env_arg;
+    } else {
+        path = "/" + env_arg;
+    }
+    const std::string slug = env_slug(path);
+
     // Detect active shell from DEN_SHELL env var (set by shell-init wrapper),
     // falling back to SHELL.
     const char* shell_env = std::getenv("DEN_SHELL");
@@ -216,13 +244,13 @@ void print_env_switch(const Config& config, const std::string& env_slug) {
     if (slash != std::string::npos)
         shell = shell.substr(slash + 1);
 
-    SPDLOG_DEBUG("emitting env switch for env={} shell={}", env_slug, shell);
+    SPDLOG_DEBUG("emitting env switch for path={} slug={} shell={}", path, slug, shell);
 
     if (shell == "fish") {
-        emit_fish_env(config, env_slug);
+        emit_fish_env(config, slug);
     } else {
         // Default to POSIX-compatible output for zsh/bash and unknown shells.
-        emit_posix_env(config, env_slug);
+        emit_posix_env(config, slug);
     }
 }
 

@@ -217,8 +217,9 @@ struct Cli::M {
     std::string env_remove_name;
     std::string env_use_name;
 
-    // init
+    // init / shell-env
     std::string init_shell;
+    std::string shell_env_name;
 
     // set
     std::string set_key;
@@ -1022,6 +1023,16 @@ void Cli::M::setup() {
             }
         }
         print_shell_init(cfg, shell);
+    });
+
+    // --- shell-env (eval'd by init / den env use wrapper; not a user command) ---
+    auto* shell_env =
+        app.add_subcommand("shell-env", "Print env switch exports for eval (used by den init)");
+    shell_env->add_option("env", shell_env_name,
+                          "Environment path or slug (default: active; / = root)");
+    shell_env->callback([this] {
+        auto cfg = Config::detect();
+        print_env_switch(cfg, shell_env_name);
     });
 
     // --- status ---
