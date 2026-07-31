@@ -31,12 +31,12 @@ namespace fs = std::filesystem;
 struct TmpDir {
     fs::path path;
     TmpDir(const char* prefix = "den_fable_") {
-        path = fs::temp_directory_path() /
-               (std::string(prefix) +
-                std::to_string(
-                    std::hash<std::string>{}(std::to_string(reinterpret_cast<uintptr_t>(this))) ^
-                    static_cast<size_t>(
-                        std::chrono::steady_clock::now().time_since_epoch().count())));
+        path =
+            fs::temp_directory_path() /
+            (std::string(prefix) +
+             std::to_string(
+                 std::hash<std::string>{}(std::to_string(reinterpret_cast<uintptr_t>(this))) ^
+                 static_cast<size_t>(std::chrono::steady_clock::now().time_since_epoch().count())));
         fs::create_directories(path);
     }
     ~TmpDir() {
@@ -130,9 +130,8 @@ TEST_SUITE("fable::F2_archive_symlink") {
         fs::create_directory_symlink(fs::path("../../bin/tool"), stage / "share" / "doc" / "tool",
                                      ec);
         REQUIRE_FALSE(ec);
-        auto tar =
-            run_tool({"tar", "-cf", archive_path.string(), "-C", (tmp.path / "stage").string(),
-                      "pkg"});
+        auto tar = run_tool(
+            {"tar", "-cf", archive_path.string(), "-C", (tmp.path / "stage").string(), "pkg"});
         REQUIRE(tar.exit_code == 0);
         CHECK_NOTHROW(extract_archive(archive_path, dest));
         CHECK(fs::is_symlink(dest / "pkg" / "share" / "doc" / "tool"));
@@ -212,14 +211,14 @@ TEST_SUITE("fable::F5_manifest") {
         auto den_home = tmp.path;
         auto man_path = den_home / "manifests" / "ROOT" / "manifest.json";
         fs::create_directories(man_path.parent_path());
-        const std::string original = R"({"packages":{"homebrew":{"a":"1","b":"2"}},"auto_deps":{}})";
+        const std::string original =
+            R"({"packages":{"homebrew":{"a":"1","b":"2"}},"auto_deps":{}})";
         {
             std::ofstream out(man_path);
             out << "{not valid json";
         }
-        CHECK_THROWS(with_manifest(den_home, "/", [](Manifest& m) {
-            m.packages["homebrew"]["c"] = "3";
-        }));
+        CHECK_THROWS(
+            with_manifest(den_home, "/", [](Manifest& m) { m.packages["homebrew"]["c"] = "3"; }));
         // File must still be the corrupt original (not rewritten to only c).
         std::ifstream in(man_path);
         std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());

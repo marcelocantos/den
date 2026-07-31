@@ -1215,8 +1215,10 @@ void Cli::M::setup() {
         }
         // Prefer bootstrap for modern launchctl; fall back to load -w.
         std::string uid = std::to_string(static_cast<unsigned>(::getuid()));
-        auto boot = "launchctl bootout gui/" + uid + " " + plist_path.string() + " 2>/dev/null; "
-                    "launchctl bootstrap gui/" + uid + " " + plist_path.string();
+        auto boot = "launchctl bootout gui/" + uid + " " + plist_path.string() +
+                    " 2>/dev/null; "
+                    "launchctl bootstrap gui/" +
+                    uid + " " + plist_path.string();
         auto rc = std::system(boot.c_str());
         if (rc != 0) {
             rc = std::system(("launchctl load -w " + plist_path.string()).c_str());

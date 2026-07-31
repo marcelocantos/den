@@ -225,8 +225,7 @@ void set_setting(const fs::path& den_home, const std::string& key, const std::st
     // Known boolean keys always store JSON booleans (not "true"/"false" strings).
     // Without this, first-time `den set daemon.auto_upgrade true` wrote a string
     // that from_json ignored, so the daemon kept the default false.
-    const bool known_bool =
-        (key == "daemon.auto_download" || key == "daemon.auto_upgrade");
+    const bool known_bool = (key == "daemon.auto_download" || key == "daemon.auto_upgrade");
     if (known_bool || (cur->contains(leaf) && (*cur)[leaf].is_boolean())) {
         if (value == "true")
             (*cur)[leaf] = true;
