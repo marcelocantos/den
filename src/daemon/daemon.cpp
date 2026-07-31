@@ -98,10 +98,27 @@ DaemonSettings read_daemon_settings(const fs::path& den_home) {
         f >> j;
         if (j.contains("daemon")) {
             const auto& d = j["daemon"];
-            if (d.contains("auto_download") && d["auto_download"].is_boolean())
-                s.auto_download = d["auto_download"].get<bool>();
-            if (d.contains("auto_upgrade") && d["auto_upgrade"].is_boolean())
-                s.auto_upgrade = d["auto_upgrade"].get<bool>();
+            auto as_bool = [](const nlohmann::json& v, bool* out) {
+                if (v.is_boolean()) {
+                    *out = v.get<bool>();
+                    return true;
+                }
+                if (v.is_string()) {
+                    if (v.get<std::string>() == "true") {
+                        *out = true;
+                        return true;
+                    }
+                    if (v.get<std::string>() == "false") {
+                        *out = false;
+                        return true;
+                    }
+                }
+                return false;
+            };
+            if (d.contains("auto_download"))
+                as_bool(d["auto_download"], &s.auto_download);
+            if (d.contains("auto_upgrade"))
+                as_bool(d["auto_upgrade"], &s.auto_upgrade);
             if (d.contains("upgrade_window") && d["upgrade_window"].is_string())
                 s.upgrade_window = d["upgrade_window"].get<std::string>();
             if (d.contains("interval_secs") && d["interval_secs"].is_number_unsigned())
@@ -176,11 +193,17 @@ std::string launchd_plist(const fs::path& den_binary, const fs::path& den_home) 
         <string>)"
       << bin << R"(</string>
         <string>daemon</string>
-        <string>--run</string>
-        <string>--den-home</string>
+        <string>run</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>DEN_HOME</key>
         <string>)"
       << home << R"(</string>
-    </array>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
 
     <key>RunAtLoad</key>
     <true/>

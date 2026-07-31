@@ -97,8 +97,7 @@ ExtractResult extract_archive(const fs::path& archive_path, const fs::path& dest
         if (symlink_target != nullptr) {
             const fs::path dest_n = fs::absolute(dest).lexically_normal();
             const fs::path link_parent = fs::absolute(dest / entry_path).parent_path();
-            const fs::path resolved =
-                (link_parent / fs::path(symlink_target)).lexically_normal();
+            const fs::path resolved = (link_parent / fs::path(symlink_target)).lexically_normal();
             const fs::path rel = resolved.lexically_relative(dest_n);
             const bool escapes = rel.empty() || rel.native().starts_with("..");
             if (escapes) {

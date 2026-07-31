@@ -33,12 +33,32 @@ inline void to_json(nlohmann::json& j, const DaemonSettings& d) {
         j["interval_secs"] = *d.interval_secs;
 }
 
+// Accept real JSON booleans and the string forms written by older set_setting.
+bool json_as_bool(const nlohmann::json& v, bool* out) {
+    if (v.is_boolean()) {
+        *out = v.get<bool>();
+        return true;
+    }
+    if (v.is_string()) {
+        const auto& s = v.get_ref<const std::string&>();
+        if (s == "true") {
+            *out = true;
+            return true;
+        }
+        if (s == "false") {
+            *out = false;
+            return true;
+        }
+    }
+    return false;
+}
+
 inline void from_json(const nlohmann::json& j, DaemonSettings& d) {
     d = DaemonSettings{};
-    if (j.contains("auto_download") && j["auto_download"].is_boolean())
-        d.auto_download = j["auto_download"].get<bool>();
-    if (j.contains("auto_upgrade") && j["auto_upgrade"].is_boolean())
-        d.auto_upgrade = j["auto_upgrade"].get<bool>();
+    if (j.contains("auto_download"))
+        json_as_bool(j["auto_download"], &d.auto_download);
+    if (j.contains("auto_upgrade"))
+        json_as_bool(j["auto_upgrade"], &d.auto_upgrade);
     if (j.contains("upgrade_window") && j["upgrade_window"].is_string())
         d.upgrade_window = j["upgrade_window"].get<std::string>();
     if (j.contains("interval_secs") && j["interval_secs"].is_number_unsigned())
@@ -202,19 +222,24 @@ void set_setting(const fs::path& den_home, const std::string& key, const std::st
 
     const std::string& leaf = parts.back();
 
+    // Known boolean keys always store JSON booleans (not "true"/"false" strings).
+    // Without this, first-time `den set daemon.auto_upgrade true` wrote a string
+    // that from_json ignored, so the daemon kept the default false.
+    const bool known_bool = (key == "daemon.auto_download" || key == "daemon.auto_upgrade");
+    if (known_bool || (cur->contains(leaf) && (*cur)[leaf].is_boolean())) {
+        if (value == "true")
+            (*cur)[leaf] = true;
+        else if (value == "false")
+            (*cur)[leaf] = false;
+        else
+            throw std::invalid_argument("expected 'true' or 'false' for boolean key: " + key);
+        save_json_atomic(den_home, j);
+        return;
+    }
+
     // Infer the stored type from the existing value, if present.
     if (cur->contains(leaf)) {
         const nlohmann::json& existing = (*cur)[leaf];
-        if (existing.is_boolean()) {
-            if (value == "true")
-                (*cur)[leaf] = true;
-            else if (value == "false")
-                (*cur)[leaf] = false;
-            else
-                throw std::invalid_argument("expected 'true' or 'false' for boolean key: " + key);
-            save_json_atomic(den_home, j);
-            return;
-        }
         if (existing.is_number_unsigned()) {
             try {
                 (*cur)[leaf] = static_cast<uint64_t>(std::stoull(value));

@@ -48,6 +48,11 @@
 #include <tuple>
 #include <vector>
 
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#include <unistd.h>
+#endif
+
 namespace den {
 
 namespace {
@@ -1185,9 +1190,22 @@ void Cli::M::setup() {
     daemon_install->callback([] {
 #ifdef __APPLE__
         auto cfg = Config::detect();
-        auto exe = fs::canonical("/proc/self/exe").string();
-        // Fall back to argv[0] approximation on macOS.
-        auto plist = launchd_plist(fs::path(exe), cfg.den_home);
+        // Resolve this process's binary (macOS has no /proc/self/exe).
+        fs::path exe;
+        {
+            char buf[4096];
+            uint32_t size = sizeof(buf);
+            if (_NSGetExecutablePath(buf, &size) != 0) {
+                SPDLOG_ERROR("cannot determine den executable path for launchd");
+                return;
+            }
+            std::error_code ec;
+            exe = fs::canonical(buf, ec);
+            if (ec) {
+                exe = fs::path(buf);
+            }
+        }
+        auto plist = launchd_plist(exe, cfg.den_home);
         auto home = fs::path(std::getenv("HOME") ? std::getenv("HOME") : "/tmp");
         auto plist_path = home / "Library" / "LaunchAgents" / "dev.den.daemon.plist";
         fs::create_directories(plist_path.parent_path());
@@ -1195,7 +1213,16 @@ void Cli::M::setup() {
             std::ofstream f(plist_path);
             f << plist;
         }
-        auto rc = std::system(("launchctl load -w " + plist_path.string()).c_str());
+        // Prefer bootstrap for modern launchctl; fall back to load -w.
+        std::string uid = std::to_string(static_cast<unsigned>(::getuid()));
+        auto boot = "launchctl bootout gui/" + uid + " " + plist_path.string() +
+                    " 2>/dev/null; "
+                    "launchctl bootstrap gui/" +
+                    uid + " " + plist_path.string();
+        auto rc = std::system(boot.c_str());
+        if (rc != 0) {
+            rc = std::system(("launchctl load -w " + plist_path.string()).c_str());
+        }
         if (rc == 0)
             std::cout << "Daemon installed and started.\n  Plist: " << plist_path << "\n";
         else

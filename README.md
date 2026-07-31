@@ -20,10 +20,9 @@ everything — not just Python, but every package on your system.
   Homebrew formula build recipes. Pre-built archives as an optimisation,
   not a requirement.
 - **Multi-provider** — Homebrew is the default, but `den install`
-  routes through a pluggable `PackageProvider` interface. Future
-  providers (pip, npm, cargo, go) plug in without changes to the CLI,
-  manifest, or environment layers. Pass `--provider <name>` to choose
-  explicitly.
+  routes through a pluggable `PackageProvider` interface. Pip, npm,
+  cargo, and go providers are available via `--provider <name>` without
+  changes to the CLI, manifest, or environment layers.
 
 ## Install
 
@@ -85,9 +84,9 @@ den upgrade                 # upgrade everything
 Den manages package providers behind a uniform interface. Homebrew is
 the default — den consumes the same archives and formulae API — but
 the install / uninstall / upgrade / list / use flows all dispatch
-through a pluggable `PackageProvider` so additional providers (pip,
-npm, cargo, go) can plug in without changes to the CLI, manifest, or
-environment-composition layers.
+through a pluggable `PackageProvider`. Pip, npm, cargo, and go providers
+are available via `--provider <name>` without changes to the CLI,
+manifest, or environment-composition layers.
 
 - **Shared Cellar** (`/opt/homebrew/Cellar/`) holds Homebrew-installed
   package versions — shared with Homebrew, so bottles work without

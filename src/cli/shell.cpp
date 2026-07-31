@@ -156,7 +156,8 @@ void emit_posix_env(const Config& config, const std::string& env_slug) {
     std::cout << "export DEN_HOME=" << dquote(config.den_home) << "\n"
               << "export DEN_ENV=" << dquote(env_slug) << "\n"
               << "export PATH=\"" << build_path_posix(env_bin, den_bin) << "\"\n"
-              << "export LIBRARY_PATH=\"" << e(env_lib) << ":${LIBRARY_PATH:-}\"\n"
+              << "export LIBRARY_PATH=\"" << e(env_lib)
+              << ":${LIBRARY_PATH:-}\"\n"
 #ifdef __APPLE__
               // Bottles often load via absolute /opt/homebrew/opt paths; when
               // den pours a newer keg than brew's opt link, fall back to the

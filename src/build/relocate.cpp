@@ -288,8 +288,7 @@ uint32_t fix_macho_placeholders(const fs::path& dir, const std::string& prefix,
             if (new_name == name) {
                 continue;
             }
-            auto r = run_tool(
-                {"install_name_tool", "-change", name, new_name, file.string()});
+            auto r = run_tool({"install_name_tool", "-change", name, new_name, file.string()});
             if (r.spawned && r.exit_code == 0) {
                 changed = true;
                 SPDLOG_DEBUG("relocated install name: {} -> {}", name, new_name);
@@ -308,8 +307,7 @@ uint32_t fix_macho_placeholders(const fs::path& dir, const std::string& prefix,
             if (new_rpath == rpath) {
                 continue;
             }
-            auto r = run_tool(
-                {"install_name_tool", "-rpath", rpath, new_rpath, file.string()});
+            auto r = run_tool({"install_name_tool", "-rpath", rpath, new_rpath, file.string()});
             if (r.spawned && r.exit_code == 0) {
                 changed = true;
                 SPDLOG_DEBUG("relocated rpath: {} -> {}", rpath, new_rpath);
