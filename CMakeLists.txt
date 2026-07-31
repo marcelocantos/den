@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(den VERSION 1.0.0 LANGUAGES C CXX)
+project(den VERSION 0.13.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

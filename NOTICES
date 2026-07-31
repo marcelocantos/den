@@ -19,6 +19,9 @@ Vendored (submodule, in vendor/github.com/):
 spdlog 1.17.0 - MIT
   https://github.com/gabime/spdlog
 
+fmt (bundled via spdlog) - MIT
+  https://github.com/fmtlib/fmt
+
 System libraries (linked dynamically):
 
 libcurl - MIT/X-style
