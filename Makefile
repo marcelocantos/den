@@ -16,7 +16,7 @@ CMAKE_FLAGS += -DCMAKE_PREFIX_PATH=$(LIBARCHIVE_PREFIX)
 endif
 endif
 
-.PHONY: bullseye gate configure build test format format-fix clean-tree harness-linux harness-macos soak-macos remote-check
+.PHONY: bullseye gate hooks configure build test format format-fix clean-tree harness-linux harness-macos soak-macos remote-check
 
 # The delivery gate: the repo's existing oracles on the shipped path.
 # `scripts/hooks/pre-push` runs this before every push and refuses the push
@@ -24,6 +24,11 @@ endif
 gate: configure build test format
 
 bullseye: gate clean-tree
+
+# Wire git to the committed hooks. Once per clone; a relative core.hooksPath
+# resolves against whichever worktree the push runs from.
+hooks:
+	git config core.hooksPath scripts/hooks
 
 configure:
 	@if [ ! -f $(BUILD_DIR)/build.ninja ]; then \
