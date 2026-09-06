@@ -20,7 +20,14 @@ den is a package and environment manager that:
 
 ## Delivery
 
-delivery: merged to master, CI green
+delivery: merged to master via a gated push, CI green
+
+`make gate` is the delivery oracle: configure, build, ctest, clang-format
+check. `scripts/hooks/pre-push` executes it before every push and refuses the
+push when it is red; `.github/workflows/ci.yml` runs the same recipe on
+master, on `v*` tags, and on inbound pull requests. Wire the hook once per
+clone with `make hooks` (`git config core.hooksPath scripts/hooks`).
+`--no-verify` is the owner's emergency bypass, never an agent's.
 
 ## Gates
 
@@ -98,8 +105,8 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-`make bullseye` runs the standing-invariants check used by `/cv`
-(configure-if-needed, build, test, format, clean tree).
+`make gate` runs the delivery oracle (configure-if-needed, build, test,
+format); `make bullseye` is `gate` plus the clean-tree check used by `/cv`.
 
 ## TODO Location
 
