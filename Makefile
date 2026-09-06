@@ -6,6 +6,16 @@
 BUILD_DIR := build
 CMAKE_FLAGS := -G Ninja -DCMAKE_BUILD_TYPE=Release
 
+# macOS ships libarchive without headers, so CI passes Homebrew's prefix
+# explicitly (.github/workflows/ci.yml). Do the same here, or `make gate`
+# cannot configure a fresh tree on a Mac at all.
+ifeq ($(shell uname -s),Darwin)
+LIBARCHIVE_PREFIX := $(shell brew --prefix libarchive 2>/dev/null)
+ifneq ($(LIBARCHIVE_PREFIX),)
+CMAKE_FLAGS += -DCMAKE_PREFIX_PATH=$(LIBARCHIVE_PREFIX)
+endif
+endif
+
 .PHONY: bullseye configure build test format format-fix clean-tree harness-linux harness-macos soak-macos remote-check
 
 bullseye: configure build test format clean-tree
@@ -19,8 +29,13 @@ configure:
 build: configure
 	@cmake --build $(BUILD_DIR) >/dev/null && echo "✓ build"
 
+# Quiet on success, but keep the failing output. Whoever acts on this exit
+# code — /cv, CI, a pre-push gate — needs to know which test bit;
+# "Errors while running CTest" on its own says nothing.
 test: build
-	@ctest --test-dir $(BUILD_DIR) --output-on-failure >/dev/null && echo "✓ tests"
+	@ctest --test-dir $(BUILD_DIR) --output-on-failure > $(BUILD_DIR)/ctest.log 2>&1 \
+		&& echo "✓ tests" \
+		|| (cat $(BUILD_DIR)/ctest.log; echo "✗ tests — see $(BUILD_DIR)/ctest.log"; exit 1)
 
 # Mirror CMake's source-glob discipline: src/ is recursive, tests/ is
 # top-level only — anything under tests/corpus/** (e.g. the
