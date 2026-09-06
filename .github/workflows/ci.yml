@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [master]
+    tags: ['v*']
   pull_request:
     branches: [master]
 
@@ -28,19 +29,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev libarchive-dev
 
-      - name: Configure
-        run: |
-          cmake_args="-B build -G Ninja -DCMAKE_BUILD_TYPE=Release"
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            cmake_args="$cmake_args -DCMAKE_PREFIX_PATH=$(brew --prefix libarchive)"
-          fi
-          cmake $cmake_args
-
-      - name: Build
-        run: cmake --build build
-
-      - name: Test
-        run: cd build && ctest --output-on-failure
+      # `make test` is configure + build + test — the same recipe the
+      # pre-push hook runs via `make gate`. The format half of the gate runs
+      # in the `format` job below, where clang-format is installed.
+      - name: Gate (configure, build, test)
+        run: make test
 
       - name: Verify CLI
         run: |
@@ -61,12 +54,8 @@ jobs:
           sudo apt-get install -y clang-format-18
           sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-18 100
 
-      - name: Format source files
-        run: find src tests -name '*.h' -o -name '*.cpp' | xargs clang-format-18 -i --style=file
-
+      # The repo's own format oracle, so CI and the pre-push gate check the
+      # same file set with the same command. A format difference fails the
+      # job; it used to be an ignorable ::warning::.
       - name: Check formatting
-        run: |
-          if ! git diff --quiet; then
-            echo "::warning::Code formatting differs from clang-format-18. Run: find src tests -name '*.h' -o -name '*.cpp' | xargs clang-format -i"
-            git diff --stat
-          fi
+        run: make format
