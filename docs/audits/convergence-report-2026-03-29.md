@@ -1,4 +1,8 @@
-# Convergence Report
+# Convergence Report (historical, 2026-03-29)
+
+> Snapshot from the Rust-era codebase, before the C++ rewrite. It
+> describes neither the current tree nor the current gates; the live
+> convergence view is `bullseye_query` over `bullseye.yaml`.
 
 Evaluated: 2026-03-29
 SHA: a0e9822

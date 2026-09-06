@@ -61,9 +61,13 @@ are the verified SHA256 of that bottle.
 }
 ```
 
-The file is shipped with den (installed to `share/den/known_hashes.json`, see
-`CMakeLists.txt`) so offline installs still cross-check. A user-synced copy at
-`~/.den/trust/known_hashes.json` overrides the bundled one.
+`cmake --install` places the file at `share/den/known_hashes.json` (see
+`CMakeLists.txt`) so a source install cross-checks offline. **The release
+tarball and `install.sh` do not include it** (entropy audit ENT-002), so a
+curl-installed den finds no replica and takes the `WarnProceed` row above
+until one is provided. A user-synced copy at
+`~/.den/trust/known_hashes.json` is searched first and overrides the
+bundled one.
 
 ## Updating the replica
 
