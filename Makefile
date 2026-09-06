@@ -16,9 +16,14 @@ CMAKE_FLAGS += -DCMAKE_PREFIX_PATH=$(LIBARCHIVE_PREFIX)
 endif
 endif
 
-.PHONY: bullseye configure build test format format-fix clean-tree harness-linux harness-macos soak-macos remote-check
+.PHONY: bullseye gate configure build test format format-fix clean-tree harness-linux harness-macos soak-macos remote-check
 
-bullseye: configure build test format clean-tree
+# The delivery gate: the repo's existing oracles on the shipped path.
+# `scripts/hooks/pre-push` runs this before every push and refuses the push
+# when it is red; CI runs the same steps after the fact.
+gate: configure build test format
+
+bullseye: gate clean-tree
 
 configure:
 	@if [ ! -f $(BUILD_DIR)/build.ninja ]; then \
