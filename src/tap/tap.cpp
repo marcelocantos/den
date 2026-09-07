@@ -4,6 +4,7 @@
 #include "tap.h"
 
 #include "../core/error.h"
+#include "../provider/exec.h"
 #include "../settings/settings.h"
 
 #include <spdlog/spdlog.h>
@@ -11,14 +12,11 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <cstdio>
 #include <fstream>
 #include <regex>
 #include <sstream>
 #include <string_view>
 #include <utility>
-
-#include <sys/wait.h>
 
 namespace den {
 
@@ -45,19 +43,6 @@ std::optional<std::pair<std::string, std::string>> split_tap_name(const std::str
             return std::nullopt;
     }
     return std::make_pair(user, repo);
-}
-
-// Run a command, returning {exit_code, combined_output}. Used for `git clone`.
-std::pair<int, std::string> run_capture(const std::string& cmd) {
-    std::string output;
-    std::array<char, 4096> buf{};
-    FILE* pipe = ::popen((cmd + " 2>&1").c_str(), "r");
-    if (!pipe)
-        return {-1, "popen failed"};
-    while (std::fgets(buf.data(), static_cast<int>(buf.size()), pipe))
-        output += buf.data();
-    int status = ::pclose(pipe);
-    return {WIFEXITED(status) ? WEXITSTATUS(status) : -1, output};
 }
 
 // A source is treated as a git remote (cloned) when it has a URL scheme or the
@@ -176,11 +161,15 @@ Tap tap_add(const Config& config, const std::string& name, const std::string& so
     fs::create_directories(dest.parent_path());
 
     if (is_remote_source(source)) {
-        auto [rc, out] = run_capture("git clone --depth 1 " + source + " " + dest.string());
-        if (rc != 0) {
+        // Spawn git directly with an explicit argv — never a shell. `source`
+        // is untrusted CLI input; a `; rm -rf ~` suffix must reach git as a
+        // (bogus) URL, not as a second command.
+        auto clone = run_tool({"git", "clone", "--depth", "1", source, dest.string()});
+        if (clone.exit_code != 0) {
             std::error_code ec;
             fs::remove_all(dest, ec);
-            throw UserError("failed to clone tap '" + name + "': " + out);
+            throw UserError("failed to clone tap '" + name +
+                            "': " + (clone.spawned ? clone.output : "could not run git"));
         }
     } else {
         // Local path: copy the directory tree. Validate the source exists and

@@ -14,6 +14,7 @@
 #include "index/sat_solver.h"
 #include "selfupdate/selfupdate.h"
 #include "store/link.h"
+#include "tap/tap.h"
 
 #include <chrono>
 #include <cstdlib>
@@ -73,6 +74,28 @@ TEST_SUITE("fable::F1_package_name") {
         // Name that would create the sentinel if shell-injected.
         std::string evil = "x; touch " + sentinel.string() + " #";
         CHECK_THROWS_AS(build_from_source(cfg, idx, evil, "1.0"), UserError);
+        CHECK_FALSE(fs::exists(sentinel));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// F6 — command injection via tap source URL (ENT-004)
+// ---------------------------------------------------------------------------
+TEST_SUITE("fable::F6_tap_source") {
+
+    TEST_CASE("tap_add does not run the tap source through a shell") {
+        TmpDir tmp;
+        auto sentinel = tmp.path / "pwned";
+        Config cfg;
+        cfg.den_home = tmp.path / "den";
+        fs::create_directories(cfg.den_home);
+
+        // A remote-looking source with a trailing shell command. Under a
+        // `/bin/sh -c` clone this creates the sentinel; under an argv spawn it
+        // is just an (unreachable) URL. Port 1 refuses immediately, so the
+        // clone fails fast without network access.
+        const std::string evil = "https://127.0.0.1:1/x; touch " + sentinel.string();
+        CHECK_THROWS_AS(tap_add(cfg, "evil/tap", evil), UserError);
         CHECK_FALSE(fs::exists(sentinel));
     }
 }
