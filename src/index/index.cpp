@@ -300,14 +300,43 @@ PackageIndex load_index(const fs::path& cache_path) {
         return idx;
     }
 
-    std::ifstream file(cache_path);
+    std::ifstream file(cache_path, std::ios::binary);
     if (!file) {
         SPDLOG_WARN("cannot open index cache: {}", cache_path.string());
         return idx;
     }
 
+    // Read the whole file, then parse from contiguous memory (🎯T81).
+    // nlohmann's stream overload pulls input through a
+    // std::istreambuf_iterator one character at a time; handed a string
+    // it uses its contiguous fast path instead.
+    //
+    // Worth 4-5% of the parse and no more — 26.4 ms against 25.3 ms on
+    // the benchmark's 6 MB index, measured back to back in one process,
+    // which is what Attr_ParseFromStream and Attr_ParseFromString are
+    // there to keep honest. An earlier reading of the same pair made it
+    // look like a factor of two; that was contention on a loaded
+    // machine, to which the character-at-a-time path is much more
+    // sensitive. Reading the file first costs under a millisecond, so
+    // the change is free either way, but it is a small win and the
+    // comment should say so.
+    std::string text;
     try {
-        json j = json::parse(file);
+        text.resize(static_cast<std::size_t>(fs::file_size(cache_path)));
+    } catch (const fs::filesystem_error& e) {
+        SPDLOG_WARN("cannot size index cache: {}", e.what());
+        return idx;
+    }
+    file.read(text.data(), static_cast<std::streamsize>(text.size()));
+    // Truncate to what was actually read. save_index writes atomically
+    // by rename, so the open descriptor can refer to the old inode
+    // while file_size() has already stat'd the new one; taking gcount
+    // means we parse exactly the bytes behind our own descriptor
+    // rather than a length that belongs to a different file.
+    text.resize(static_cast<std::size_t>(file.gcount()));
+
+    try {
+        json j = json::parse(text);
         if (j.contains("packages") && j["packages"].is_array()) {
             for (const auto& pj : j["packages"]) {
                 Package pkg = package_from_json(pj);

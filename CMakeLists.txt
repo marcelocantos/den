@@ -87,6 +87,17 @@ if(TEST_SOURCES)
     add_test(NAME den_tests COMMAND den_tests)
 endif()
 
+# --- Benchmarks ---
+# bench/bench.cpp is the whole harness — no framework, for the same
+# reason the tests use a single header. It measures load_index, which
+# nine CLI callbacks run before doing anything a user asked for.
+# DEN_SOURCE_DIR lets it find docs/perf/baseline.txt whatever directory
+# it is run from.
+add_executable(den_bench bench/bench.cpp)
+target_link_libraries(den_bench PRIVATE den_lib vendor_headers)
+target_compile_definitions(den_bench PRIVATE
+    DEN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
 # --- Install ---
 install(TARGETS den RUNTIME DESTINATION bin)
 

@@ -6,7 +6,7 @@
 BUILD_DIR := build
 CMAKE_FLAGS := -G Ninja -DCMAKE_BUILD_TYPE=Release
 
-.PHONY: bullseye configure build test format format-fix clean-tree harness-linux harness-macos soak-macos remote-check
+.PHONY: bullseye configure build test format format-fix clean-tree harness-linux harness-macos soak-macos remote-check bench bench-lock bench-gate bench-gate-loose
 
 bullseye: configure build test format clean-tree
 
@@ -22,11 +22,40 @@ build: configure
 test: build
 	@ctest --test-dir $(BUILD_DIR) --output-on-failure >/dev/null && echo "✓ tests"
 
+# 🎯T81: benchmarks for the index load nine CLI callbacks pay for,
+# locked both ways.
+#
+#   make bench             run them and print the results
+#   make bench-lock        make this run the new baseline
+#   make bench-gate        compare against docs/perf/baseline.txt;
+#                          fails on a regression AND on an improvement,
+#                          because an improvement means the baseline no
+#                          longer describes the code and must be
+#                          re-locked in the same commit
+#   make bench-gate-loose  compare only the counted metrics
+#
+# Timings are only comparable on the machine the baseline was recorded
+# on (docs/perf/baseline.md names it). Elsewhere, and in CI, use
+# bench-gate-loose, which compares just the counted metrics — packages
+# loaded and index bytes — which are identical everywhere.
+bench: build
+	@$(BUILD_DIR)/den_bench
+
+bench-lock: build
+	@$(BUILD_DIR)/den_bench --lock
+
+bench-gate: build
+	@$(BUILD_DIR)/den_bench --gate
+
+bench-gate-loose: build
+	@$(BUILD_DIR)/den_bench --gate --loose
+
 # Mirror CMake's source-glob discipline: src/ is recursive, tests/ is
 # top-level only — anything under tests/corpus/** (e.g. the
 # homebrew-core submodule) is external and must not be reformatted.
 FORMAT_FILES := $(shell find src \( -name '*.h' -o -name '*.cpp' \)) \
-                $(shell find tests -maxdepth 1 \( -name '*.h' -o -name '*.cpp' \))
+                $(shell find tests -maxdepth 1 \( -name '*.h' -o -name '*.cpp' \)) \
+                $(shell find bench \( -name '*.h' -o -name '*.cpp' \))
 
 format:
 	@echo $(FORMAT_FILES) | xargs clang-format --dry-run -Werror >/dev/null 2>&1 \

@@ -1,0 +1,5 @@
+# den benchmarks — see docs/perf/baseline.md
+LoadIndex	29813999 ns/op	7000 packages	5918724 index-bytes
+Attr_ParseFromStream	26582958 ns/op	5918724 index-bytes
+Attr_ParseFromString	25649207 ns/op	5918724 index-bytes
+Attr_ReadFileOnly	775874 ns/op	5918724 index-bytes
