@@ -22,7 +22,10 @@
 # Contract checked (🎯T68):
 #   1. den is at least as fast as brew on every measured op.
 #   2. At least one op is "meaningfully" faster (>= MEANINGFUL_FACTOR x).
-#   3. No measured den op regressed by more than --max-regression vs baseline.
+#   3. No measured den op regressed by more than --max-regression vs a
+#      same-host baseline. Cross-host comparisons (e.g. local M4 Max vs
+#      GitHub Actions macos-14) are skipped — absolute times are not
+#      comparable across machines.
 #
 # Exit status: 0 if the contract holds, 1 otherwise.
 
@@ -52,6 +55,21 @@ if ! command -v jq &>/dev/null; then
     exit 1
 fi
 
+# Host id recorded on each result row by compare-brew.sh. Older snapshots
+# without a host field compare as "unknown"; "unknown" only matches other
+# "unknown" files, so a new host-tagged CI run will not treat an untagged
+# local baseline as comparable.
+snapshot_host() {
+    local file="$1"
+    jq -r '
+        if type == "array" then
+            ([.[] | .host // empty] | first) // "unknown"
+        else
+            .host // "unknown"
+        end
+    ' "${file}"
+}
+
 # Pick newest snapshot if none given.
 if [[ -z "${SNAPSHOT}" ]]; then
     SNAPSHOT="$(ls -1 "${RESULTS_DIR}"/bench-*.json 2>/dev/null | sort | tail -1 || true)"
@@ -61,16 +79,42 @@ if [[ -z "${SNAPSHOT}" || ! -f "${SNAPSHOT}" ]]; then
     exit 1
 fi
 
-# Pick second-newest as baseline if none given (best effort).
+SNAP_HOST="$(snapshot_host "${SNAPSHOT}")"
+
+# Pick newest same-host snapshot as baseline if none given. Comparing
+# across host classes (local M4 Max vs gha-macos14) is what made the
+# weekly bench.yml job fail every week after the first local baseline
+# was committed: GHA runners are slower in absolute ms, even when den
+# still beats brew.
 if [[ -z "${BASELINE}" ]]; then
-    BASELINE="$(ls -1 "${RESULTS_DIR}"/bench-*.json 2>/dev/null \
-        | grep -v -F "$(basename "${SNAPSHOT}")" | sort | tail -1 || true)"
+    while IFS= read -r candidate; do
+        [[ -z "${candidate}" ]] && continue
+        if [[ "$(snapshot_host "${candidate}")" == "${SNAP_HOST}" ]]; then
+            BASELINE="${candidate}"
+            break
+        fi
+    done < <(ls -1 "${RESULTS_DIR}"/bench-*.json 2>/dev/null \
+        | grep -v -F "$(basename "${SNAPSHOT}")" | sort -r || true)
+fi
+
+# An explicitly-passed baseline from another host is not a regression
+# signal — drop it rather than fail the T68 contract on hardware noise.
+if [[ -n "${BASELINE}" && -f "${BASELINE}" ]]; then
+    BASE_HOST="$(snapshot_host "${BASELINE}")"
+    if [[ "${BASE_HOST}" != "${SNAP_HOST}" ]]; then
+        echo "WARNING: baseline host '${BASE_HOST}' != snapshot host '${SNAP_HOST}'" >&2
+        echo "         skipping regression check (cross-host times are not comparable)" >&2
+        BASELINE=""
+    fi
 fi
 
 echo "=== T68 benchmark contract check ==="
-echo "snapshot: ${SNAPSHOT}"
-[[ -n "${BASELINE}" && -f "${BASELINE}" ]] && echo "baseline: ${BASELINE}" \
-                                          || echo "baseline: (none — regression check skipped)"
+echo "snapshot: ${SNAPSHOT}  (host: ${SNAP_HOST})"
+if [[ -n "${BASELINE}" && -f "${BASELINE}" ]]; then
+    echo "baseline: ${BASELINE}  (host: $(snapshot_host "${BASELINE}"))"
+else
+    echo "baseline: (none — no same-host snapshot; regression check skipped)"
+fi
 echo ""
 
 # ---------------------------------------------------------------------------
