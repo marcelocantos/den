@@ -6,9 +6,9 @@
 # not merely equivalent to Ruby's output on paper. This is the checkpoint
 # that the SIMPLE fast-path is real.
 #
-# Schedule: nightly cron (00:30 UTC). Also available as workflow_dispatch
-# for manual runs. NOT triggered on push/PR because source builds are slow
-# (~15-20 min total) and would block CI on every commit.
+# Schedule: nightly cron (00:30 UTC) once T58 lands; until then this
+# workflow is workflow_dispatch only. NOT triggered on push/PR because
+# source builds are slow (~15-20 min total) and would block CI on every commit.
 #
 # Upstream dependency (T58): full dependency extraction by the native parser
 # is not yet implemented. Until T58 lands:
@@ -20,7 +20,8 @@
 # When T58 is done:
 #   1. Remove continue-on-error from the "Install formula" step.
 #   2. Un-comment the fail-fast line in the matrix.
-#   3. This file's header comment can drop the T58 caveat.
+#   3. Re-add the nightly cron under `on:` (`30 0 * * *` — see Schedule above).
+#   4. This file's header comment can drop the T58 caveat.
 #
 # Failure modes captured (per T59 acceptance):
 #   - Parser missing a needed field (build fails with missing args).
@@ -34,12 +35,11 @@
 name: SIMPLE formula install (T59)
 
 on:
-  schedule:
-    # Nightly at 00:30 UTC — off-peak, avoids collision with PR CI queues.
-    # Enable only after T58 (dependency extraction) is merged; until then
-    # use workflow_dispatch for manual validation runs.
-    # TODO(T58): un-comment the line below once T58 is merged.
-    # - cron: '30 0 * * *'
+  # TODO(T58): re-add nightly cron once T58 lands (see header Schedule docs):
+  #   schedule:
+  #     - cron: '30 0 * * *'  # 00:30 UTC, off-peak vs PR CI queues
+  # Do not leave an empty `schedule:` key — GitHub Actions then reports
+  # "No jobs were run" failures when master updates / workflows re-register.
   workflow_dispatch:
     inputs:
       formula_override:
