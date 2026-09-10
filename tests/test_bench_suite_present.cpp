@@ -196,9 +196,9 @@ TEST_SUITE("bench_suite_present") {
 
         CHECK_MESSAGE(r.exit_code == 0,
                       "cross-host regression must be skipped, not fail T68:\n", r.output);
-        CHECK_MESSAGE(r.output.find("skipping regression") != std::string::npos ||
-                          r.output.find("regression check skipped") != std::string::npos,
-                      "expected a skip message, got:\n", r.output);
+        const bool skipped = r.output.find("skipping regression") != std::string::npos ||
+                             r.output.find("regression check skipped") != std::string::npos;
+        CHECK_MESSAGE(skipped, "expected a skip message, got:\n", r.output);
         CHECK_MESSAGE(r.output.find("REGRESSED") == std::string::npos,
                       "cross-host delta must not be reported as REGRESSED:\n", r.output);
     }
