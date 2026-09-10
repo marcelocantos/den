@@ -92,10 +92,22 @@ DEN_VERSION="$("${DEN_BIN}" --version 2>/dev/null | tail -1 || echo unknown)"
 BREW_VERSION="$(brew --version 2>&1 | head -1 || echo unknown)"
 HOST_OS="$(uname -s)-$(uname -m)"
 
+# Stable host class for regression comparisons. GitHub Actions macos-14
+# runners and a local M4 Max are both Darwin/arm64, but their absolute
+# times are not comparable — so CI must not treat a local snapshot as
+# its baseline (that is what made weekly bench.yml fail after T68).
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    HOST_ID="gha-${ImageOS:-${RUNNER_OS:-unknown}}-${RUNNER_ARCH:-unknown}"
+else
+    HOST_ID="${HOST_OS}-local"
+fi
+HOST_ID="$(printf '%s' "${HOST_ID}" | tr -c 'A-Za-z0-9._-' '_')"
+
 echo "=== den vs brew benchmark ==="
 echo "den:          ${DEN_VERSION}"
 echo "brew:         ${BREW_VERSION}"
 echo "host:         ${HOST_OS}"
+echo "host-id:      ${HOST_ID}"
 echo "runs:         ${RUNS}"
 echo "install-runs: ${INSTALL_RUNS}"
 echo "pkg:          ${TEST_PKG}"
@@ -110,15 +122,15 @@ RESULT_CSV="${OUTPUT_DIR}/bench-${TIMESTAMP}.csv"
 
 declare -a JSON_ENTRIES=()
 declare -a CSV_ROWS=()
-CSV_HEADER="timestamp,op,tool,mean_s,stddev_s,min_s,max_s,status"
+CSV_HEADER="timestamp,host,op,tool,mean_s,stddev_s,min_s,max_s,status"
 CSV_ROWS+=("${CSV_HEADER}")
 
 # record_skip OP TOOL REASON — note an op we could not measure.
 record_skip() {
     local op="$1" tool="$2" reason="$3"
     echo "  SKIPPED: ${tool} ${op} (${reason})"
-    JSON_ENTRIES+=("{\"timestamp\":\"${TIMESTAMP}\",\"op\":\"${op}\",\"tool\":\"${tool}\",\"mean_s\":null,\"stddev_s\":null,\"min_s\":null,\"max_s\":null,\"status\":\"skipped: ${reason}\"}")
-    CSV_ROWS+=("${TIMESTAMP},${op},${tool},,,,,skipped: ${reason}")
+    JSON_ENTRIES+=("{\"timestamp\":\"${TIMESTAMP}\",\"host\":\"${HOST_ID}\",\"op\":\"${op}\",\"tool\":\"${tool}\",\"mean_s\":null,\"stddev_s\":null,\"min_s\":null,\"max_s\":null,\"status\":\"skipped: ${reason}\"}")
+    CSV_ROWS+=("${TIMESTAMP},${HOST_ID},${op},${tool},,,,,skipped: ${reason}")
 }
 
 # ---------------------------------------------------------------------------
@@ -141,8 +153,8 @@ parse_hf_json() {
         stddev="$(jq -r ".results[${j}].stddev // 0" "${tmpfile}")"
         min="$(jq -r ".results[${j}].min" "${tmpfile}")"
         max="$(jq -r ".results[${j}].max" "${tmpfile}")"
-        JSON_ENTRIES+=("{\"timestamp\":\"${TIMESTAMP}\",\"op\":\"${op}\",\"tool\":\"${name}\",\"mean_s\":${mean},\"stddev_s\":${stddev},\"min_s\":${min},\"max_s\":${max},\"status\":\"ok\"}")
-        CSV_ROWS+=("${TIMESTAMP},${op},${name},${mean},${stddev},${min},${max},ok")
+        JSON_ENTRIES+=("{\"timestamp\":\"${TIMESTAMP}\",\"host\":\"${HOST_ID}\",\"op\":\"${op}\",\"tool\":\"${name}\",\"mean_s\":${mean},\"stddev_s\":${stddev},\"min_s\":${min},\"max_s\":${max},\"status\":\"ok\"}")
+        CSV_ROWS+=("${TIMESTAMP},${HOST_ID},${op},${name},${mean},${stddev},${min},${max},ok")
     done
 }
 

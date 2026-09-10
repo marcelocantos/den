@@ -66,7 +66,9 @@ jobs:
       - name: Check T68 contract
         run: |
           # Fail the job if den is no longer at least as fast as brew, or if a
-          # measured op regressed against the previous committed snapshot.
+          # measured op regressed against the previous same-host snapshot.
+          # Cross-host baselines (e.g. a local M4 Max commit) are skipped —
+          # absolute ms are not comparable across machines.
           scripts/bench/compare-results.sh
 
       - name: Commit benchmark snapshot

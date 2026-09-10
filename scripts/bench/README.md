@@ -83,6 +83,7 @@ The JSON schema per entry:
 ```json
 {
   "timestamp": "20260517T120000Z",
+  "host":      "Darwin-arm64-local",
   "op":        "list",
   "tool":      "den-list",
   "mean_s":    0.042,
@@ -92,6 +93,11 @@ The JSON schema per entry:
   "status":    "ok"
 }
 ```
+
+`host` is a stable machine class (`Darwin-arm64-local` on a developer
+machine, `gha-macos14-ARM64` on GitHub Actions macos-14). Regression
+checks only compare snapshots from the same host class — a local M4 Max
+baseline must not fail CI on a slower shared runner.
 
 The CSV mirrors the same fields for easy import into spreadsheets / pandas.
 
@@ -115,7 +121,9 @@ scripts/bench/compare-results.sh bench/results/bench-NEW.json \
 
 It exits non-zero (failing CI) if den is no longer at least as fast as brew on
 every op, if no op is meaningfully faster, or if a den op regressed beyond the
-threshold.
+threshold against a **same-host** baseline. If no prior snapshot shares the
+current host class, the regression clause is skipped (den-vs-brew still
+gates) so a first-on-this-runner run can commit a CI baseline.
 
 ## Current status (🎯T68 — satisfied)
 
