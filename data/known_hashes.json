@@ -4,6 +4,7 @@
   "source": "https://formulae.brew.sh + GHCR diff-verification (.github/workflows/replica-verify.yml)",
   "note": "den's independent hash replica (\ud83c\udfafT42). Served from raw.githubusercontent.com, a SEPARATE origin/CDN from formulae.brew.sh. Each entry's SHA256 is re-verified by downloading the bottle from GHCR and recomputing the digest before it is committed here. Keys are '<formula>--<version>--<platform_tag>'.",
   "hashes": {
+    "jq--1.8.2--arm64_golden_gate": "d048dd4c28d867e939065a3bc8209f37e2a5be3e2c18d18c8c7da8f4d1629a4a",
     "jq--1.8.2--arm64_linux": "d67a00e578f6684163660fed1accb56ef87b01651e37dec737d362d09ece9eab",
     "jq--1.8.2--arm64_sequoia": "ef70e236f58a8a781436ee400f9bdf847ad7d12e75115871fb6a94b9214a1a41",
     "jq--1.8.2--arm64_sonoma": "39f30266edd431962b606353091035a9cec9a61437252f448a3a8cf69dbc0551",
