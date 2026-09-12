@@ -21,6 +21,7 @@
 #include <doctest.h>
 
 #include "core/config.h"
+#include "env/manifest.h"
 #include "migrate/migrate.h"
 
 #include <algorithm>
@@ -109,14 +110,39 @@ static fs::path build_fixture_cellar(const fs::path& root) {
     return cellar;
 }
 
-// Read ROOT.json manifest from <den_home>/manifests/ROOT.json.
+// Assemble the migrate view tests historically read from ROOT.json:
+// runtime formulae from read_manifest("/", …) plus the Homebrew sidecar.
 static nlohmann::json read_manifest(const fs::path& den_home) {
-    const fs::path p = den_home / "manifests" / "ROOT.json";
-    if (!fs::is_regular_file(p)) {
-        return nlohmann::json{};
+    nlohmann::json j;
+    j["packages"] = nlohmann::json::object();
+    j["auto"] = nlohmann::json::array();
+    const auto runtime = den::read_manifest(den_home, "/");
+    if (runtime.packages.contains("homebrew")) {
+        j["packages"] = runtime.packages.at("homebrew");
     }
-    std::ifstream f(p);
-    return nlohmann::json::parse(f);
+    if (runtime.auto_deps.contains("homebrew")) {
+        for (const auto& d : runtime.auto_deps.at("homebrew")) {
+            j["auto"].push_back(d);
+        }
+    }
+    const auto imported = den::read_homebrew_import(den_home);
+    j["casks"] = imported.casks;
+    j["taps"] = imported.taps;
+    j["services"] = nlohmann::json::array();
+    for (const auto& s : imported.services) {
+        nlohmann::json svc;
+        svc["name"] = s.name;
+        svc["status"] = s.status;
+        svc["running"] = s.running;
+        if (!s.user.empty()) {
+            svc["user"] = s.user;
+        }
+        if (!s.plist_path.empty()) {
+            svc["plist"] = s.plist_path.string();
+        }
+        j["services"].push_back(std::move(svc));
+    }
+    return j;
 }
 
 // ---------------------------------------------------------------------------
@@ -220,6 +246,31 @@ TEST_SUITE("migration::fixture") {
 
         CHECK(pkgs.contains("python@3.12"));
         CHECK(pkgs["python@3.12"].get<std::string>() == "3.12.3");
+    }
+
+    // ENT-001: migrate must write the same root document `den list` reads.
+    TEST_CASE("migrate_from_homebrew is visible to read_manifest and den list") {
+        MigTmpDir root;
+        const auto cellar = build_fixture_cellar(root.path);
+
+        Config cfg;
+        cfg.homebrew_cellar = cellar;
+        cfg.den_home = root.path / "den_home";
+
+        migrate_from_homebrew(cfg, {});
+
+        const auto runtime = den::read_manifest(cfg.den_home, "/");
+        REQUIRE(runtime.packages.contains("homebrew"));
+        const auto& hb = runtime.packages.at("homebrew");
+        CHECK(hb.contains("git"));
+        CHECK(hb.at("git") == "2.44.0");
+        CHECK(hb.contains("curl"));
+        CHECK(hb.contains("python@3.12"));
+
+        const auto listed = den::resolve_per_provider(cfg.den_home, "/");
+        REQUIRE(listed.contains("homebrew"));
+        CHECK_FALSE(listed.at("homebrew").empty());
+        CHECK_FALSE(den::list_all(cfg.den_home).empty());
     }
 
     // -------------------------------------------------------------------------
@@ -522,6 +573,8 @@ TEST_SUITE("migration::fixture") {
 
         // But nothing is written.
         CHECK_FALSE(fs::exists(cfg.den_home / "manifests" / "ROOT.json"));
+        CHECK_FALSE(fs::exists(cfg.den_home / "manifests" / "ROOT" / "manifest.json"));
+        CHECK_FALSE(fs::exists(homebrew_import_file(cfg.den_home)));
     }
 
     // -------------------------------------------------------------------------

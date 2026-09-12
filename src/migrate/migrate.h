@@ -6,6 +6,7 @@
 #include "../core/config.h"
 
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -110,16 +111,36 @@ struct MigrateOptions {
     bool query_services = false;
 };
 
+/// Casks / taps / services imported from Homebrew. These are not part of the
+/// runtime `Manifest` (which only stores provider→package→version). They live
+/// in `<den_home>/migrate/homebrew.json` so `den list` / `read_manifest`
+/// keep a single schema.
+struct HomebrewImport {
+    std::map<std::string, std::string> casks;
+    std::vector<std::string> taps;
+    std::vector<HomebrewService> services;
+};
+
+/// Path of the Homebrew import sidecar (`<den_home>/migrate/homebrew.json`).
+fs::path homebrew_import_file(const fs::path& den_home);
+
+/// Read the sidecar. Missing file → empty import (not an error).
+HomebrewImport read_homebrew_import(const fs::path& den_home);
+
+/// Write the sidecar atomically (temp file + rename).
+void write_homebrew_import(const fs::path& den_home, const HomebrewImport& inv);
+
 /// Migrate packages from the Homebrew Cellar into den's root manifest.
 ///
 /// If names is empty, scans the entire Cellar; otherwise migrates only the
 /// named formulae. For each formula found, the latest version is recorded in
-/// den's root manifest. Files are not copied — this is metadata migration only.
+/// den's runtime root manifest (`manifests/ROOT/manifest.json`) via
+/// `with_manifest`. Files are not copied — this is metadata migration only.
 ///
-/// In addition to formulae, this records casks, taps, and `brew services`
-/// state into the same ROOT.json manifest. The migration is non-destructive
-/// (Homebrew's files are never modified) and idempotent (re-running picks up
-/// new installs without disturbing existing den state).
+/// Casks, taps, and `brew services` state go to the Homebrew import sidecar,
+/// not the runtime manifest. The migration is non-destructive (Homebrew's
+/// files are never modified) and idempotent (re-running picks up new installs
+/// without disturbing existing den state).
 ///
 /// Prints a summary: N formulae, N casks, N taps, N services.
 MigrationSummary migrate_from_homebrew(const Config& config, const std::vector<std::string>& names,

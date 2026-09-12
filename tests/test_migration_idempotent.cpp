@@ -13,6 +13,7 @@
 #include <doctest.h>
 
 #include "core/config.h"
+#include "env/manifest.h"
 #include "migrate/migrate.h"
 
 #include <cstdlib>
@@ -74,42 +75,20 @@ static void add_keg(const fs::path& cellar, const std::string& name, const std::
     write_receipt(keg, on_request);
 }
 
-// Read the packages map from ROOT.json.
 static std::map<std::string, std::string> read_packages(const fs::path& den_home) {
-    const fs::path p = den_home / "manifests" / "ROOT.json";
-    if (!fs::is_regular_file(p)) {
-        return {};
+    const auto m = den::read_manifest(den_home, "/");
+    if (m.packages.contains("homebrew")) {
+        return m.packages.at("homebrew");
     }
-    std::ifstream f(p);
-    const auto j = nlohmann::json::parse(f);
-    if (!j.contains("packages") || !j["packages"].is_object()) {
-        return {};
-    }
-    std::map<std::string, std::string> result;
-    for (const auto& [k, v] : j["packages"].items()) {
-        result[k] = v.get<std::string>();
-    }
-    return result;
+    return {};
 }
 
-// Read the auto array from ROOT.json.
 static std::vector<std::string> read_auto(const fs::path& den_home) {
-    const fs::path p = den_home / "manifests" / "ROOT.json";
-    if (!fs::is_regular_file(p)) {
+    const auto m = den::read_manifest(den_home, "/");
+    if (!m.auto_deps.contains("homebrew")) {
         return {};
     }
-    std::ifstream f(p);
-    const auto j = nlohmann::json::parse(f);
-    if (!j.contains("auto") || !j["auto"].is_array()) {
-        return {};
-    }
-    std::vector<std::string> result;
-    for (const auto& a : j["auto"]) {
-        if (a.is_string()) {
-            result.push_back(a.get<std::string>());
-        }
-    }
-    return result;
+    return {m.auto_deps.at("homebrew").begin(), m.auto_deps.at("homebrew").end()};
 }
 
 // ---------------------------------------------------------------------------

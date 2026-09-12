@@ -11,6 +11,7 @@
 #include <doctest.h>
 
 #include "core/config.h"
+#include "env/manifest.h"
 #include "migrate/migrate.h"
 
 #include <algorithm>
@@ -182,8 +183,8 @@ TEST_SUITE("migration::non_destructive") {
 
         CHECK(sorted_actual == sorted_expected);
 
-        // The manifest should exist under den_home only.
-        CHECK(fs::is_regular_file(den_home / "manifests" / "ROOT.json"));
+        // The runtime root manifest should exist under den_home only.
+        CHECK(fs::is_regular_file(den_home / "manifests" / "ROOT" / "manifest.json"));
     }
 
     // -------------------------------------------------------------------------
@@ -246,13 +247,10 @@ TEST_SUITE("migration::non_destructive") {
         const auto cellar = build_nd_cellar(root.path);
         const fs::path den_home = root.path / "den_home";
 
-        // Pre-seed a manifest as if a previous migration had run.
-        const fs::path manifest_dir = den_home / "manifests";
-        fs::create_directories(manifest_dir);
-        nlohmann::json existing;
-        existing["packages"]["git"] = "2.44.0"; // git already tracked
-        existing["auto"] = nlohmann::json::array();
-        std::ofstream(manifest_dir / "ROOT.json") << existing.dump(2) << "\n";
+        // Pre-seed a runtime manifest as if a previous migration had run.
+        Manifest existing;
+        existing.packages["homebrew"]["git"] = "2.44.0";
+        write_manifest(den_home, "/", existing);
 
         const auto before = snapshot(cellar);
 
@@ -268,10 +266,10 @@ TEST_SUITE("migration::non_destructive") {
         CHECK(before == after);
 
         // curl was not in the pre-seeded manifest and should now be added.
-        std::ifstream f(manifest_dir / "ROOT.json");
-        const auto manifest = nlohmann::json::parse(f);
-        CHECK(manifest["packages"].contains("git"));
-        CHECK(manifest["packages"].contains("curl"));
+        const auto manifest = den::read_manifest(den_home, "/");
+        REQUIRE(manifest.packages.contains("homebrew"));
+        CHECK(manifest.packages.at("homebrew").contains("git"));
+        CHECK(manifest.packages.at("homebrew").contains("curl"));
     }
 
 } // TEST_SUITE migration::non_destructive
