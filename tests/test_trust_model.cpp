@@ -21,11 +21,16 @@
 
 #include <doctest.h>
 
+#include "core/config.h"
 #include "trust/trust_model.h"
 
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <map>
 #include <optional>
 #include <string>
+#include <unistd.h>
 
 namespace den {
 namespace trust_test {
@@ -163,6 +168,43 @@ TEST_SUITE("trust_model::cross_check_hashes") {
 
     TEST_CASE("advanced trust layer: replica missing 'hashes' object is rejected") {
         CHECK_THROWS(parse_replica_document(R"({"schema_version": 1})"));
+    }
+
+} // TEST_SUITE
+
+// ENT-002: shipped tarball layout (bin/den + share/den/known_hashes.json)
+// must be found from the executable, not from cwd.
+TEST_SUITE("trust_model::local_replica_path") {
+
+    TEST_CASE("release-tarball layout is found from the executable, not cwd") {
+        namespace fs = std::filesystem;
+        std::string tmpl = (fs::temp_directory_path() / "den_replica_XXXXXX").string();
+        char* result = ::mkdtemp(tmpl.data());
+        REQUIRE(result != nullptr);
+        const fs::path prefix = result;
+        const fs::path exe = prefix / "bin" / "den";
+        const fs::path replica = prefix / "share" / "den" / "known_hashes.json";
+        fs::create_directories(exe.parent_path());
+        fs::create_directories(replica.parent_path());
+        std::ofstream(exe) << "dummy\n";
+        std::ofstream(replica) << R"({"schema_version":1,"hashes":{}})" << "\n";
+
+        const fs::path elsewhere = prefix / "elsewhere";
+        fs::create_directories(elsewhere);
+        const fs::path old_cwd = fs::current_path();
+        fs::current_path(elsewhere);
+
+        Config cfg;
+        cfg.den_home = prefix / "den_home";
+        cfg.exe_path = exe;
+        const auto found = local_replica_path(cfg);
+        fs::current_path(old_cwd);
+        std::error_code ec;
+        const auto found_canon = fs::weakly_canonical(found, ec);
+        const auto replica_canon = fs::weakly_canonical(replica, ec);
+        fs::remove_all(prefix, ec);
+
+        CHECK(found_canon == replica_canon);
     }
 
 } // TEST_SUITE

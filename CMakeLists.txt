@@ -94,3 +94,4 @@ install(TARGETS den RUNTIME DESTINATION bin)
 # so `den install` and `den doctor` can cross-check bottle hashes offline. The
 # runtime resolves it via ../share/den/known_hashes.json relative to bin/.
 install(FILES ${CMAKE_SOURCE_DIR}/data/known_hashes.json DESTINATION share/den)
+install(FILES ${CMAKE_SOURCE_DIR}/src/ruby/den_build.rb DESTINATION share/den)

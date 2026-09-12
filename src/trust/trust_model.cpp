@@ -12,6 +12,11 @@
 
 #include <array>
 #include <fstream>
+#include <vector>
+
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 
 namespace den {
 
@@ -107,26 +112,57 @@ std::map<std::string, std::string> parse_replica_document(const std::string& jso
     return out;
 }
 
+fs::path self_exe_path() {
+#ifdef __APPLE__
+    char buf[4096];
+    uint32_t size = sizeof(buf);
+    if (_NSGetExecutablePath(buf, &size) == 0) {
+        std::error_code ec;
+        auto canon = fs::weakly_canonical(buf, ec);
+        return ec ? fs::path(buf) : canon;
+    }
+    return {};
+#else
+    std::error_code ec;
+    auto p = fs::read_symlink("/proc/self/exe", ec);
+    return ec ? fs::path{} : p;
+#endif
+}
+
 fs::path local_replica_path(const Config& config) {
-    // Search order (first existing wins):
+    // Search order (first existing wins). Packaged copies are resolved from
+    // the executable, never from cwd — install.sh / GitHub Releases users
+    // do not run den from the repo root.
     //   1. den_home/trust/known_hashes.json — user-synced / overridable copy.
-    //   2. ../share/den/known_hashes.json    — packaged alongside the binary.
+    //   2. <exe>/../share/den/known_hashes.json — release tarball / CMake layout.
     //   3. /usr/local/share/den/known_hashes.json — system install fallback.
-    //   4. data/known_hashes.json            — repo-relative, for dev runs.
-    // Mirrors the candidate-list pattern used for the bundled Ruby build
-    // script in source_build.cpp.
-    const std::array<fs::path, 4> candidates{
-        config.den_home / "trust" / "known_hashes.json",
-        fs::path("../share/den/known_hashes.json"),
-        fs::path("/usr/local/share/den/known_hashes.json"),
-        fs::path("data/known_hashes.json"),
-    };
+    //   4. <repo>/data/known_hashes.json — dev runs from a build/ binary.
+    fs::path exe = config.exe_path.empty() ? self_exe_path() : config.exe_path;
+    fs::path exe_dir;
+    if (!exe.empty()) {
+        std::error_code ec;
+        auto canon = fs::weakly_canonical(exe, ec);
+        exe_dir = (ec ? exe : canon).parent_path();
+    }
+
+    std::vector<fs::path> candidates;
+    candidates.push_back(config.den_home / "trust" / "known_hashes.json");
+    if (!exe_dir.empty()) {
+        candidates.push_back(exe_dir / ".." / "share" / "den" / "known_hashes.json");
+    }
+    candidates.emplace_back("/usr/local/share/den/known_hashes.json");
+    if (!exe_dir.empty()) {
+        // build/den → ../../data/known_hashes.json in a source checkout.
+        candidates.push_back(exe_dir / ".." / ".." / "data" / "known_hashes.json");
+    }
+
     for (const auto& c : candidates) {
         std::error_code ec;
-        if (fs::exists(c, ec) && !ec)
-            return c;
+        if (fs::exists(c, ec) && !ec) {
+            auto canon = fs::weakly_canonical(c, ec);
+            return ec ? c : canon;
+        }
     }
-    // None present: return the canonical den_home location for diagnostics.
     return config.den_home / "trust" / "known_hashes.json";
 }
 

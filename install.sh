@@ -88,7 +88,9 @@ main() {
     mkdir -p "$bin_dir"
     tar xzf "$tmpdir/$archive_name" -C "$tmpdir"
 
-    if [ -f "$tmpdir/den" ]; then
+    if [ -f "$tmpdir/bin/den" ]; then
+        mv "$tmpdir/bin/den" "$bin_dir/den"
+    elif [ -f "$tmpdir/den" ]; then
         mv "$tmpdir/den" "$bin_dir/den"
     elif [ -f "$tmpdir/den-${version}-${os}-${arch}/den" ]; then
         mv "$tmpdir/den-${version}-${os}-${arch}/den" "$bin_dir/den"
@@ -97,6 +99,22 @@ main() {
     fi
 
     chmod +x "$bin_dir/den"
+
+    # Replica + source-build script sit at <prefix>/share/den, which
+    # local_replica_path resolves as <exe>/../share/den (exe is ~/.den/bin/den).
+    share_src=""
+    if [ -d "$tmpdir/share/den" ]; then
+        share_src="$tmpdir/share/den"
+    fi
+    if [ -n "$share_src" ]; then
+        mkdir -p "$den_dir/share/den"
+        if [ -f "$share_src/known_hashes.json" ]; then
+            cp "$share_src/known_hashes.json" "$den_dir/share/den/known_hashes.json"
+        fi
+        if [ -f "$share_src/den_build.rb" ]; then
+            cp "$share_src/den_build.rb" "$den_dir/share/den/den_build.rb"
+        fi
+    fi
 
     # Clear macOS quarantine flag.
     if [ "$os" = "darwin" ]; then

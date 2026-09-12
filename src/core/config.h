@@ -18,6 +18,10 @@ struct Config {
     fs::path store;    // /opt/homebrew/Cellar (shared with Homebrew)
     fs::path cache;    // ~/.den/cache/
 
+    // Absolute path of the running `den` binary. Empty in tests unless set;
+    // `local_replica_path` then falls back to the process executable.
+    fs::path exe_path;
+
     // Homebrew paths.
     fs::path homebrew_prefix;   // /opt/homebrew
     fs::path homebrew_cellar;   // /opt/homebrew/Cellar (same as store)

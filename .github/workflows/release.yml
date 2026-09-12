@@ -57,7 +57,15 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           archive="den-${version}-${{ matrix.target }}.tar.gz"
-          tar czf "${archive}" -C build den
+          mkdir -p staging/bin staging/share/den
+          cp build/den staging/bin/den
+          cp data/known_hashes.json staging/share/den/known_hashes.json
+          cp src/ruby/den_build.rb staging/share/den/den_build.rb
+          tar czf "${archive}" -C staging bin share
+          if ! tar tzf "${archive}" | grep -q 'share/den/known_hashes.json'; then
+            echo "known_hashes.json missing from ${archive}" >&2
+            exit 1
+          fi
           shasum -a 256 "${archive}" > "${archive}.sha256"
 
       - name: Upload to release
