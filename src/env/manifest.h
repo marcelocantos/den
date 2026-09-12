@@ -32,7 +32,7 @@ struct Manifest {
 };
 
 /// Encode an environment path to a filesystem-safe slug.
-/// "/" -> "ROOT", "/ml" -> "ml", "/work/legacy" -> "work%2Dlegacy"
+/// "/" -> "ROOT", "/ml" -> "ml", "/work/legacy" -> "work%2Flegacy"
 std::string env_slug(const std::string& env_path);
 
 /// Decode a slug back to an environment path.
