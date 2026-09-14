@@ -1,0 +1,12 @@
+[
+  {"timestamp":"20260914T110836Z","host":"gha-macos14-ARM64","op":"list","tool":"den-list","mean_s":0.00023608003800000034,"stddev_s":0.0005315073302536129,"min_s":0.0,"max_s":0.001660863460000002,"status":"ok"}
+  ,{"timestamp":"20260914T110836Z","host":"gha-macos14-ARM64","op":"list","tool":"brew-list","mean_s":0.027571780760000004,"stddev_s":0.010752364010175533,"min_s":0.01679765546,"max_s":0.05096736446000001,"status":"ok"}
+  ,{"timestamp":"20260914T110836Z","host":"gha-macos14-ARM64","op":"info","tool":"den-info","mean_s":0.34051048084,"stddev_s":0.046851656502459,"min_s":0.28510675133999996,"max_s":0.41899058534,"status":"ok"}
+  ,{"timestamp":"20260914T110836Z","host":"gha-macos14-ARM64","op":"info","tool":"brew-info","mean_s":0.66644834744,"stddev_s":0.06789425486006077,"min_s":0.53992916834,"max_s":0.7762725433400001,"status":"ok"}
+  ,{"timestamp":"20260914T110836Z","host":"gha-macos14-ARM64","op":"search","tool":"den-search","mean_s":0.30499010681999994,"stddev_s":0.032125847347684186,"min_s":0.27152850292,"max_s":0.37708608592,"status":"ok"}
+  ,{"timestamp":"20260914T110836Z","host":"gha-macos14-ARM64","op":"search","tool":"brew-search","mean_s":0.76339245252,"stddev_s":0.11319471014926547,"min_s":0.5498256689200001,"max_s":0.9210885859200001,"status":"ok"}
+  ,{"timestamp":"20260914T110836Z","host":"gha-macos14-ARM64","op":"install","tool":"den-install","mean_s":0.30863856086,"stddev_s":0.054672540230149676,"min_s":0.25878754386,"max_s":0.40019616886000003,"status":"ok"}
+  ,{"timestamp":"20260914T110836Z","host":"gha-macos14-ARM64","op":"install","tool":"brew-install","mean_s":1.3759586289400003,"stddev_s":0.13832582269052196,"min_s":1.17173439514,"max_s":1.5405547291400001,"status":"ok"}
+  ,{"timestamp":"20260914T110836Z","host":"gha-macos14-ARM64","op":"upgrade","tool":"den-upgrade","mean_s":0.26965367384,"stddev_s":0.009005192490479501,"min_s":0.25671191094000007,"max_s":0.28513911994,"status":"ok"}
+  ,{"timestamp":"20260914T110836Z","host":"gha-macos14-ARM64","op":"upgrade","tool":"brew-upgrade","mean_s":0.5627061993200001,"stddev_s":0.03441120482933574,"min_s":0.50867517032,"max_s":0.61894217032,"status":"ok"}
+]
