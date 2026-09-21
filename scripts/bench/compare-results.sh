@@ -23,9 +23,12 @@
 #   1. den is at least as fast as brew on every measured op.
 #   2. At least one op is "meaningfully" faster (>= MEANINGFUL_FACTOR x).
 #   3. No measured den op regressed by more than --max-regression vs a
-#      same-host baseline. Cross-host comparisons (e.g. local M4 Max vs
-#      GitHub Actions macos-14) are skipped — absolute times are not
-#      comparable across machines.
+#      same-host baseline, *and* by more than MIN_ABS_REGRESSION_S.
+#      Cross-host comparisons (e.g. local M4 Max vs GitHub Actions
+#      macos-14) are skipped — absolute times are not comparable across
+#      machines. Sub-floor deltas are also skipped: hyperfine cannot
+#      calibrate shell startup below ~5 ms, so a 0.2 ms `list` baseline
+#      vs a 6 ms remeasurement is noise, not a product regression.
 #
 # Exit status: 0 if the contract holds, 1 otherwise.
 
@@ -37,6 +40,13 @@ RESULTS_DIR="${REPO_ROOT}/bench/results"
 # A speedup is "meaningful" when den is at least this many times faster.
 MEANINGFUL_FACTOR="1.5"
 MAX_REGRESSION_PCT="25"
+# Hyperfine warns that commands under ~5 ms cannot have their shell
+# startup calibrated. A same-host % gate on those numbers (0.2 ms →
+# 6 ms = +2600%) is a false T68 failure. Require a 25 ms absolute
+# delta as well — large enough to ignore list noise, small enough that
+# the existing 50 ms same-host test (and any real info/install/upgrade
+# regression) still fails.
+MIN_ABS_REGRESSION_S="0.025"
 
 SNAPSHOT=""
 BASELINE=""
@@ -211,7 +221,8 @@ if [[ -n "${BASELINE}" && -f "${BASELINE}" ]]; then
         delta="$(awk -v b="${base}" -v n="${now}" 'BEGIN{ if (b>0) printf "%+.1f%%", (n-b)/b*100; else print "n/a" }')"
         verdict="ok"
         if awk -v b="${base}" -v n="${now}" -v p="${MAX_REGRESSION_PCT}" \
-            'BEGIN{ exit !(b>0 && (n-b)/b*100 > p) }'; then
+            -v a="${MIN_ABS_REGRESSION_S}" \
+            'BEGIN{ exit !(b>0 && (n-b)/b*100 > p && (n-b) > a) }'; then
             verdict="REGRESSED"
             PASS=false
         fi
