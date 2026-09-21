@@ -309,7 +309,7 @@ TEST_SUITE("bench_suite_present") {
         cleanup();
 
         CHECK_MESSAGE(r.exit_code == 0,
-                      "sub-25ms list remasurement vs a 0.2ms baseline must not fail T68:\n",
+                      "sub-25ms list remeasurement vs a 0.2ms baseline must not fail T68:\n",
                       r.output);
         CHECK_MESSAGE(r.output.find("REGRESSED") == std::string::npos,
                       "hyperfine list noise must not be reported as REGRESSED:\n", r.output);

@@ -28,7 +28,7 @@
 #      macos-14) are skipped — absolute times are not comparable across
 #      machines. Sub-floor deltas are also skipped: hyperfine cannot
 #      calibrate shell startup below ~5 ms, so a 0.2 ms `list` baseline
-#      vs a 6 ms remasurement is noise, not a product regression.
+#      vs a 6 ms remeasurement is noise, not a product regression.
 #
 # Exit status: 0 if the contract holds, 1 otherwise.
 
