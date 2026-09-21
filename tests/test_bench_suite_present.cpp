@@ -6,8 +6,9 @@
 // These checks assert the suite's *contract* exists — driver script, results
 // directory, regression checker, a committed baseline snapshot, and the CI
 // workflow — and that compare-results.sh is host-aware (cross-host
-// regression must not fail T68). The live hyperfine run itself is not
-// executed here (needs brew + a network).
+// regression must not fail T68) and ignores sub-floor hyperfine `list`
+// noise. The live hyperfine run itself is not executed here (needs brew
+// + a network).
 
 #include <doctest.h>
 
@@ -273,6 +274,45 @@ TEST_SUITE("bench_suite_present") {
                       "same-host +25% regression must still fail T68:\n", r.output);
         CHECK_MESSAGE(r.output.find("REGRESSED") != std::string::npos,
                       "expected REGRESSED verdict, got:\n", r.output);
+    }
+
+    TEST_CASE("compare-results.sh ignores sub-floor list noise vs a 0.2ms baseline") {
+        // Recreates run 35593127626: same host (gha-macos14-ARM64), den still
+        // beats brew on list (6.4 ms vs 23.8 ms), but the Sep 14 baseline
+        // recorded 0.2 ms ± 0.5 ms (min 0) — a hyperfine shell-calibration
+        // artifact. The % delta is +2600% and must not fail T68.
+        if (::system("jq --version >/dev/null 2>&1") != 0) {
+            WARN("jq not available — skipping compare-results.sh host-class tests");
+            return;
+        }
+
+        auto script = repo_root() / "scripts" / "bench" / "compare-results.sh";
+        REQUIRE(fs::exists(script));
+
+        std::string tmpl = (fs::temp_directory_path() / "den_bench_XXXXXX").string();
+        char* dir = ::mkdtemp(tmpl.data());
+        REQUIRE(dir != nullptr);
+        const fs::path tmp = dir;
+        const auto cleanup = [&]() {
+            std::error_code ec;
+            fs::remove_all(tmp, ec);
+        };
+
+        const fs::path snap = tmp / "snap.json";
+        const fs::path base = tmp / "base.json";
+        write_file(snap, bench_pair_json("gha-macos14-ARM64", 0.006431, 0.023763));
+        write_file(base, bench_pair_json("gha-macos14-ARM64", 0.000236, 0.027572));
+
+        const std::string cmd = script.string() + " \"" + snap.string() +
+                                "\" --baseline \"" + base.string() + "\" 2>&1";
+        const auto r = run_cmd(cmd);
+        cleanup();
+
+        CHECK_MESSAGE(r.exit_code == 0,
+                      "sub-25ms list remasurement vs a 0.2ms baseline must not fail T68:\n",
+                      r.output);
+        CHECK_MESSAGE(r.output.find("REGRESSED") == std::string::npos,
+                      "hyperfine list noise must not be reported as REGRESSED:\n", r.output);
     }
 
 } // TEST_SUITE

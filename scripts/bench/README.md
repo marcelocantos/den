@@ -121,9 +121,11 @@ scripts/bench/compare-results.sh bench/results/bench-NEW.json \
 
 It exits non-zero (failing CI) if den is no longer at least as fast as brew on
 every op, if no op is meaningfully faster, or if a den op regressed beyond the
-threshold against a **same-host** baseline. If no prior snapshot shares the
-current host class, the regression clause is skipped (den-vs-brew still
-gates) so a first-on-this-runner run can commit a CI baseline.
+threshold against a **same-host** baseline *and* by more than 25 ms (hyperfine
+cannot calibrate shell startup below ~5 ms; a 0.2 ms `list` vs 6 ms remasurement
+is noise). If no prior snapshot shares the current host class, the regression
+clause is skipped (den-vs-brew still gates) so a first-on-this-runner run can
+commit a CI baseline.
 
 ## Current status (🎯T68 — satisfied)
 
