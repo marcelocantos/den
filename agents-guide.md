@@ -50,7 +50,7 @@ den deps <name> --tree       # dependency tree
 den list                     # list installed packages
 den outdated                 # list packages with available upgrades
 den update                   # fetch latest package index
-den cleanup                  # remove old versions and cache files
+den cleanup [--dry-run]      # remove unused versions den itself installed, and the archive cache; never touches kegs den did not install (Homebrew, or installs from before ownership receipts)
 den autoremove               # remove unneeded dependencies
 den migrate                  # scan Homebrew Cellar for migration
 den daemon status            # background maintenance status
@@ -69,8 +69,9 @@ den smoke                    # run smoke tests
 ## File layout
 
 ```
-/opt/homebrew/Cellar/    # shared package store
+/opt/homebrew/Cellar/    # shared package store (Homebrew kegs are not den's to delete)
 └── <name>/<ver>/        # each version self-contained
+    └── DEN_RECEIPT.json # present only when den poured or built this keg
 
 ~/.den/
 ├── bin/den              # binary

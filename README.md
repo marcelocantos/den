@@ -157,7 +157,7 @@ Run `den --help` for the full list. Key commands:
 | `den env freeze` | Export environment as JSON lockfile |
 | `den whence <file-or-name>` | Show which package owns a file or command |
 | `den self-update` | Update den to the latest release |
-| `den cleanup` | Remove old versions and cache files |
+| `den cleanup` | Remove unused versions den installed, and clear the archive cache. Kegs den did not install (including Homebrew's) are left untouched. `--dry-run` previews the removal |
 | `den autoremove` | Remove unused dependencies |
 | `den services list` | Show managed services |
 | `den log [-n] [--json]` | Show upgrade activity log |

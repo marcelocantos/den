@@ -215,9 +215,18 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx, const 
 
     auto dest = package_path(config.store, name, version);
     if (fs::is_directory(dest) && !fs::is_empty(dest)) {
+        // Already on disk — may be a Homebrew keg in the shared Cellar.
+        // Do not claim it; cleanup must not delete what den did not build.
         SPDLOG_INFO("{} {} already built", name, version);
         return dest;
     }
+
+    // Successful builds below call this so cleanup can tell a keg den produced
+    // from one Homebrew poured into the same Cellar.
+    const auto claim = [&]() -> fs::path {
+        mark_keg_owned(dest, name, version);
+        return dest;
+    };
 
     std::cout << "==> Building " << name << " " << version << " from source\n";
 
@@ -252,7 +261,7 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx, const 
 
             if (ruby_rc == 0 && ruby_output.find("status=ok") != std::string::npos) {
                 std::cout << "==> Built " << name << " " << version << "\n";
-                return dest;
+                return claim();
             }
             SPDLOG_WARN("bundled ruby build failed (rc={}), falling back", ruby_rc);
             SPDLOG_DEBUG("output: {}", ruby_output.substr(0, 500));
@@ -284,7 +293,7 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx, const 
 
             if (ruby_rc == 0 && ruby_output.find("status=ok") != std::string::npos) {
                 std::cout << "==> Built " << name << " " << version << " (via formula)\n";
-                return dest;
+                return claim();
             }
             SPDLOG_WARN("ruby build failed (rc={}), falling back to parser", ruby_rc);
             std::error_code ec;
@@ -435,7 +444,7 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx, const 
 
     fs::remove_all(build_dir, ec);
     std::cout << "==> Built " << name << " " << version << "\n";
-    return dest;
+    return claim();
 }
 
 } // namespace den

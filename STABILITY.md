@@ -24,7 +24,7 @@ Snapshot as of v0.10.0.
 | `den info <name>` | Stable | |
 | `den search <text>` | Stable | |
 | `den deps <name> [--tree]` | Stable | |
-| `den cleanup` | Stable | Removes old versions and cache |
+| `den cleanup` | Stable | Removes den-owned unreferenced versions and the archive cache; never deletes kegs den did not install |
 | `den autoremove` | Stable | Removes unreferenced auto-deps |
 | `den doctor` | Stable | |
 | `den config` | Stable | |

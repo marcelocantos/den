@@ -5,9 +5,11 @@
 
 #include "../env/manifest.h"
 
+#include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <fstream>
 #include <map>
 #include <set>
 
@@ -162,6 +164,172 @@ std::vector<KegInfo> inspect_cellar(const fs::path& store, const fs::path& den_h
     });
 
     return result;
+}
+
+void mark_keg_owned(const fs::path& keg, const std::string& name, const std::string& version) {
+    std::error_code ec;
+    if (!fs::is_directory(keg, ec) || ec) {
+        SPDLOG_WARN("not recording keg ownership; directory missing: {}", keg.string());
+        return;
+    }
+
+    nlohmann::json receipt = {
+        {"poured_by", "den"},
+        {"name", name},
+        {"version", version},
+    };
+
+    // Write beside the final name, then rename into place, so a crash cannot
+    // leave a half-written receipt that a later cleanup might misread. Rename
+    // also replaces a symlink rather than following it.
+    const auto dest = keg / kDenReceiptFilename;
+    const auto tmp = keg / (std::string(kDenReceiptFilename) + ".tmp");
+    {
+        std::ofstream out(tmp, std::ios::trunc);
+        if (!out) {
+            SPDLOG_WARN("failed to write den receipt in {}", keg.string());
+            return;
+        }
+        out << receipt.dump(2) << '\n';
+        out.flush();
+        if (!out) {
+            SPDLOG_WARN("failed to write den receipt in {}", keg.string());
+            fs::remove(tmp, ec);
+            return;
+        }
+    }
+
+    fs::rename(tmp, dest, ec);
+    if (ec) {
+        SPDLOG_WARN("failed to install den receipt in {}: {}", keg.string(), ec.message());
+        fs::remove(tmp, ec);
+    }
+}
+
+bool keg_owned_by_den(const fs::path& keg) {
+    const auto receipt = keg / kDenReceiptFilename;
+    std::error_code ec;
+    // A symlink could point at a receipt planted outside this keg. Only a
+    // regular file sitting in the keg counts.
+    if (fs::is_symlink(receipt, ec) || ec) {
+        return false;
+    }
+    if (!fs::is_regular_file(receipt, ec) || ec) {
+        return false;
+    }
+
+    std::ifstream in(receipt);
+    if (!in) {
+        return false;
+    }
+
+    try {
+        const auto j = nlohmann::json::parse(in);
+        if (!j.is_object()) {
+            return false;
+        }
+        if (!j.contains("poured_by") || !j["poured_by"].is_string() || j["poured_by"] != "den") {
+            return false;
+        }
+        if (!j.contains("name") || !j["name"].is_string()) {
+            return false;
+        }
+        if (!j.contains("version") || !j["version"].is_string()) {
+            return false;
+        }
+        // The receipt must name this directory. A copy of some other keg's
+        // receipt does not authorise deleting this one.
+        if (j["name"].get<std::string>() != keg.parent_path().filename().string()) {
+            return false;
+        }
+        if (j["version"].get<std::string>() != keg.filename().string()) {
+            return false;
+        }
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+namespace {
+
+void remove_empty_formula_dir(const fs::path& store, const fs::path& keg) {
+    const auto parent = keg.parent_path();
+    if (parent.empty() || parent == store) {
+        return;
+    }
+    std::error_code ec;
+    if (!fs::is_directory(parent, ec) || ec) {
+        return;
+    }
+    if (!fs::is_empty(parent, ec) || ec) {
+        return;
+    }
+    fs::remove(parent, ec);
+}
+
+} // namespace
+
+CleanupReport cleanup_kegs(const fs::path& store, const fs::path& den_home, const fs::path& cache,
+                           bool dry_run) {
+    // Versions any environment still resolves to. A keg stays while one env
+    // references it, even if another env has moved on.
+    std::set<std::string> referenced;
+    for (const auto& env_path : list_all(den_home)) {
+        for (const auto& [name, version] : resolve(den_home, env_path)) {
+            referenced.insert(name + "/" + version);
+        }
+    }
+
+    CleanupReport report;
+    for (const auto& pkg : list_installed(store)) {
+        if (referenced.count(pkg.name + "/" + pkg.version)) {
+            continue;
+        }
+        // No receipt means den did not install this keg (Homebrew did, or den
+        // poured it before receipts existed). Leave it alone.
+        if (!keg_owned_by_den(pkg.path)) {
+            ++report.kept_unowned;
+            continue;
+        }
+        if (!dry_run) {
+            std::error_code ec;
+            fs::remove_all(pkg.path, ec);
+            if (ec || fs::exists(pkg.path)) {
+                SPDLOG_WARN("cleanup: failed to remove {} {} ({})", pkg.name, pkg.version,
+                            ec ? ec.message() : "directory still present");
+                continue;
+            }
+            remove_empty_formula_dir(store, pkg.path);
+        }
+        report.removed.push_back(pkg);
+    }
+
+    std::sort(report.removed.begin(), report.removed.end(),
+              [](const InstalledPackage& a, const InstalledPackage& b) {
+                  if (a.name != b.name) {
+                      return a.name < b.name;
+                  }
+                  return a.version < b.version;
+              });
+
+    const auto cache_dir = cache / "archives";
+    if (fs::is_directory(cache_dir)) {
+        if (dry_run) {
+            report.cache_cleared = true;
+        } else {
+            std::error_code ec;
+            fs::remove_all(cache_dir, ec);
+            if (ec) {
+                SPDLOG_WARN("cleanup: failed to clear archive cache {}: {}", cache_dir.string(),
+                            ec.message());
+            } else {
+                report.cache_cleared = true;
+            }
+        }
+    }
+
+    return report;
 }
 
 } // namespace den
