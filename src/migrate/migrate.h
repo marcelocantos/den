@@ -110,16 +110,19 @@ struct MigrateOptions {
     bool query_services = false;
 };
 
-/// Migrate packages from the Homebrew Cellar into den's root manifest.
+/// Migrate packages from the Homebrew Cellar into den's root environment.
 ///
 /// If names is empty, scans the entire Cellar; otherwise migrates only the
 /// named formulae. For each formula found, the latest version is recorded in
-/// den's root manifest. Files are not copied — this is metadata migration only.
+/// the root environment manifest (`manifests/ROOT/manifest.json`) via
+/// `with_manifest`, the same path and schema `den list` reads. Files are not
+/// copied — this is metadata migration only. Existing root-manifest entries
+/// (any provider) are left unchanged.
 ///
-/// In addition to formulae, this records casks, taps, and `brew services`
-/// state into the same ROOT.json manifest. The migration is non-destructive
-/// (Homebrew's files are never modified) and idempotent (re-running picks up
-/// new installs without disturbing existing den state).
+/// Casks and taps are merged into settings (`config.json`); `brew services`
+/// state is merged into `services/migrated.json`. The migration is
+/// non-destructive (Homebrew's files are never modified) and idempotent
+/// (re-running picks up new installs without disturbing existing den state).
 ///
 /// Prints a summary: N formulae, N casks, N taps, N services.
 MigrationSummary migrate_from_homebrew(const Config& config, const std::vector<std::string>& names,
@@ -151,10 +154,12 @@ struct HealthReport {
     }
 };
 
-/// Verify a completed migration: every manifest formula resolves to a keg in
-/// the Cellar, every cask resolves to a Caskroom entry, and recorded services
-/// are accounted for. Read-only; touches only den_home and (read-only) the
-/// Homebrew Cellar/Caskroom. Prints a summary line when `print` is true.
+/// Verify a completed migration against the files the runtime actually uses:
+/// every Homebrew formula in the root manifest resolves to a keg in the
+/// Cellar, every recorded cask resolves to a Caskroom entry, and recorded
+/// services are accounted for. Read-only; touches only den_home and
+/// (read-only) the Homebrew Cellar/Caskroom. Prints a summary line when
+/// `print` is true.
 HealthReport check_migration_health(const Config& config, bool print = true);
 
 } // namespace den

@@ -3,8 +3,14 @@
 
 #include "migrate.h"
 
+#include "../core/error.h"
+#include "../env/manifest.h"
+#include "../settings/settings.h"
+
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
+
+#include <sys/stat.h>
 
 #include <algorithm>
 #include <array>
@@ -45,35 +51,90 @@ std::pair<int, std::string> run_capture(const std::string& cmd) {
     return {WIFEXITED(status) ? WEXITSTATUS(status) : -1, output};
 }
 
-/// Load den's root manifest (JSON at den_home/manifests/ROOT.json).
-nlohmann::json load_root_manifest(const fs::path& manifest_path) {
-    nlohmann::json manifest;
-    if (fs::is_regular_file(manifest_path)) {
-        std::ifstream f(manifest_path);
-        if (f) {
-            try {
-                manifest = nlohmann::json::parse(f);
-            } catch (const nlohmann::json::exception& e) {
-                SPDLOG_WARN("Could not parse existing root manifest: {}", e.what());
-            }
+/// Root environment. `den list` resolves this manifest (or a child that
+/// inherits it) via `resolve_per_provider`.
+constexpr const char* kRootEnv = "/";
+
+/// Same path `manifest_file` writes: manifests/ROOT/manifest.json.
+fs::path root_manifest_path(const fs::path& den_home) {
+    return den_home / "manifests" / env_slug(kRootEnv) / "manifest.json";
+}
+
+/// Brew-service records adopted by migrate. A file, not a service directory,
+/// so `den services list` does not treat them as supervised processes.
+fs::path migrated_services_path(const fs::path& den_home) {
+    return den_home / "services" / "migrated.json";
+}
+
+bool manifest_has_package(const Manifest& manifest, const std::string& name) {
+    auto it = manifest.packages.find("homebrew");
+    return it != manifest.packages.end() && it->second.count(name) != 0;
+}
+
+/// Load services/migrated.json. `unreadable` means the file exists but is
+/// not a JSON array — callers must not overwrite it.
+struct ServiceRecords {
+    nlohmann::json services = nlohmann::json::array();
+    bool unreadable = false;
+};
+
+ServiceRecords load_migrated_services(const fs::path& path) {
+    ServiceRecords out;
+    if (!fs::exists(path)) {
+        return out;
+    }
+    std::ifstream f(path);
+    if (!f) {
+        out.unreadable = true;
+        return out;
+    }
+    try {
+        auto j = nlohmann::json::parse(f);
+        if (!j.is_array()) {
+            out.unreadable = true;
+            return out;
+        }
+        out.services = std::move(j);
+    } catch (const nlohmann::json::exception& e) {
+        SPDLOG_WARN("Could not parse migrated services {}: {}", path.string(), e.what());
+        out.unreadable = true;
+    }
+    return out;
+}
+
+void write_json_atomic(const fs::path& path, const nlohmann::json& j) {
+    std::error_code ec;
+    fs::create_directories(path.parent_path(), ec);
+    const fs::path tmp = path.string() + ".tmp";
+    {
+        std::ofstream out(tmp);
+        if (!out) {
+            SPDLOG_ERROR("Failed to write {}", tmp.string());
+            return;
+        }
+        out << j.dump(2) << "\n";
+        if (!out) {
+            SPDLOG_ERROR("Failed to flush {}", tmp.string());
+            return;
         }
     }
-    if (!manifest.contains("packages") || !manifest["packages"].is_object()) {
-        manifest["packages"] = nlohmann::json::object();
+    fs::rename(tmp, path, ec);
+    if (ec) {
+        SPDLOG_ERROR("Failed to install {}: {}", path.string(), ec.message());
     }
-    if (!manifest.contains("auto") || !manifest["auto"].is_array()) {
-        manifest["auto"] = nlohmann::json::array();
+}
+
+std::set<std::string> service_names(const nlohmann::json& services) {
+    std::set<std::string> names;
+    if (!services.is_array()) {
+        return names;
     }
-    if (!manifest.contains("casks") || !manifest["casks"].is_object()) {
-        manifest["casks"] = nlohmann::json::object();
+    for (const auto& s : services) {
+        if (s.is_object() && s.contains("name") && s["name"].is_string()) {
+            names.insert(s["name"].get<std::string>());
+        }
     }
-    if (!manifest.contains("taps") || !manifest["taps"].is_array()) {
-        manifest["taps"] = nlohmann::json::array();
-    }
-    if (!manifest.contains("services") || !manifest["services"].is_array()) {
-        manifest["services"] = nlohmann::json::array();
-    }
-    return manifest;
+    return names;
 }
 
 } // namespace
@@ -467,40 +528,26 @@ MigrationSummary migrate_from_homebrew(const Config& config, const std::vector<s
     SPDLOG_INFO("Found {} kegs, {} casks, {} taps, {} services", kegs.size(), casks.size(),
                 taps.size(), services.size());
 
-    // Load den's root manifest.
-    const fs::path manifest_dir = config.den_home / "manifests";
-    const fs::path manifest_path = manifest_dir / "ROOT.json";
-    nlohmann::json manifest = load_root_manifest(manifest_path);
+    // Read the runtime root manifest. A present-but-corrupt file throws
+    // (read_manifest) so we never replace it with a partial import.
+    const Manifest current = read_manifest(config.den_home, kRootEnv);
+    Settings settings = read_settings(config.den_home);
+    const fs::path services_path = migrated_services_path(config.den_home);
+    ServiceRecords service_records = load_migrated_services(services_path);
+    std::set<std::string> svc_set = service_names(service_records.services);
 
-    auto& pkgs = manifest["packages"];
-    auto& auto_pkgs = manifest["auto"];
-    auto& cask_obj = manifest["casks"];
-    auto& tap_arr = manifest["taps"];
-    auto& svc_arr = manifest["services"];
-
-    std::set<std::string> auto_set;
-    for (const auto& a : auto_pkgs) {
-        if (a.is_string()) {
-            auto_set.insert(a.get<std::string>());
-        }
-    }
-    std::set<std::string> tap_set;
-    for (const auto& t : tap_arr) {
-        if (t.is_string()) {
-            tap_set.insert(t.get<std::string>());
-        }
-    }
-    std::set<std::string> svc_set;
-    for (const auto& s : svc_arr) {
-        if (s.is_object() && s.contains("name") && s["name"].is_string()) {
-            svc_set.insert(s["name"].get<std::string>());
-        }
-    }
+    struct FormulaImport {
+        std::string name;
+        std::string version;
+        bool auto_dep = false;
+    };
+    std::vector<FormulaImport> new_formulae;
 
     MigrationSummary summary;
-    bool changed = false;
 
     // Formulae: kegs are sorted newest-first per name; take the first.
+    // Names already in the homebrew bucket are left alone — including their
+    // version and whether they are an auto-dep.
     {
         std::set<std::string> seen;
         for (const auto& keg : kegs) {
@@ -510,25 +557,19 @@ MigrationSummary migrate_from_homebrew(const Config& config, const std::vector<s
             seen.insert(keg.name);
             ++summary.formulae;
 
-            if (pkgs.contains(keg.name)) {
-                continue; // already tracked — never disturb existing state
+            if (manifest_has_package(current, keg.name)) {
+                continue;
             }
             const auto tab = read_tab(keg.path);
             const bool on_request = tab ? tab->installed_on_request : true;
-
-            if (!opts.dry_run) {
-                pkgs[keg.name] = keg.version;
-                if (!on_request && auto_set.find(keg.name) == auto_set.end()) {
-                    auto_pkgs.push_back(keg.name);
-                    auto_set.insert(keg.name);
-                }
-            }
-            changed = true;
+            new_formulae.push_back({keg.name, keg.version, !on_request});
             SPDLOG_DEBUG("Formula {}: {}{}", keg.name, keg.version, on_request ? "" : " [auto]");
         }
     }
 
-    // Casks.
+    // Casks live in settings, not the package manifest: they are not Cellar
+    // kegs, and `den upgrade` would otherwise try to pour them as bottles.
+    bool settings_changed = false;
     {
         std::set<std::string> seen;
         for (const auto& cask : casks) {
@@ -538,76 +579,102 @@ MigrationSummary migrate_from_homebrew(const Config& config, const std::vector<s
             seen.insert(cask.name);
             ++summary.casks;
 
-            if (cask_obj.contains(cask.name)) {
+            if (settings.casks.count(cask.name)) {
                 continue;
             }
             if (!opts.dry_run) {
-                cask_obj[cask.name] = cask.version;
+                settings.casks[cask.name] = cask.version;
+                settings_changed = true;
             }
-            changed = true;
             SPDLOG_DEBUG("Cask {}: {}", cask.name, cask.version);
         }
     }
 
-    // Taps.
+    // Taps are registered in the same settings map `den tap` reads. The
+    // source is the existing checkout; the tap is not copied and Homebrew
+    // is not modified.
     for (const auto& tap : taps) {
         ++summary.taps;
-        if (tap_set.count(tap.name)) {
+        if (settings.taps.taps.count(tap.name)) {
             continue;
         }
         if (!opts.dry_run) {
-            tap_arr.push_back(tap.name);
-            tap_set.insert(tap.name);
+            settings.taps.taps[tap.name] = tap.path.string();
+            settings_changed = true;
         }
-        changed = true;
         SPDLOG_DEBUG("Tap {}", tap.name);
     }
 
     // Services.
+    bool services_changed = false;
     for (const auto& svc : services) {
         ++summary.services;
         if (svc_set.count(svc.name)) {
             continue;
         }
         if (!opts.dry_run) {
-            nlohmann::json s;
-            s["name"] = svc.name;
-            s["status"] = svc.status;
-            s["running"] = svc.running;
-            if (!svc.user.empty()) {
-                s["user"] = svc.user;
+            if (service_records.unreadable) {
+                SPDLOG_ERROR("Refusing to overwrite unreadable service record {}",
+                             services_path.string());
+            } else {
+                nlohmann::json s;
+                s["name"] = svc.name;
+                s["status"] = svc.status;
+                s["running"] = svc.running;
+                if (!svc.user.empty()) {
+                    s["user"] = svc.user;
+                }
+                if (!svc.plist_path.empty()) {
+                    s["plist"] = svc.plist_path.string();
+                }
+                service_records.services.push_back(std::move(s));
+                svc_set.insert(svc.name);
+                services_changed = true;
             }
-            if (!svc.plist_path.empty()) {
-                s["plist"] = svc.plist_path.string();
-            }
-            svc_arr.push_back(std::move(s));
-            svc_set.insert(svc.name);
         }
-        changed = true;
         SPDLOG_DEBUG("Service {} ({})", svc.name, svc.status);
     }
 
-    // Write manifest back (skip entirely in dry-run mode).
-    if (!opts.dry_run && changed) {
-        std::error_code ec;
-        fs::create_directories(manifest_dir, ec);
-        // Atomic write: temp file + rename, preserving any future attrs.
-        const fs::path tmp = manifest_path.string() + ".tmp";
-        {
-            std::ofstream out(tmp);
-            if (!out) {
-                SPDLOG_ERROR("Failed to write root manifest to {}", tmp.string());
-            } else {
-                out << manifest.dump(2) << "\n";
+    // Formulae go through the production read-modify-write path so the
+    // on-disk schema matches every other `den install`.
+    if (!opts.dry_run && !new_formulae.empty()) {
+        with_manifest(config.den_home, kRootEnv, [&](Manifest& m) {
+            auto& pkgs = m.packages["homebrew"];
+            auto& autos = m.auto_deps["homebrew"];
+            for (const auto& imp : new_formulae) {
+                if (pkgs.count(imp.name)) {
+                    continue; // lost the race, or already tracked
+                }
+                pkgs[imp.name] = imp.version;
+                if (imp.auto_dep) {
+                    autos.insert(imp.name);
+                }
             }
+        });
+    } else if (!opts.dry_run && (settings_changed || services_changed) &&
+               !fs::is_regular_file(root_manifest_path(config.den_home))) {
+        // Cask/tap/service-only import: leave a root manifest so the health
+        // check and `den list` look at the runtime path. with_manifest
+        // re-reads under the lock, so a manifest created concurrently is kept.
+        with_manifest(config.den_home, kRootEnv, [](Manifest&) {});
+    }
+
+    if (!opts.dry_run && settings_changed) {
+        write_settings(config.den_home, settings);
+        const fs::path config_path = config.den_home / "config.json";
+        if (::chmod(config_path.c_str(), 0600) != 0) {
+            SPDLOG_WARN("could not restrict permissions on {}", config_path.string());
         }
-        if (fs::exists(tmp)) {
-            fs::rename(tmp, manifest_path, ec);
-            if (ec) {
-                SPDLOG_ERROR("Failed to install manifest {}: {}", manifest_path.string(),
-                             ec.message());
-            }
-        }
+    }
+
+    if (!opts.dry_run && services_changed) {
+        std::sort(service_records.services.begin(), service_records.services.end(),
+                  [](const nlohmann::json& a, const nlohmann::json& b) {
+                      const std::string an = a.value("name", "");
+                      const std::string bn = b.value("name", "");
+                      return an < bn;
+                  });
+        write_json_atomic(services_path, service_records.services);
     }
 
     // --- Summary output ---
@@ -630,7 +697,7 @@ MigrationSummary migrate_from_homebrew(const Config& config, const std::vector<s
     if (!opts.dry_run) {
         std::cout << "==> Homebrew was not modified; `brew` continues to work.\n";
         std::cout << "    To roll back den's migration, remove "
-                  << (manifest_dir / "ROOT.json").string() << "\n";
+                  << root_manifest_path(config.den_home).string() << "\n";
     }
 
     return summary;
@@ -643,16 +710,15 @@ MigrationSummary migrate_from_homebrew(const Config& config, const std::vector<s
 HealthReport check_migration_health(const Config& config, bool print) {
     HealthReport report;
 
-    const fs::path manifest_path = config.den_home / "manifests" / "ROOT.json";
-    nlohmann::json manifest;
+    const fs::path manifest_path = root_manifest_path(config.den_home);
+    Manifest manifest;
     if (fs::is_regular_file(manifest_path)) {
-        std::ifstream f(manifest_path);
         try {
-            manifest = nlohmann::json::parse(f);
-        } catch (const nlohmann::json::exception& e) {
-            report.issues.push_back({std::string("ROOT.json is malformed: ") + e.what(), true});
+            manifest = read_manifest(config.den_home, kRootEnv);
+        } catch (const UserError& e) {
+            report.issues.push_back({e.what(), true});
             if (print) {
-                std::cout << "[error] ROOT.json is malformed: " << e.what() << "\n";
+                std::cout << "[error] " << e.what() << "\n";
             }
             return report;
         }
@@ -672,14 +738,11 @@ HealthReport check_migration_health(const Config& config, bool print) {
         }
     };
 
-    // Formulae: each manifest package must resolve to a keg directory.
-    if (manifest.contains("packages") && manifest["packages"].is_object()) {
-        for (const auto& [name, ver] : manifest["packages"].items()) {
-            if (!ver.is_string()) {
-                add("package '" + name + "' has a non-string version", true);
-                continue;
-            }
-            const fs::path keg = config.homebrew_cellar / name / ver.get<std::string>();
+    // Formulae: each Homebrew package in the runtime manifest must resolve
+    // to a keg. Other providers are not Cellar packages.
+    if (auto it = manifest.packages.find("homebrew"); it != manifest.packages.end()) {
+        for (const auto& [name, ver] : it->second) {
+            const fs::path keg = config.homebrew_cellar / name / ver;
             if (!fs::is_directory(keg)) {
                 add("formula '" + name + "' does not resolve to a keg: " + keg.string(), true);
             } else {
@@ -688,33 +751,28 @@ HealthReport check_migration_health(const Config& config, bool print) {
         }
     }
 
-    // Casks: each manifest cask must resolve to a Caskroom version directory.
-    if (manifest.contains("casks") && manifest["casks"].is_object()) {
-        for (const auto& [name, ver] : manifest["casks"].items()) {
-            if (!ver.is_string()) {
-                add("cask '" + name + "' has a non-string version", true);
-                continue;
-            }
-            const fs::path dir = config.homebrew_caskroom / name / ver.get<std::string>();
-            if (!fs::is_directory(dir)) {
-                // Warn, not error — casks may be self-updating apps whose
-                // on-disk version drifts from the recorded one.
-                add("cask '" + name + "' not found in Caskroom: " + dir.string(), false);
-            } else {
-                ++report.casks_ok;
-            }
+    // Casks: recorded in settings. A missing version dir is a warning —
+    // casks may be self-updating apps whose on-disk version drifts.
+    const Settings settings = read_settings(config.den_home);
+    for (const auto& [name, ver] : settings.casks) {
+        const fs::path dir = config.homebrew_caskroom / name / ver;
+        if (!fs::is_directory(dir)) {
+            add("cask '" + name + "' not found in Caskroom: " + dir.string(), false);
+        } else {
+            ++report.casks_ok;
         }
     }
 
     // Taps: count only (a tap is a name reference; den re-adds it lazily).
-    if (manifest.contains("taps") && manifest["taps"].is_array()) {
-        report.taps_ok = static_cast<int>(manifest["taps"].size());
-    }
+    report.taps_ok = static_cast<int>(settings.taps.taps.size());
 
-    // Services: recorded-running services should still have a plist on disk
-    // (or be reported running by the OS). We only check the plist reference.
-    if (manifest.contains("services") && manifest["services"].is_array()) {
-        for (const auto& s : manifest["services"]) {
+    // Services: recorded-running services should still have a plist on disk.
+    const fs::path services_path = migrated_services_path(config.den_home);
+    const ServiceRecords service_records = load_migrated_services(services_path);
+    if (service_records.unreadable) {
+        add("migrated services record is malformed: " + services_path.string(), true);
+    } else if (service_records.services.is_array()) {
+        for (const auto& s : service_records.services) {
             if (!s.is_object() || !s.contains("name") || !s["name"].is_string()) {
                 continue;
             }

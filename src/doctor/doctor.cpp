@@ -3,15 +3,15 @@
 
 #include "doctor.h"
 
+#include "../core/error.h"
+#include "../env/manifest.h"
 #include "../platform/platform.h"
 #include "trust_checks.h"
 
-#include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
 #include <cerrno>
 #include <cstring>
-#include <fstream>
 #include <iostream>
 #include <string>
 #include <sys/stat.h>
@@ -74,33 +74,37 @@ void check_store(const Config& config, std::vector<Finding>& findings) {
 
 // ---------------------------------------------------------------------------
 // Check 3: manifest integrity
-// Verify <den_home>/manifest.json is valid JSON (if it exists).
+// Validate every runtime manifest (`manifests/<slug>/manifest.json`) with the
+// same reader `den list` uses. A fresh install with no manifests is fine.
+// Leftover files at the historical wrong paths are reported, not parsed as
+// if they were the live manifest.
 // ---------------------------------------------------------------------------
 void check_manifest(const Config& config, std::vector<Finding>& findings) {
     SPDLOG_DEBUG("check: manifest integrity");
 
-    fs::path manifest = config.den_home / "manifest.json";
-    if (!fs::exists(manifest)) {
-        // No manifest yet — not an error for a fresh install.
-        SPDLOG_DEBUG("manifest.json absent, skipping");
-        return;
-    }
-
-    std::ifstream f(manifest);
-    if (!f) {
-        error(findings, "cannot read manifest.json: " + manifest.string());
-        return;
-    }
-
-    try {
-        nlohmann::json j;
-        f >> j;
-        if (!j.is_object()) {
-            error(findings, "manifest.json is not a JSON object: " + manifest.string());
+    for (const fs::path& legacy :
+         {config.den_home / "manifest.json", config.den_home / "manifests" / "ROOT.json"}) {
+        std::error_code ec;
+        if (fs::is_regular_file(legacy, ec)) {
+            warn(findings, "ignored non-runtime manifest " + legacy.string() +
+                               " (den reads manifests/<env>/manifest.json)");
         }
-    } catch (const nlohmann::json::parse_error& e) {
-        error(findings, std::string("manifest.json parse error: ") + e.what() + " (" +
-                            manifest.string() + ")");
+    }
+
+    std::vector<std::string> envs;
+    try {
+        envs = list_all(config.den_home);
+    } catch (const UserError& e) {
+        error(findings, e.what());
+        return;
+    }
+
+    for (const auto& env : envs) {
+        try {
+            (void)read_manifest(config.den_home, env);
+        } catch (const UserError& e) {
+            error(findings, e.what());
+        }
     }
 }
 
@@ -237,7 +241,7 @@ void check_file_permissions(const Config& config, std::vector<Finding>& findings
     for (const auto& p : sensitive) {
         if (!fs::exists(p))
             continue;
-        struct stat st{};
+        struct stat st {};
         if (::stat(p.c_str(), &st) != 0) {
             warn(findings, "cannot stat " + p.string() + ": " + std::strerror(errno));
             continue;

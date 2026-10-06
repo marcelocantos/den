@@ -21,14 +21,20 @@
 #include <doctest.h>
 
 #include "core/config.h"
+#include "env/manifest.h"
 #include "migrate/migrate.h"
+#include "settings/settings.h"
+
+#include "core/error.h"
 
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <map>
 #include <nlohmann/json.hpp>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <unistd.h>
@@ -109,14 +115,14 @@ static fs::path build_fixture_cellar(const fs::path& root) {
     return cellar;
 }
 
-// Read ROOT.json manifest from <den_home>/manifests/ROOT.json.
-static nlohmann::json read_manifest(const fs::path& den_home) {
-    const fs::path p = den_home / "manifests" / "ROOT.json";
-    if (!fs::is_regular_file(p)) {
-        return nlohmann::json{};
-    }
-    std::ifstream f(p);
-    return nlohmann::json::parse(f);
+// Runtime root manifest, the file `den list` reads.
+static Manifest root_manifest(const fs::path& den_home) {
+    return read_manifest(den_home, "/");
+}
+
+static std::map<std::string, std::string> homebrew_packages(const Manifest& manifest) {
+    auto it = manifest.packages.find("homebrew");
+    return it == manifest.packages.end() ? std::map<std::string, std::string>{} : it->second;
 }
 
 // ---------------------------------------------------------------------------
@@ -208,18 +214,19 @@ TEST_SUITE("migration::fixture") {
 
         migrate_from_homebrew(cfg, {});
 
-        const auto manifest = read_manifest(cfg.den_home);
-        REQUIRE(manifest.contains("packages"));
-        const auto& pkgs = manifest["packages"];
+        const auto manifest = root_manifest(cfg.den_home);
+        const auto& pkgs = homebrew_packages(manifest);
 
-        CHECK(pkgs.contains("git"));
-        CHECK(pkgs["git"].get<std::string>() == "2.44.0");
+        CHECK(pkgs.at("git") == "2.44.0");
+        CHECK(pkgs.at("curl") == "8.7.1");
+        CHECK(pkgs.at("python@3.12") == "3.12.3");
 
-        CHECK(pkgs.contains("curl"));
-        CHECK(pkgs["curl"].get<std::string>() == "8.7.1");
-
-        CHECK(pkgs.contains("python@3.12"));
-        CHECK(pkgs["python@3.12"].get<std::string>() == "3.12.3");
+        // Same API `den list` uses.
+        const auto listed = resolve_per_provider(cfg.den_home, "/");
+        CHECK(listed.at("homebrew").at("git") == "2.44.0");
+        CHECK(listed.at("homebrew").at("curl") == "8.7.1");
+        CHECK_FALSE(fs::exists(cfg.den_home / "manifests" / "ROOT.json"));
+        CHECK(fs::is_regular_file(cfg.den_home / "manifests" / "ROOT" / "manifest.json"));
     }
 
     // -------------------------------------------------------------------------
@@ -235,27 +242,13 @@ TEST_SUITE("migration::fixture") {
 
         migrate_from_homebrew(cfg, {});
 
-        const auto manifest = read_manifest(cfg.den_home);
-        REQUIRE(manifest.contains("auto"));
-        const auto& auto_arr = manifest["auto"];
+        const auto manifest = root_manifest(cfg.den_home);
+        const auto& autos = manifest.auto_deps.at("homebrew");
 
-        // curl was installed_on_request=false, so it appears in the auto array.
-        bool curl_auto = false;
-        for (const auto& a : auto_arr) {
-            if (a.is_string() && a.get<std::string>() == "curl") {
-                curl_auto = true;
-            }
-        }
-        CHECK(curl_auto);
-
-        // git was installed_on_request=true, should NOT be in auto array.
-        bool git_auto = false;
-        for (const auto& a : auto_arr) {
-            if (a.is_string() && a.get<std::string>() == "git") {
-                git_auto = true;
-            }
-        }
-        CHECK_FALSE(git_auto);
+        // curl was installed_on_request=false, so it is an auto-dep.
+        CHECK(autos.count("curl") == 1);
+        // git was installed_on_request=true, so it is not.
+        CHECK(autos.count("git") == 0);
     }
 
     // -------------------------------------------------------------------------
@@ -272,13 +265,11 @@ TEST_SUITE("migration::fixture") {
         // Migrate only git.
         migrate_from_homebrew(cfg, {"git"});
 
-        const auto manifest = read_manifest(cfg.den_home);
-        REQUIRE(manifest.contains("packages"));
-        const auto& pkgs = manifest["packages"];
+        const auto& pkgs = homebrew_packages(root_manifest(cfg.den_home));
 
-        CHECK(pkgs.contains("git"));
-        CHECK_FALSE(pkgs.contains("curl"));
-        CHECK_FALSE(pkgs.contains("python@3.12"));
+        CHECK(pkgs.count("git") == 1);
+        CHECK(pkgs.count("curl") == 0);
+        CHECK(pkgs.count("python@3.12") == 0);
     }
 
     // -------------------------------------------------------------------------
@@ -300,10 +291,9 @@ TEST_SUITE("migration::fixture") {
 
         migrate_from_homebrew(cfg, {});
 
-        const auto manifest = read_manifest(cfg.den_home);
-        REQUIRE(manifest.contains("packages"));
+        const auto& pkgs = homebrew_packages(root_manifest(cfg.den_home));
         // Lexicographically "2.2.0" > "2.1.1" — newest is recorded.
-        CHECK(manifest["packages"]["tree"].get<std::string>() == "2.2.0");
+        CHECK(pkgs.at("tree") == "2.2.0");
     }
 
     // -------------------------------------------------------------------------
@@ -361,11 +351,11 @@ TEST_SUITE("migration::fixture") {
         const auto summary = migrate_from_homebrew(cfg, {});
         CHECK(summary.casks == 2);
 
-        const auto manifest = read_manifest(cfg.den_home);
-        REQUIRE(manifest.contains("casks"));
-        const auto& casks = manifest["casks"];
-        CHECK(casks["visual-studio-code"].get<std::string>() == "1.88.0");
-        CHECK(casks["audacity"].get<std::string>() == "3.7.8");
+        const auto settings = read_settings(cfg.den_home);
+        CHECK(settings.casks.at("visual-studio-code") == "1.88.0");
+        CHECK(settings.casks.at("audacity") == "3.7.8");
+        // Casks are not Cellar packages, so they stay out of `den list`.
+        CHECK(homebrew_packages(root_manifest(cfg.den_home)).count("audacity") == 0);
     }
 
     // -------------------------------------------------------------------------
@@ -412,17 +402,12 @@ TEST_SUITE("migration::fixture") {
         const auto summary = migrate_from_homebrew(cfg, {});
         CHECK(summary.taps == 3);
 
-        const auto manifest = read_manifest(cfg.den_home);
-        REQUIRE(manifest.contains("taps"));
-        std::vector<std::string> tap_names;
-        for (const auto& t : manifest["taps"]) {
-            tap_names.push_back(t.get<std::string>());
-        }
-        std::sort(tap_names.begin(), tap_names.end());
-        REQUIRE(tap_names.size() == 3);
-        CHECK(tap_names[0] == "homebrew/cask");
-        CHECK(tap_names[1] == "homebrew/core");
-        CHECK(tap_names[2] == "marcelocantos/tap");
+        const auto settings = read_settings(cfg.den_home);
+        CHECK(settings.taps.taps.count("homebrew/cask") == 1);
+        CHECK(settings.taps.taps.count("homebrew/core") == 1);
+        CHECK(settings.taps.taps.count("marcelocantos/tap") == 1);
+        CHECK(settings.taps.taps.at("homebrew/core") ==
+              (taps / "homebrew" / "homebrew-core").string());
     }
 
     // -------------------------------------------------------------------------
@@ -491,12 +476,19 @@ TEST_SUITE("migration::fixture") {
         const auto summary = migrate_from_homebrew(cfg, {}, opts);
         CHECK(summary.services == 1);
 
-        const auto manifest = read_manifest(cfg.den_home);
-        REQUIRE(manifest.contains("services"));
-        REQUIRE(manifest["services"].size() == 1);
-        const auto& svc = manifest["services"][0];
-        CHECK(svc["name"].get<std::string>() == "redis");
-        CHECK(svc["running"].get<bool>() == true);
+        const fs::path services_path = cfg.den_home / "services" / "migrated.json";
+        REQUIRE(fs::is_regular_file(services_path));
+        std::ifstream in(services_path);
+        const auto recorded = nlohmann::json::parse(in);
+        REQUIRE(recorded.is_array());
+        REQUIRE(recorded.size() == 1);
+        CHECK(recorded[0]["name"].get<std::string>() == "redis");
+        CHECK(recorded[0]["running"].get<bool>() == true);
+
+        // Re-run does not duplicate the service record.
+        migrate_from_homebrew(cfg, {}, opts);
+        std::ifstream in2(services_path);
+        CHECK(nlohmann::json::parse(in2).size() == 1);
     }
 
     // -------------------------------------------------------------------------
@@ -520,8 +512,11 @@ TEST_SUITE("migration::fixture") {
         CHECK(summary.formulae == 3);
         CHECK(summary.casks == 2);
 
-        // But nothing is written.
+        // But nothing is written — neither the runtime manifest nor the
+        // historical ROOT.json path.
+        CHECK_FALSE(fs::exists(cfg.den_home / "manifests" / "ROOT" / "manifest.json"));
         CHECK_FALSE(fs::exists(cfg.den_home / "manifests" / "ROOT.json"));
+        CHECK_FALSE(fs::exists(cfg.den_home / "config.json"));
     }
 
     // -------------------------------------------------------------------------
@@ -560,6 +555,103 @@ TEST_SUITE("migration::fixture") {
 
         const auto report = check_migration_health(cfg, /*print=*/false);
         CHECK_FALSE(report.healthy());
+    }
+
+    // -------------------------------------------------------------------------
+    // 12. Migrated formulae are visible to `den list` and merge safely
+    // -------------------------------------------------------------------------
+    TEST_CASE("migrated packages are visible through resolve_per_provider") {
+        MigTmpDir root;
+        const fs::path cellar = root.path / "Cellar";
+        fs::create_directories(cellar / "tree" / "2.1.1" / "bin");
+        std::ofstream(cellar / "tree" / "2.1.1" / "bin" / "tree") << "#!/bin/sh\n";
+        write_receipt(cellar / "tree" / "2.1.1", true);
+        // A newer cellar keg must not clobber a version den already recorded.
+        fs::create_directories(cellar / "jq" / "1.7");
+        write_receipt(cellar / "jq" / "1.7", true);
+
+        const fs::path den_home = root.path / "den_home";
+        Manifest prior;
+        prior.packages["homebrew"]["jq"] = "1.6";
+        prior.packages["pip"]["requests"] = "2.31.0";
+        write_manifest(den_home, "/", prior);
+
+        // Sentinel inside the Cellar — migrate must not touch it.
+        const fs::path sentinel = cellar / "tree" / "2.1.1" / "bin" / "tree";
+        std::ifstream before_in(sentinel);
+        const std::string sentinel_before(std::istreambuf_iterator<char>{before_in}, {});
+
+        Config cfg;
+        cfg.homebrew_cellar = cellar;
+        cfg.den_home = den_home;
+
+        migrate_from_homebrew(cfg, {});
+
+        // `den list` reads this.
+        const auto listed = resolve_per_provider(den_home, "/");
+        CHECK(listed.at("homebrew").at("tree") == "2.1.1");
+        CHECK(listed.at("homebrew").at("jq") == "1.6");
+        CHECK(listed.at("pip").at("requests") == "2.31.0");
+        CHECK_FALSE(fs::exists(den_home / "manifests" / "ROOT.json"));
+
+        std::ifstream after_in(sentinel);
+        const std::string sentinel_after(std::istreambuf_iterator<char>{after_in}, {});
+        CHECK(sentinel_before == sentinel_after);
+
+        // Re-run is a no-op for versions already recorded.
+        migrate_from_homebrew(cfg, {});
+        const auto again = resolve_per_provider(den_home, "/");
+        CHECK(again.at("homebrew").at("tree") == "2.1.1");
+        CHECK(again.at("homebrew").at("jq") == "1.6");
+        CHECK(again.at("pip").at("requests") == "2.31.0");
+    }
+
+    TEST_CASE("rollback hint and health check name the runtime manifest") {
+        MigTmpDir root;
+        Config cfg;
+        cfg.homebrew_cellar = root.path / "Cellar";
+        cfg.den_home = root.path / "den_home";
+        fs::create_directories(cfg.homebrew_cellar);
+
+        std::ostringstream captured;
+        auto* old = std::cout.rdbuf(captured.rdbuf());
+        migrate_from_homebrew(cfg, {});
+        std::cout.rdbuf(old);
+
+        const std::string out = captured.str();
+        const std::string manifest =
+            (cfg.den_home / "manifests" / "ROOT" / "manifest.json").string();
+        CHECK(out.find(manifest) != std::string::npos);
+        CHECK(out.find("ROOT.json") == std::string::npos);
+
+        const auto missing = check_migration_health(cfg, /*print=*/false);
+        CHECK_FALSE(missing.healthy());
+        REQUIRE_FALSE(missing.issues.empty());
+        CHECK(missing.issues[0].message.find(manifest) != std::string::npos);
+        CHECK(missing.issues[0].message.find("ROOT.json") == std::string::npos);
+    }
+
+    TEST_CASE("migrate refuses to clobber a corrupt root manifest") {
+        MigTmpDir root;
+        const fs::path cellar = root.path / "Cellar";
+        fs::create_directories(cellar / "tree" / "2.1.1");
+        write_receipt(cellar / "tree" / "2.1.1", true);
+
+        const fs::path den_home = root.path / "den_home";
+        const fs::path manifest = den_home / "manifests" / "ROOT" / "manifest.json";
+        fs::create_directories(manifest.parent_path());
+        const std::string corrupt = "{\"packages\": {";
+        std::ofstream(manifest) << corrupt;
+
+        Config cfg;
+        cfg.homebrew_cellar = cellar;
+        cfg.den_home = den_home;
+
+        CHECK_THROWS_AS(migrate_from_homebrew(cfg, {}), UserError);
+
+        std::ifstream in(manifest);
+        const std::string after(std::istreambuf_iterator<char>{in}, {});
+        CHECK(after == corrupt);
     }
 
 } // TEST_SUITE migration::fixture

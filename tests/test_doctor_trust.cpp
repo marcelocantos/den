@@ -25,6 +25,7 @@
 #include "core/config.h"
 #include "doctor/doctor.h"
 #include "doctor/trust_checks.h"
+#include "env/manifest.h"
 
 #include <filesystem>
 #include <fstream>
@@ -239,10 +240,8 @@ TEST_SUITE("doctor_trust::trust_report_to_findings") {
         // Seed an isolated replica snapshot so the block reports it as active.
         fs::create_directories(tmp.path / "trust");
         std::ofstream f(tmp.path / "trust" / "known_hashes.json");
-        f << R"({"schema_version":1,"hashes":{)"
-          << R"("tree--2.3.2--arm64_sequoia":")"
-          << "ef367d0a5e74970e2f5042479fe4000a8b324ac075520c66f8457f1cb06ca668"
-          << R"("}})";
+        f << R"({"schema_version":1,"hashes":{)" << R"("tree--2.3.2--arm64_sequoia":")"
+          << "ef367d0a5e74970e2f5042479fe4000a8b324ac075520c66f8457f1cb06ca668" << R"("}})";
         f.close();
 
         std::vector<Finding> findings;
@@ -251,6 +250,68 @@ TEST_SUITE("doctor_trust::trust_report_to_findings") {
         CHECK(out.find("den-replica-cdn") != std::string::npos);
         CHECK(out.find("[trust] replica: active") != std::string::npos);
         CHECK(out.find("entries: 1") != std::string::npos);
+    }
+
+} // TEST_SUITE
+
+// ---------------------------------------------------------------------------
+// Runtime manifest path. doctor used to parse ~/.den/manifest.json, which
+// nothing writes. It must validate manifests/<slug>/manifest.json instead.
+// ---------------------------------------------------------------------------
+
+TEST_SUITE("doctor::runtime_manifest") {
+
+    TEST_CASE("corrupt runtime manifest is an error") {
+        TmpDir tmp;
+        auto cfg = make_isolated_config(tmp.path);
+        const fs::path manifest = tmp.path / "manifests" / "ROOT" / "manifest.json";
+        fs::create_directories(manifest.parent_path());
+        std::ofstream(manifest) << "{\"packages\": {";
+
+        auto findings = doctor(cfg);
+        bool found = false;
+        for (const auto& f : findings) {
+            if (f.severity == Severity::Error &&
+                f.message.find(manifest.string()) != std::string::npos &&
+                f.message.find("corrupt manifest") != std::string::npos) {
+                found = true;
+            }
+        }
+        CHECK(found);
+    }
+
+    TEST_CASE("valid runtime manifest is not reported") {
+        TmpDir tmp;
+        auto cfg = make_isolated_config(tmp.path);
+        Manifest m;
+        m.packages["homebrew"]["tree"] = "2.1.1";
+        write_manifest(tmp.path, "/", m);
+
+        auto findings = doctor(cfg);
+        for (const auto& f : findings) {
+            CHECK(f.message.find("corrupt manifest") == std::string::npos);
+            CHECK(f.message.find("manifest.json parse error") == std::string::npos);
+        }
+    }
+
+    TEST_CASE("legacy manifest.json is ignored, not parsed as the runtime manifest") {
+        TmpDir tmp;
+        auto cfg = make_isolated_config(tmp.path);
+        const fs::path legacy = tmp.path / "manifest.json";
+        std::ofstream(legacy) << "{ this is not json";
+
+        auto findings = doctor(cfg);
+        bool warned = false;
+        for (const auto& f : findings) {
+            if (f.message.find(legacy.string()) != std::string::npos) {
+                CHECK(f.severity == Severity::Warning);
+                CHECK(f.message.find("ignored non-runtime manifest") != std::string::npos);
+                warned = true;
+            }
+            CHECK(f.message.find("parse error") == std::string::npos);
+            CHECK(f.message.find("corrupt manifest") == std::string::npos);
+        }
+        CHECK(warned);
     }
 
 } // TEST_SUITE
