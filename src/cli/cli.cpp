@@ -230,6 +230,9 @@ struct Cli::M {
     std::string set_key;
     std::string set_value;
 
+    // cleanup
+    bool cleanup_dry_run = false;
+
     // migrate
     std::vector<std::string> migrate_names;
     bool migrate_dry_run = false;
@@ -729,40 +732,38 @@ void Cli::M::setup() {
     });
 
     // --- cleanup ---
-    auto* cleanup = app.add_subcommand("cleanup", "Remove old versions and cache files");
-    cleanup->callback([] {
+    // The Cellar is shared with Homebrew. Only kegs den itself poured (those
+    // carrying an ownership receipt) are eligible, and only when no
+    // environment still references that version.
+    auto* cleanup = app.add_subcommand(
+        "cleanup", "Remove unused versions den installed, and clear the archive cache. Kegs den "
+                   "did not install (including Homebrew's) are kept");
+    cleanup->add_flag("-n,--dry-run", cleanup_dry_run,
+                      "Show what would be removed without deleting anything");
+    cleanup->callback([this] {
         auto cfg = Config::detect();
-        // Remove old versions from the store: keep only versions referenced in manifests.
-        auto all_envs = list_all(cfg.den_home);
-        std::set<std::string> referenced; // "name/version" keys
-        for (const auto& ep : all_envs) {
-            auto resolved = resolve(cfg.den_home, ep);
-            for (const auto& [name, version] : resolved) {
-                referenced.insert(name + "/" + version);
-            }
-        }
+        auto report = cleanup_kegs(cfg.store, cfg.den_home, cfg.cache, cleanup_dry_run);
 
-        auto installed = list_installed(cfg.store);
-        uint32_t removed = 0;
-        for (const auto& pkg : installed) {
-            if (!referenced.count(pkg.name + "/" + pkg.version)) {
+        for (const auto& pkg : report.removed) {
+            if (cleanup_dry_run) {
+                std::cout << "Would remove " << pkg.name << " " << pkg.version << "\n";
+            } else {
                 std::cout << "Removing " << pkg.name << " " << pkg.version << "\n";
-                std::error_code ec;
-                fs::remove_all(pkg.path, ec);
-                if (!ec)
-                    ++removed;
             }
         }
-
-        // Clean archive cache.
-        auto cache_dir = cfg.cache / "archives";
-        if (fs::is_directory(cache_dir)) {
-            std::error_code ec;
-            fs::remove_all(cache_dir, ec);
-            std::cout << "Cleared archive cache.\n";
+        if (report.kept_unowned > 0) {
+            std::cout << (cleanup_dry_run ? "Would leave " : "Left ") << report.kept_unowned
+                      << " keg(s) den did not install untouched.\n";
         }
-
-        std::cout << "Cleaned up " << removed << " old package version(s).\n";
+        if (report.cache_cleared) {
+            std::cout << (cleanup_dry_run ? "Would clear archive cache.\n"
+                                          : "Cleared archive cache.\n");
+        }
+        if (cleanup_dry_run) {
+            std::cout << "Would remove " << report.removed.size() << " old package version(s).\n";
+        } else {
+            std::cout << "Cleaned up " << report.removed.size() << " old package version(s).\n";
+        }
     });
 
     // --- autoremove ---

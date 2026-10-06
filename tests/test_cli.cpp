@@ -6,6 +6,8 @@
 
 #include <doctest.h>
 
+#include "store/store.h"
+
 #include <array>
 #include <cerrno>
 #include <cstdio>
@@ -421,6 +423,79 @@ TEST_SUITE("cli::integration") {
                                result.output.find("fatal:") != std::string::npos ||
                                result.output.find("cannot") != std::string::npos;
         CHECK(has_error);
+    }
+
+    // -----------------------------------------------------------------------
+    // 17. cleanup — shared Cellar. A Homebrew keg must survive; a den-owned
+    //     version nothing references is removed. --dry-run deletes nothing.
+    // -----------------------------------------------------------------------
+    TEST_CASE("cleanup keeps an untracked brew keg and removes a den-owned stale version") {
+        TempDir home;
+        const fs::path cellar = home.path / "cellar";
+
+        const auto brew = cellar / "brew-only-pkg" / "1.0";
+        fs::create_directories(brew);
+        std::ofstream(brew / "KEEP") << "keep\n";
+        std::ofstream(brew / "INSTALL_RECEIPT.json") << "{}\n";
+
+        const auto stale = cellar / "den-pkg" / "1.0";
+        fs::create_directories(stale);
+        std::ofstream(stale / "STALE") << "old\n";
+        mark_keg_owned(stale, "den-pkg", "1.0");
+
+        const auto current = cellar / "den-pkg" / "2.0";
+        fs::create_directories(current);
+        std::ofstream(current / "KEEP") << "new\n";
+        mark_keg_owned(current, "den-pkg", "2.0");
+
+        // Installed by den before ownership receipts existed.
+        const auto legacy = cellar / "den-legacy" / "0.9";
+        fs::create_directories(legacy);
+        std::ofstream(legacy / "KEEP") << "legacy\n";
+
+        fs::create_directories(home.path / "manifests" / "ROOT");
+        std::ofstream(home.path / "manifests" / "ROOT" / "manifest.json") << R"({
+  "packages": { "homebrew": { "den-pkg": "2.0" } },
+  "auto_deps": {}
+}
+)";
+
+        const auto cache_blob = home.path / "cache" / "archives" / "blob.tar.gz";
+        fs::create_directories(cache_blob.parent_path());
+        std::ofstream(cache_blob) << "cached\n";
+
+        const auto preview =
+            run_den_with_cellar("cleanup --dry-run", home.path.string(), cellar.string());
+        CHECK(preview.exit_code == 0);
+        CHECK(preview.output.find("Would remove den-pkg 1.0") != std::string::npos);
+        CHECK(preview.output.find("Would remove 1 old package version(s).") != std::string::npos);
+        CHECK(preview.output.find("brew-only-pkg") == std::string::npos);
+        CHECK(fs::exists(brew / "KEEP"));
+        CHECK(fs::exists(stale / "STALE"));
+        CHECK(fs::exists(current / "KEEP"));
+        CHECK(fs::exists(legacy / "KEEP"));
+        CHECK(fs::exists(cache_blob));
+
+        const auto result = run_den_with_cellar("cleanup", home.path.string(), cellar.string());
+        CHECK(result.exit_code == 0);
+        CHECK(result.output.find("Removing den-pkg 1.0") != std::string::npos);
+        CHECK(result.output.find("Cleaned up 1 old package version(s).") != std::string::npos);
+        CHECK(result.output.find("untouched") != std::string::npos);
+        CHECK(result.output.find("Cleared archive cache.") != std::string::npos);
+        CHECK(result.output.find("brew-only-pkg") == std::string::npos);
+        CHECK(fs::exists(brew / "KEEP"));
+        CHECK(fs::exists(current / "KEEP"));
+        CHECK(fs::exists(legacy / "KEEP"));
+        CHECK_FALSE(fs::exists(stale));
+        CHECK_FALSE(fs::exists(cache_blob));
+    }
+
+    TEST_CASE("cleanup --help describes den-owned removal and dry-run") {
+        const auto out = run_den_fresh("cleanup --help");
+        CHECK(out.find("den installed") != std::string::npos);
+        CHECK(out.find("Homebrew") != std::string::npos);
+        CHECK(out.find("dry-run") != std::string::npos);
+        CHECK(out.find("unknown option") == std::string::npos);
     }
 
 } // TEST_SUITE cli::integration

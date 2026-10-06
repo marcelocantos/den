@@ -148,6 +148,11 @@ bool install_one(const Config& config, const Package& pkg) {
     std::error_code ec;
     fs::remove_all(tmp_dir, ec);
 
+    // Stamp the keg den just poured. The early return above skips kegs that
+    // were already in the shared Cellar, so a Homebrew install is never
+    // marked as ours and `den cleanup` will not delete it.
+    mark_keg_owned(dest, pkg.name, pkg.version);
+
     return true;
 }
 
@@ -249,10 +254,10 @@ InstallResult HomebrewProvider::install(const Config& config, std::string_view n
 }
 
 void HomebrewProvider::uninstall(const Config& /*config*/, std::string_view /*name*/) {
-    // Homebrew's shared Cellar is intentionally retained for fast reinstall —
-    // the CLI removes the package from the active env's manifest and re-
-    // materialises; the keg stays on disk and is reclaimed by `den cleanup`.
-    // So uninstall is a no-op at the provider level.
+    // The shared Cellar is retained for fast reinstall. The CLI drops the
+    // package from the active env manifest and rematerialises; the keg stays
+    // on disk until `den cleanup`, which removes it only if den poured it and
+    // no environment still references that version. Uninstall is a no-op here.
 }
 
 std::vector<InstalledPackage> HomebrewProvider::list_installed(const Config& config) const {
