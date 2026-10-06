@@ -164,7 +164,7 @@ Run `den --help` for the full list. Key commands:
 | `den daemon status` | Daemon and pending upgrade status |
 | `den doctor` | Check system health and report issues |
 | `den smoke` | Run smoke tests against installed packages |
-| `den migrate` | Scan Homebrew Cellar for migration |
+| `den migrate` | Adopt Homebrew packages into the root environment so `den list` shows them |
 
 ## Agent guide
 

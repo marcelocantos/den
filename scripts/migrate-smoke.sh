@@ -5,15 +5,15 @@
 # migrate-smoke.sh — developer-invoked smoke test for den migrate (🎯T71).
 #
 # Runs `den migrate` against the real local Homebrew install, then verifies:
-#   1. All formulae in HOMEBREW_CELLAR appear in den's ROOT.json manifest.
+#   1. All formulae in HOMEBREW_CELLAR appear in the runtime root manifest
+#      (manifests/ROOT/manifest.json, under packages.homebrew).
 #   2. The Homebrew Cellar is byte-identical before and after.
 #   3. `brew` continues to work (non-destructive check).
 #   4. Re-running migration produces no additional adds (idempotent).
 #
-# SKIPPED assertions (not yet implemented in src/migrate/):
-#   - Caskroom packages in manifest   (T37 upstream gap)
-#   - Taps registered in den          (T37 upstream gap)
-#   - brew services state preserved   (T37 upstream gap)
+# This script asserts formulae in the runtime manifest. Casks, taps, and
+# services are recorded (settings and services/migrated.json) and covered
+# by the unit tests.
 #
 # Usage:
 #   ./scripts/migrate-smoke.sh [--den-binary <path>] [--den-home <path>]
@@ -157,10 +157,13 @@ echo ""
 echo "==> [3/5] Running first migration …"
 run_den migrate 2>&1 | sed 's/^/    /'
 
-# Verify ROOT.json was written.
-MANIFEST="$SMOKE_DEN_HOME/manifests/ROOT.json"
+# Verify the runtime root manifest was written (not the legacy ROOT.json).
+MANIFEST="$SMOKE_DEN_HOME/manifests/ROOT/manifest.json"
 if [[ ! -f "$MANIFEST" ]]; then
-    echo "FAIL: ROOT.json manifest not written to $MANIFEST" >&2
+    echo "FAIL: runtime manifest not written to $MANIFEST" >&2
+    if [[ -f "$SMOKE_DEN_HOME/manifests/ROOT.json" ]]; then
+        echo "FAIL: found legacy manifests/ROOT.json, which den list does not read" >&2
+    fi
     exit 1
 fi
 echo "    Manifest written: $MANIFEST"
@@ -174,13 +177,14 @@ MISSING=()
 for name in "${FORMULA_NAMES[@]}"; do
     # Use python3 (likely available since it's a Homebrew env) or jq.
     if command -v jq &>/dev/null; then
-        present=$(jq --arg n "$name" 'has("packages") and (.packages | has($n))' "$MANIFEST" 2>/dev/null)
+        present=$(jq --arg n "$name" '.packages.homebrew // {} | has($n)' "$MANIFEST" 2>/dev/null)
     elif command -v python3 &>/dev/null; then
         present=$(python3 -c "
-import json, sys
+import json
 with open('$MANIFEST') as f:
     m = json.load(f)
-print('true' if '$name' in m.get('packages', {}) else 'false')
+pkgs = m.get('packages', {}).get('homebrew', {})
+print('true' if '$name' in pkgs else 'false')
 " 2>/dev/null)
     else
         # Fallback: grep-based check (not fully reliable for special chars).
@@ -257,15 +261,6 @@ elif [[ "$ADDED_SECOND" -gt 0 ]]; then
 else
     echo "    Second run added 0 packages (idempotent). OK"
 fi
-
-# ---------------------------------------------------------------------------
-# SKIPPED assertions — upstream gaps against T37.
-# ---------------------------------------------------------------------------
-echo ""
-echo "==> SKIPPED assertions (not yet implemented in src/migrate/):"
-echo "    - Caskroom packages present in manifest            [T37 gap]"
-echo "    - Taps registered as den tap sources              [T37 gap]"
-echo "    - brew services state preserved post-migration    [T37 gap]"
 
 # ---------------------------------------------------------------------------
 # Summary.

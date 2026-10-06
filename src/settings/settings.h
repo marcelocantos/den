@@ -37,6 +37,10 @@ struct Settings {
     DaemonSettings daemon;
     SearchSettings search;
     TapSettings taps;
+    /// Casks recorded by `den migrate` (token -> version). These stay in the
+    /// Homebrew Caskroom; they are not Cellar packages and are not linked
+    /// into environments.
+    std::map<std::string, std::string> casks;
 };
 
 // Read settings from <den_home>/config.json.  Returns defaults if the

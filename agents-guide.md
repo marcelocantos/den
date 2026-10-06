@@ -52,7 +52,7 @@ den outdated                 # list packages with available upgrades
 den update                   # fetch latest package index
 den cleanup                  # remove old versions and cache files
 den autoremove               # remove unneeded dependencies
-den migrate                  # scan Homebrew Cellar for migration
+den migrate                  # adopt Homebrew packages into the root environment
 den daemon status            # background maintenance status
 den config                   # show den configuration
 den set <key> <value>        # configure settings

@@ -5,12 +5,14 @@
 //
 // Asserts that migrate_from_homebrew() leaves the Homebrew Cellar layout
 // byte-identical (or content-identical) before and after the migration.
-// Den migration is metadata-only — it writes a ROOT.json manifest under
-// den_home but never modifies, moves, or deletes files in the Cellar.
+// Den migration is metadata-only — it records packages in the runtime root
+// manifest (manifests/ROOT/manifest.json) but never modifies, moves, or
+// deletes files in the Cellar.
 
 #include <doctest.h>
 
 #include "core/config.h"
+#include "env/manifest.h"
 #include "migrate/migrate.h"
 
 #include <algorithm>
@@ -182,8 +184,9 @@ TEST_SUITE("migration::non_destructive") {
 
         CHECK(sorted_actual == sorted_expected);
 
-        // The manifest should exist under den_home only.
-        CHECK(fs::is_regular_file(den_home / "manifests" / "ROOT.json"));
+        // The runtime manifest should exist under den_home only.
+        CHECK(fs::is_regular_file(den_home / "manifests" / "ROOT" / "manifest.json"));
+        CHECK_FALSE(fs::exists(den_home / "manifests" / "ROOT.json"));
     }
 
     // -------------------------------------------------------------------------
@@ -246,13 +249,10 @@ TEST_SUITE("migration::non_destructive") {
         const auto cellar = build_nd_cellar(root.path);
         const fs::path den_home = root.path / "den_home";
 
-        // Pre-seed a manifest as if a previous migration had run.
-        const fs::path manifest_dir = den_home / "manifests";
-        fs::create_directories(manifest_dir);
-        nlohmann::json existing;
-        existing["packages"]["git"] = "2.44.0"; // git already tracked
-        existing["auto"] = nlohmann::json::array();
-        std::ofstream(manifest_dir / "ROOT.json") << existing.dump(2) << "\n";
+        // Pre-seed the runtime manifest as if den had already recorded git.
+        Manifest existing;
+        existing.packages["homebrew"]["git"] = "2.44.0";
+        write_manifest(den_home, "/", existing);
 
         const auto before = snapshot(cellar);
 
@@ -268,10 +268,11 @@ TEST_SUITE("migration::non_destructive") {
         CHECK(before == after);
 
         // curl was not in the pre-seeded manifest and should now be added.
-        std::ifstream f(manifest_dir / "ROOT.json");
-        const auto manifest = nlohmann::json::parse(f);
-        CHECK(manifest["packages"].contains("git"));
-        CHECK(manifest["packages"].contains("curl"));
+        // git's recorded version is left alone.
+        const auto manifest = read_manifest(den_home, "/");
+        CHECK(manifest.packages.at("homebrew").at("git") == "2.44.0");
+        CHECK(manifest.packages.at("homebrew").at("curl") == "8.7.1");
+        CHECK_FALSE(fs::exists(den_home / "manifests" / "ROOT.json"));
     }
 
 } // TEST_SUITE migration::non_destructive

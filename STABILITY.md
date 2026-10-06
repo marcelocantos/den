@@ -39,7 +39,7 @@ Snapshot as of v0.10.0.
 | `den status` | Stable | Environment + daemon summary |
 | `den set <key> <value>` | Stable | |
 | `den settings` | Stable | |
-| `den migrate` | Needs review | Will evolve as piecemeal migration develops |
+| `den migrate` | Needs review | Records formulae in the root manifest (`manifests/ROOT/manifest.json`) and casks/taps in `config.json` |
 | `den daemon run\|stop\|status\|install\|uninstall` | Stable | |
 | `den outdated` | Stable | |
 | `den services list\|start\|stop\|restart` | Needs review | Will be replaced by built-in supervisor (🎯T33) |
@@ -68,6 +68,8 @@ Snapshot as of v0.10.0.
 | `daemon.upgrade_window` | string? | `null` | Stable |
 | `daemon.interval_secs` | u64? | `null` | Stable |
 | `search.provider` | string? | `null` | Stable |
+| `taps` | object (name → source) | `{}` | Needs review |
+| `casks` | object (token → version) | `{}` | Needs review |
 
 ### Environment variables
 
@@ -80,7 +82,7 @@ Snapshot as of v0.10.0.
 
 | File | Stability | Notes |
 |---|---|---|
-| `manifests/<slug>/manifest.json` | Needs review | Schema: `{packages: {name: version}, auto_deps: [name]}` |
+| `manifests/<slug>/manifest.json` | Needs review | Schema: `{packages: {provider: {name: version}}, auto_deps: {provider: [name]}}`. The root environment is `manifests/ROOT/manifest.json`. |
 | `config.json` | Stable | See Configuration section |
 | `daemon_state.json` | Needs review | Internal daemon state |
 | `daemon.pid` | Stable | Plain text PID |

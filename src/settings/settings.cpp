@@ -93,7 +93,7 @@ inline void from_json(const nlohmann::json& j, TapSettings& t) {
     }
 }
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Settings, daemon, search, taps)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Settings, daemon, search, taps, casks)
 
 // ---------------------------------------------------------------------------
 // File helpers
