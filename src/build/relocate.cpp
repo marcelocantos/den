@@ -3,6 +3,7 @@
 
 #include "relocate.h"
 
+#include "core/error.h"
 #include "provider/exec.h"
 
 #include <spdlog/spdlog.h>
@@ -14,6 +15,10 @@
 #include <vector>
 
 namespace den {
+
+// Defined below; ELF relocation in the anonymous namespace calls it.
+std::string expand_homebrew_placeholders(std::string path, const std::string& prefix,
+                                         const std::string& cellar);
 
 namespace {
 
@@ -325,6 +330,209 @@ uint32_t fix_macho_placeholders(const fs::path& dir, const std::string& prefix,
 }
 #endif // __APPLE__
 
+/// True if the file starts with the ELF magic number.
+bool is_elf_file(const fs::path& path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f)
+        return false;
+    unsigned char magic[4] = {};
+    f.read(reinterpret_cast<char*>(magic), 4);
+    return f.gcount() == 4 && magic[0] == 0x7f && magic[1] == 'E' && magic[2] == 'L' &&
+           magic[3] == 'F';
+}
+
+/// Trim trailing whitespace/newlines from a tool's single-line output.
+std::string trim_line(std::string s) {
+    while (!s.empty() &&
+           (s.back() == '\n' || s.back() == '\r' || s.back() == ' ' || s.back() == '\t')) {
+        s.pop_back();
+    }
+    size_t start = 0;
+    while (start < s.size() && (s[start] == ' ' || s[start] == '\t')) {
+        ++start;
+    }
+    return s.substr(start);
+}
+
+/// Best-effort path to the host dynamic linker (used when the bottle's
+/// expanded @@HOMEBREW_PREFIX@@/lib/ld.so is absent — e.g. harness containers
+/// that pour into the Linuxbrew prefix without a full Homebrew glibc).
+std::string system_elf_interpreter() {
+    const char* candidates[] = {
+        "/lib64/ld-linux-x86-64.so.2",  "/lib/ld-linux-x86-64.so.2", "/lib/ld-linux-aarch64.so.1",
+        "/lib64/ld-linux-aarch64.so.1", "/lib/ld-linux.so.2",        "/lib/ld64.so.1",
+    };
+    for (const char* c : candidates) {
+        std::error_code ec;
+        if (fs::exists(c, ec) && !ec) {
+            return c;
+        }
+    }
+    return {};
+}
+
+/// Expand @@HOMEBREW_*@@ placeholders in ELF PT_INTERP and DT_RPATH/RUNPATH
+/// via patchelf. Paths grow on Linux (@@HOMEBREW_PREFIX@@ is 19 bytes;
+/// /home/linuxbrew/.linuxbrew is 26), so in-place null-pad patching cannot
+/// work — matching Homebrew's use of patchelf for keg relocation.
+uint32_t fix_elf_placeholders(const fs::path& dir, const std::string& prefix,
+                              const std::string& cellar) {
+    uint32_t count = 0;
+    bool patchelf_checked = false;
+    bool patchelf_ok = false;
+    std::error_code ec;
+    for (const auto& entry : fs::recursive_directory_iterator(dir, ec)) {
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+        auto ext = entry.path().extension().string();
+        if (ext == ".h" || ext == ".pc" || ext == ".cmake" || ext == ".rb" || ext == ".txt" ||
+            ext == ".md" || ext == ".json" || ext == ".1" || ext == ".3" || ext == ".a") {
+            continue;
+        }
+        if (!is_elf_file(entry.path())) {
+            continue;
+        }
+
+        // Defer the patchelf presence check until we know this ELF actually
+        // carries @@HOMEBREW_*@@ placeholders — most trees have no such files
+        // on macOS, and we must not warn/fail there. Once a placeholder is
+        // found, missing or failing patchelf is a hard pour error (otherwise
+        // the install "succeeds" with binaries that exit 127 at runtime).
+        const auto file = entry.path();
+
+        // Probe placeholders via strings in the file when patchelf is not yet
+        // confirmed, so we can fail before attempting rewrites. Prefer
+        // patchelf --print-* once available (handles compressed sections etc.).
+        auto needs_reloc = [&](const std::string& interp, const std::string& rpath) {
+            return (!interp.empty() && has_homebrew_placeholder(interp)) ||
+                   (!rpath.empty() && has_homebrew_placeholder(rpath));
+        };
+
+        std::string interp;
+        std::string rpath;
+        if (patchelf_ok) {
+            auto interp_r = run_tool({"patchelf", "--print-interpreter", file.string()});
+            if (interp_r.spawned && interp_r.exit_code == 0) {
+                interp = trim_line(interp_r.output);
+            }
+            auto rpath_r = run_tool({"patchelf", "--print-rpath", file.string()});
+            if (rpath_r.spawned && rpath_r.exit_code == 0) {
+                rpath = trim_line(rpath_r.output);
+            }
+        } else {
+            // Cheap scan: placeholders live as plain C strings in the dynamic
+            // section. Avoids requiring patchelf just to detect the need.
+            auto data = read_file(file);
+            if (has_homebrew_placeholder(data)) {
+                // Synthesize non-empty markers so needs_reloc is true; the real
+                // values are read after patchelf is confirmed.
+                interp = "@@HOMEBREW_PREFIX@@/lib/ld.so";
+                rpath = "@@HOMEBREW_PREFIX@@/lib";
+            }
+        }
+
+        if (!needs_reloc(interp, rpath)) {
+            continue;
+        }
+
+        if (!patchelf_checked) {
+            patchelf_checked = true;
+            auto ver = run_tool({"patchelf", "--version"});
+            patchelf_ok = ver.spawned && ver.exit_code == 0;
+        }
+        if (!patchelf_ok) {
+            throw UserError(
+                "patchelf is required to relocate Linux bottles (apt install patchelf); "
+                "found unresolved @@HOMEBREW_*@@ placeholders in " +
+                file.string());
+        }
+
+        // Re-read with patchelf now that we know it works (first file may have
+        // used the string-scan path above).
+        {
+            auto interp_r = run_tool({"patchelf", "--print-interpreter", file.string()});
+            if (interp_r.spawned && interp_r.exit_code == 0) {
+                interp = trim_line(interp_r.output);
+            } else {
+                interp.clear();
+            }
+            auto rpath_r = run_tool({"patchelf", "--print-rpath", file.string()});
+            if (rpath_r.spawned && rpath_r.exit_code == 0) {
+                rpath = trim_line(rpath_r.output);
+            } else {
+                rpath.clear();
+            }
+        }
+        if (!needs_reloc(interp, rpath)) {
+            // String scan found @@HOMEBREW_*@@ but patchelf reports none —
+            // still a hard error: the binary needs relocation and we cannot
+            // do it (corrupt ELF, stub tool, etc.).
+            throw UserError("patchelf could not read @@HOMEBREW_*@@ interpreter/RPATH from '" +
+                            file.string() +
+                            "' (placeholders are present in the file; install a working patchelf)");
+        }
+
+        bool changed = false;
+
+        // Bottles ship with mode 555/444 binaries; patchelf must open O_RDWR.
+        {
+            std::error_code perm_ec;
+            fs::permissions(file,
+                            fs::perms::owner_read | fs::perms::owner_write | fs::perms::owner_exec |
+                                fs::perms::group_read | fs::perms::group_exec |
+                                fs::perms::others_read | fs::perms::others_exec,
+                            fs::perm_options::add, perm_ec);
+            if (perm_ec) {
+                throw UserError("cannot make '" + file.string() +
+                                "' writable for patchelf: " + perm_ec.message());
+            }
+        }
+
+        // PT_INTERP — bottles ship with @@HOMEBREW_PREFIX@@/lib/ld.so.
+        if (!interp.empty() && has_homebrew_placeholder(interp)) {
+            auto new_interp = expand_homebrew_placeholders(interp, prefix, cellar);
+            std::error_code exists_ec;
+            if (!fs::exists(new_interp, exists_ec)) {
+                auto sys = system_elf_interpreter();
+                if (!sys.empty()) {
+                    SPDLOG_DEBUG("ELF interpreter {} missing; falling back to {}", new_interp, sys);
+                    new_interp = sys;
+                }
+            }
+            if (new_interp != interp) {
+                auto r = run_tool({"patchelf", "--set-interpreter", new_interp, file.string()});
+                if (!(r.spawned && r.exit_code == 0)) {
+                    throw UserError("patchelf --set-interpreter failed for '" + file.string() +
+                                    "' (" + interp + " -> " + new_interp + "): " +
+                                    (r.output.empty() ? "unknown error" : trim_line(r.output)));
+                }
+                changed = true;
+                SPDLOG_DEBUG("relocated ELF interpreter: {} -> {}", interp, new_interp);
+            }
+        }
+
+        // DT_RPATH / DT_RUNPATH.
+        if (!rpath.empty() && has_homebrew_placeholder(rpath)) {
+            auto new_rpath = expand_homebrew_placeholders(rpath, prefix, cellar);
+            if (new_rpath != rpath) {
+                auto r = run_tool({"patchelf", "--set-rpath", new_rpath, file.string()});
+                if (!(r.spawned && r.exit_code == 0)) {
+                    throw UserError("patchelf --set-rpath failed for '" + file.string() + "': " +
+                                    (r.output.empty() ? "unknown error" : trim_line(r.output)));
+                }
+                changed = true;
+                SPDLOG_DEBUG("relocated ELF rpath: {} -> {}", rpath, new_rpath);
+            }
+        }
+
+        if (changed) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 } // namespace
 
 std::string expand_homebrew_placeholders(std::string path, const std::string& prefix,
@@ -348,6 +556,18 @@ uint32_t relocate_text_placeholders(const fs::path& dir, const std::string& pref
         auto ext = entry.path().extension().string();
         if (ext == ".dylib" || ext == ".so" || ext == ".a" || ext == ".o" || ext == ".bundle")
             continue;
+
+        // Never rewrite ELF as text — bottles embed @@HOMEBREW_*@@ in dynamic
+        // sections that must go through patchelf (and a naive string replace
+        // would also corrupt the binary if lengths differ).
+        {
+            std::ifstream ef(entry.path(), std::ios::binary);
+            unsigned char m[4] = {};
+            ef.read(reinterpret_cast<char*>(m), 4);
+            if (ef.gcount() == 4 && m[0] == 0x7f && m[1] == 'E' && m[2] == 'L' && m[3] == 'F') {
+                continue;
+            }
+        }
 
         if (!is_text_file(entry.path()))
             continue;
@@ -408,8 +628,13 @@ void relocate_bottle(const fs::path& package_dir, const std::string& name,
     // pour location. Text files use ordinary string replace; Mach-O load
     // commands use install_name_tool because CELLAR can grow (19 → 20 bytes
     // for /opt/homebrew/Cellar) and mid-path null-padding would truncate.
+    // Linux ELF bottles embed @@HOMEBREW_PREFIX@@ in PT_INTERP and RPATH;
+    // those strings grow (/home/linuxbrew/.linuxbrew is longer than the
+    // placeholder), so we rewrite them with patchelf — without this, the
+    // kernel reports "required file not found" for the literal placeholder
+    // interpreter path (harness Linux jq failure).
     auto cellar_path = store.string();
-    auto prefix_path = store.parent_path().string(); // /opt/homebrew
+    auto prefix_path = store.parent_path().string(); // /opt/homebrew or linuxbrew prefix
 
     auto text_count = relocate_text_placeholders(package_dir, prefix_path, cellar_path);
 #ifdef __APPLE__
@@ -417,9 +642,11 @@ void relocate_bottle(const fs::path& package_dir, const std::string& name,
 #else
     uint32_t macho_count = 0;
 #endif
+    auto elf_count = fix_elf_placeholders(package_dir, prefix_path, cellar_path);
 
-    if (text_count > 0 || macho_count > 0) {
-        SPDLOG_INFO("relocated {}: {} text files, {} mach-o files", name, text_count, macho_count);
+    if (text_count > 0 || macho_count > 0 || elf_count > 0) {
+        SPDLOG_INFO("relocated {}: {} text files, {} mach-o files, {} elf files", name, text_count,
+                    macho_count, elf_count);
     }
 }
 

@@ -1,12 +1,16 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Tests for bottle relocation — placeholder expansion and (on Darwin) a
-// live install_name_tool pass against a minimal Mach-O with @@HOMEBREW_*@@
-// load commands, matching the failure mode seen on den-test-mac (jq SIGKILL
-// with unreplaced placeholders + invalid codesign).
+// Tests for bottle relocation — placeholder expansion, (on Darwin) a live
+// install_name_tool pass against a minimal Mach-O with @@HOMEBREW_*@@ load
+// commands, and (on Linux) a live patchelf pass against a minimal ELF with
+// placeholder interpreter/RPATH matching the harness failure mode
+// (jq: "cannot execute: required file not found" when PT_INTERP is still
+// the literal @@HOMEBREW_PREFIX@@/lib/ld.so).
 
 #include "build/relocate.h"
+
+#include "core/error.h"
 
 #include <doctest.h>
 
@@ -16,9 +20,7 @@
 #include <string>
 #include <unistd.h>
 
-#ifdef __APPLE__
 #include "provider/exec.h"
-#endif
 
 using den::expand_homebrew_placeholders;
 using den::relocate_bottle;
@@ -155,6 +157,214 @@ TEST_SUITE("relocate") {
         CHECK(cs_bin.exit_code == 0);
         auto cs_lib = den::run_tool({"codesign", "--verify", lib_path.string()});
         CHECK(cs_lib.exit_code == 0);
+
+        fs::remove_all(tmp);
+    }
+#endif
+
+    TEST_CASE("expand_homebrew_placeholders grows Linux prefix paths") {
+        // Documents why in-place null-pad cannot relocate Linux ELF bottles:
+        // the placeholder is shorter than /home/linuxbrew/.linuxbrew.
+        const std::string placeholder = "@@HOMEBREW_PREFIX@@";
+        const std::string linux_prefix = "/home/linuxbrew/.linuxbrew";
+        CHECK(linux_prefix.size() > placeholder.size());
+
+        const auto expanded = expand_homebrew_placeholders("@@HOMEBREW_PREFIX@@/lib/ld.so",
+                                                           linux_prefix, linux_prefix + "/Cellar");
+        CHECK(expanded == "/home/linuxbrew/.linuxbrew/lib/ld.so");
+
+        const auto rpath = expand_homebrew_placeholders(
+            "@@HOMEBREW_PREFIX@@/Cellar/jq/1.8.2/lib:@@HOMEBREW_PREFIX@@/opt/oniguruma/lib",
+            linux_prefix, linux_prefix + "/Cellar");
+        CHECK(rpath.find("@@HOMEBREW_") == std::string::npos);
+        CHECK(rpath.find("/home/linuxbrew/.linuxbrew/opt/oniguruma/lib") != std::string::npos);
+    }
+
+    TEST_CASE("relocate_bottle fails loudly when patchelf is missing for ELF placeholders") {
+        // Minimal ELF magic + embedded @@HOMEBREW_*@@ string. No real dynamic
+        // section needed — detection scans for the placeholder before invoking
+        // patchelf. Hiding patchelf via PATH must fail the pour, not warn.
+        auto tmp = fs::temp_directory_path() / ("den-relocate-nopf-" + std::to_string(::getpid()));
+        fs::create_directories(tmp / "bin");
+        auto bin = tmp / "bin" / "fakeelf";
+        {
+            std::ofstream out(bin, std::ios::binary);
+            const unsigned char magic[] = {0x7f, 'E', 'L', 'F'};
+            out.write(reinterpret_cast<const char*>(magic), 4);
+            std::string pad(64, '\0');
+            out.write(pad.data(), static_cast<std::streamsize>(pad.size()));
+            out << "@@HOMEBREW_PREFIX@@/lib/ld.so";
+        }
+
+        // Copy PATH before setenv — setenv may invalidate the getenv pointer.
+        std::string old_path;
+        if (const char* pth = std::getenv("PATH")) {
+            old_path = pth;
+        }
+        ::setenv("PATH", "/nonexistent-den-no-patchelf", 1);
+        bool threw = false;
+        std::string msg;
+        try {
+            relocate_bottle(tmp, "fakeelf", "1.0.0", tmp / "Cellar");
+        } catch (const den::UserError& e) {
+            threw = true;
+            msg = e.what();
+        }
+        if (!old_path.empty()) {
+            ::setenv("PATH", old_path.c_str(), 1);
+        } else {
+            ::unsetenv("PATH");
+        }
+        fs::remove_all(tmp);
+
+        CHECK(threw);
+        CHECK(msg.find("patchelf") != std::string::npos);
+    }
+
+    TEST_CASE("relocate_bottle fails loudly when patchelf cannot rewrite ELF placeholders") {
+        // Stub patchelf: --version and --print-* succeed, but --set-* fails.
+        auto tmp = fs::temp_directory_path() / ("den-relocate-badpf-" + std::to_string(::getpid()));
+        fs::create_directories(tmp / "bin");
+        auto stub_dir = tmp / "stub";
+        fs::create_directories(stub_dir);
+        auto stub = stub_dir / "patchelf";
+        {
+            std::ofstream out(stub);
+            out << "#!/bin/sh\n"
+                   "case \"$1\" in\n"
+                   "  --version) echo 'patchelf 0.0'; exit 0 ;;\n"
+                   "  --print-interpreter) echo '@@HOMEBREW_PREFIX@@/lib/ld.so'; exit 0 ;;\n"
+                   "  --print-rpath) echo '@@HOMEBREW_PREFIX@@/lib'; exit 0 ;;\n"
+                   "  *) echo 'stub patchelf refusing rewrite' >&2; exit 1 ;;\n"
+                   "esac\n";
+        }
+        fs::permissions(stub,
+                        fs::perms::owner_all | fs::perms::group_exec | fs::perms::others_exec);
+
+        auto bin = tmp / "bin" / "fakeelf";
+        {
+            std::ofstream out(bin, std::ios::binary);
+            const unsigned char magic[] = {0x7f, 'E', 'L', 'F'};
+            out.write(reinterpret_cast<const char*>(magic), 4);
+            std::string pad(64, '\0');
+            out.write(pad.data(), static_cast<std::streamsize>(pad.size()));
+            out << "@@HOMEBREW_PREFIX@@/lib/ld.so";
+        }
+
+        std::string old_path;
+        if (const char* pth = std::getenv("PATH")) {
+            old_path = pth;
+        }
+        ::setenv("PATH", stub_dir.string().c_str(), 1);
+        bool threw = false;
+        std::string msg;
+        try {
+            relocate_bottle(tmp, "fakeelf", "1.0.0", tmp / "Cellar");
+        } catch (const den::UserError& e) {
+            threw = true;
+            msg = e.what();
+        }
+        if (!old_path.empty()) {
+            ::setenv("PATH", old_path.c_str(), 1);
+        } else {
+            ::unsetenv("PATH");
+        }
+        fs::remove_all(tmp);
+
+        CHECK(threw);
+        CHECK(msg.find("patchelf") != std::string::npos);
+    }
+
+#if !defined(__APPLE__)
+    TEST_CASE("relocate_bottle expands ELF interpreter and RPATH via patchelf") {
+        auto pf = den::run_tool({"patchelf", "--version"});
+        if (!pf.spawned || pf.exit_code != 0) {
+            MESSAGE("SKIP: patchelf not available");
+            return;
+        }
+        auto cc = den::run_tool({"cc", "--version"});
+        if (!cc.spawned || cc.exit_code != 0) {
+            MESSAGE("SKIP: C compiler not available");
+            return;
+        }
+
+        auto tmp = fs::temp_directory_path() / ("den-relocate-elf-" + std::to_string(::getpid()));
+        fs::create_directories(tmp / "bin");
+        auto src = tmp / "probe.c";
+        auto bin = tmp / "bin" / "probe";
+        {
+            std::ofstream out(src);
+            out << "#include <stdio.h>\n"
+                   "int main(void) { puts(\"probe 1.0.0\"); return 0; }\n";
+        }
+
+        // RPATH placeholders via the linker (patchelf --set-rpath stats paths and
+        // rejects @@HOMEBREW_*@@ literals on Ubuntu's patchelf).
+        auto build = den::run_tool({"cc", src.string(), "-o", bin.string(),
+                                    "-Wl,-rpath,@@HOMEBREW_PREFIX@@/Cellar/probe/1.0.0/lib",
+                                    "-Wl,-rpath,@@HOMEBREW_PREFIX@@/opt/dep/lib"});
+        REQUIRE(build.spawned);
+        REQUIRE(build.exit_code == 0);
+
+        // Interpreter placeholder: patchelf --set-interpreter also stats the
+        // target, so plant a same-length real path then binary-replace it with
+        // @@HOMEBREW_PREFIX@@/lib/ld.so (the bottle shape that caused exit 127).
+        const std::string ph_interp = "@@HOMEBREW_PREFIX@@/lib/ld.so";
+        auto sys_ld_r = den::run_tool({"patchelf", "--print-interpreter", bin.string()});
+        REQUIRE(sys_ld_r.spawned);
+        REQUIRE(sys_ld_r.exit_code == 0);
+        std::string real_ld = sys_ld_r.output;
+        while (!real_ld.empty() && (real_ld.back() == '\n' || real_ld.back() == '\r')) {
+            real_ld.pop_back();
+        }
+
+        std::string stand = (tmp / "i").string() + "/ld.so";
+        if (stand.size() <= ph_interp.size()) {
+            stand.append(ph_interp.size() - stand.size(), 'x');
+            fs::create_directories(fs::path(stand).parent_path());
+            std::error_code ec;
+            fs::create_symlink(real_ld, stand, ec);
+            auto set_i = den::run_tool({"patchelf", "--set-interpreter", stand, bin.string()});
+            REQUIRE(set_i.spawned);
+            REQUIRE(set_i.exit_code == 0);
+
+            std::ifstream in(bin, std::ios::binary);
+            std::string data((std::istreambuf_iterator<char>(in)),
+                             std::istreambuf_iterator<char>());
+            auto pos = data.find(stand);
+            REQUIRE(pos != std::string::npos);
+            data.replace(pos, stand.size(), ph_interp);
+            {
+                std::ofstream out(bin, std::ios::binary | std::ios::trunc);
+                out.write(data.data(), static_cast<std::streamsize>(data.size()));
+            }
+
+            auto pre_i = den::run_tool({"patchelf", "--print-interpreter", bin.string()});
+            REQUIRE(pre_i.output.find("@@HOMEBREW_PREFIX@@") != std::string::npos);
+        }
+
+        auto pre_r = den::run_tool({"patchelf", "--print-rpath", bin.string()});
+        REQUIRE(pre_r.output.find("@@HOMEBREW_PREFIX@@") != std::string::npos);
+
+        auto prefix = tmp / "prefix";
+        auto cellar = prefix / "Cellar";
+        fs::create_directories(cellar);
+        relocate_bottle(tmp, "probe", "1.0.0", cellar);
+
+        auto post_r = den::run_tool({"patchelf", "--print-rpath", bin.string()});
+        CHECK(post_r.output.find("@@HOMEBREW_") == std::string::npos);
+        const bool rpath_under_prefix =
+            post_r.output.find((prefix / "opt" / "dep" / "lib").string()) != std::string::npos ||
+            post_r.output.find(prefix.string()) != std::string::npos;
+        CHECK(rpath_under_prefix);
+
+        auto post_i = den::run_tool({"patchelf", "--print-interpreter", bin.string()});
+        CHECK(post_i.output.find("@@HOMEBREW_") == std::string::npos);
+
+        auto run = den::run_tool({bin.string()});
+        CHECK(run.spawned);
+        CHECK(run.exit_code == 0);
+        CHECK(run.output.find("probe 1.0.0") != std::string::npos);
 
         fs::remove_all(tmp);
     }

@@ -26,7 +26,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev libarchive-dev
+          sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev libarchive-dev patchelf
 
       - name: Configure
         run: |
