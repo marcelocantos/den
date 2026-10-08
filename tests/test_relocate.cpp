@@ -196,7 +196,11 @@ TEST_SUITE("relocate") {
             out << "@@HOMEBREW_PREFIX@@/lib/ld.so";
         }
 
-        const char* old_path = std::getenv("PATH");
+        // Copy PATH before setenv — setenv may invalidate the getenv pointer.
+        std::string old_path;
+        if (const char* pth = std::getenv("PATH")) {
+            old_path = pth;
+        }
         ::setenv("PATH", "/nonexistent-den-no-patchelf", 1);
         bool threw = false;
         std::string msg;
@@ -206,8 +210,8 @@ TEST_SUITE("relocate") {
             threw = true;
             msg = e.what();
         }
-        if (old_path) {
-            ::setenv("PATH", old_path, 1);
+        if (!old_path.empty()) {
+            ::setenv("PATH", old_path.c_str(), 1);
         } else {
             ::unsetenv("PATH");
         }
@@ -247,7 +251,10 @@ TEST_SUITE("relocate") {
             out << "@@HOMEBREW_PREFIX@@/lib/ld.so";
         }
 
-        const char* old_path = std::getenv("PATH");
+        std::string old_path;
+        if (const char* pth = std::getenv("PATH")) {
+            old_path = pth;
+        }
         ::setenv("PATH", stub_dir.string().c_str(), 1);
         bool threw = false;
         std::string msg;
@@ -257,8 +264,8 @@ TEST_SUITE("relocate") {
             threw = true;
             msg = e.what();
         }
-        if (old_path) {
-            ::setenv("PATH", old_path, 1);
+        if (!old_path.empty()) {
+            ::setenv("PATH", old_path.c_str(), 1);
         } else {
             ::unsetenv("PATH");
         }
