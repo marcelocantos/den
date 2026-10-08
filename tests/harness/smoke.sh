@@ -46,6 +46,10 @@ TEST_PKG="${TEST_PKG:-jq}"
 # Export DEN_HOME so den picks it up as its home directory.
 export DEN_HOME
 
+# Shared installed_pkg_runs checks (exit 0 + real version + matching arch).
+# shellcheck source=installed_pkg_runs.sh
+. "$(CDPATH= cd -- "$(dirname "$0")" && pwd)/installed_pkg_runs.sh"
+
 # ---------------------------------------------------------------------------
 # Counters and helpers
 # ---------------------------------------------------------------------------
@@ -273,12 +277,9 @@ step_install() {
 # Step 6: installed_pkg_runs
 # ---------------------------------------------------------------------------
 step_installed_pkg_runs() {
-    # Attempt to find the installed binary.  Try two strategies:
-    #   1. Scan $DEN_HOME/envs/*/bin/ for the package binary.
-    #   2. If TEST_PKG is jq, call it as jq --version (PATH may not include den envs).
+    # Attempt to find the installed binary under $DEN_HOME/envs/*/bin/.
     _bin=""
 
-    # Strategy 1: glob for the binary in any den env.
     for _candidate in "${DEN_HOME}/envs/"*/bin/"${TEST_PKG}"; do
         if [ -x "${_candidate}" ]; then
             _bin="${_candidate}"
@@ -298,12 +299,15 @@ step_installed_pkg_runs() {
     fi
 
     echo "  binary: ${_bin}" >&2
-    _out=$("${_bin}" --version 2>&1) || _out=$("${_bin}" -V 2>&1) || true
-    if [ -n "${_out}" ]; then
-        echo "  version: ${_out}" >&2
+    # Require a clean version exit, real version text, and a host-matching
+    # native arch. Wrong-arch bottles used to false-pass on loader errors.
+    _ver_msg=$(check_installed_binary "${_bin}") && _ck_rc=$? || _ck_rc=$?
+    if [ "${_ck_rc}" -eq 0 ]; then
+        echo "  version: ${_ver_msg}" >&2
         pass "installed_pkg_runs"
     else
-        fail "installed_pkg_runs" "${_bin} --version produced no output"
+        echo "  check: ${_ver_msg}" >&2
+        fail "installed_pkg_runs" "${_ver_msg}"
     fi
 }
 
