@@ -114,6 +114,11 @@ if [[ ! -f "$SMOKE_SH" ]]; then
     printf 'error: smoke.sh not found at %s\n' "$SMOKE_SH" >&2
     exit 1
 fi
+SMOKE_HELPER_SH="$(pwd)/tests/harness/installed_pkg_runs.sh"
+if [[ ! -f "$SMOKE_HELPER_SH" ]]; then
+    printf 'error: installed_pkg_runs.sh not found at %s\n' "$SMOKE_HELPER_SH" >&2
+    exit 1
+fi
 
 INSTALL_SH="$(pwd)/install.sh"
 if [[ -n "$RELEASE_VER" && ! -f "$INSTALL_SH" ]]; then
@@ -297,9 +302,10 @@ if [[ "$DEN_BIN_REMOTE" == "${_remote_home}/.den/bin/den" || \
     exit 1
 fi
 
-# Copy smoke.sh to the remote sandbox.
+# Copy smoke.sh + its helpers to the remote sandbox.
 printf 'Copying smoke.sh to remote ...\n'
 scp "$SMOKE_SH" "${SSH_HOST}:${DEN_HOME_REMOTE}/smoke.sh"
+scp "$SMOKE_HELPER_SH" "${SSH_HOST}:${DEN_HOME_REMOTE}/installed_pkg_runs.sh"
 
 # Run smoke on the remote host; tee output to local log.
 # Prepend Homebrew (and common toolchain bins) so non-interactive SSH sessions

@@ -87,6 +87,13 @@ if(TEST_SOURCES)
     add_test(NAME den_tests COMMAND den_tests)
 endif()
 
+# Harness helper regression: installed_pkg_runs must reject wrong-arch /
+# loader-error binaries and still accept a real host-native binary.
+add_test(
+    NAME harness_installed_pkg_runs
+    COMMAND sh "${CMAKE_SOURCE_DIR}/tests/harness/test_installed_pkg_runs.sh"
+)
+
 # --- Install ---
 install(TARGETS den RUNTIME DESTINATION bin)
 

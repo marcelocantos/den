@@ -98,6 +98,11 @@ if [[ ! -f "$SMOKE_SH" ]]; then
     printf 'error: smoke.sh not found at %s\n' "$SMOKE_SH" >&2
     exit 1
 fi
+SMOKE_HELPER_SH="$(pwd)/tests/harness/installed_pkg_runs.sh"
+if [[ ! -f "$SMOKE_HELPER_SH" ]]; then
+    printf 'error: installed_pkg_runs.sh not found at %s\n' "$SMOKE_HELPER_SH" >&2
+    exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Run identifiers and log directory
@@ -163,8 +168,9 @@ DOCKER_ARGS=(
     --rm
     --name "den-harness-${SHORT_ID}"
     --platform "$PLATFORM"
-    # Smoke script (read-only)
+    # Smoke script + helpers (read-only)
     -v "${SMOKE_SH}:/smoke/smoke.sh:ro"
+    -v "${SMOKE_HELPER_SH}:/smoke/installed_pkg_runs.sh:ro"
     # Logs (read-write)
     -v "${LOGS_DIR}:/logs:rw"
     # Environment for smoke.sh
