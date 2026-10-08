@@ -231,8 +231,10 @@ TEST_SUITE("relocate") {
         CHECK(post_i.output.find("@@HOMEBREW_") == std::string::npos);
         CHECK(post_r.output.find("@@HOMEBREW_") == std::string::npos);
         // RPATH must land under the fake prefix.
-        CHECK(post_r.output.find((prefix / "opt" / "dep" / "lib").string()) != std::string::npos ||
-              post_r.output.find(prefix.string()) != std::string::npos);
+        const bool rpath_under_prefix =
+            post_r.output.find((prefix / "opt" / "dep" / "lib").string()) != std::string::npos ||
+            post_r.output.find(prefix.string()) != std::string::npos;
+        CHECK(rpath_under_prefix);
 
         // Binary must be executable again (system ld fallback when prefix/lib/ld.so
         // is absent — the harness-container case).
