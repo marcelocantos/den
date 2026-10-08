@@ -406,6 +406,20 @@ uint32_t fix_elf_placeholders(const fs::path& dir, const std::string& prefix,
         const auto file = entry.path();
         bool changed = false;
 
+        // Bottles ship with mode 555/444 binaries; patchelf must open O_RDWR.
+        {
+            std::error_code perm_ec;
+            fs::permissions(file,
+                            fs::perms::owner_read | fs::perms::owner_write | fs::perms::owner_exec |
+                                fs::perms::group_read | fs::perms::group_exec |
+                                fs::perms::others_read | fs::perms::others_exec,
+                            fs::perm_options::add, perm_ec);
+            if (perm_ec) {
+                SPDLOG_WARN("cannot make {} writable for patchelf: {}", file.string(),
+                            perm_ec.message());
+            }
+        }
+
         // PT_INTERP — bottles ship with @@HOMEBREW_PREFIX@@/lib/ld.so.
         auto interp_r = run_tool({"patchelf", "--print-interpreter", file.string()});
         if (interp_r.spawned && interp_r.exit_code == 0) {
