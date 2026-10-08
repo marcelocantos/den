@@ -127,6 +127,10 @@ binary_arch_matches_host() {
 
 # Return 0 if OUT looks like a real --version string rather than a loader or
 # shell error that previously false-passed the harness.
+#
+# Spec: require a dotted version token roughly [0-9]+.[0-9]+ so a lone
+# digit ("error 1", "v2") cannot false-pass. Accepts forms like jq-1.8.2,
+# 2.12.3, v1.23.3, go1.22.5.
 version_output_looks_real() {
     _v="$1"
     # Trim to a few lines; ignore pure whitespace.
@@ -139,8 +143,8 @@ version_output_looks_real() {
         'exec format error|bad cpu type|cannot execute|wrong architecture|incompatible architecture|invalid application|not a valid mach-o|killed:|segmentation fault|illegal instruction|no such file or directory|permission denied|cannot open shared object'; then
         return 1
     fi
-    # Real version output embeds at least one digit (jq-1.7.1, "1.2.3", "v2", …).
-    printf '%s' "${_v}" | grep -Eq '[0-9]'
+    # Dotted version token: at least N.M somewhere in the output.
+    printf '%s' "${_v}" | grep -Eq '[0-9]+\.[0-9]+'
     return $?
 }
 

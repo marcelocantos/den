@@ -114,7 +114,7 @@ of `docs/den-vs-brew.md` and degrades to `SKIP` when a precondition is absent.
 4. `update` — `den update` populates the package index. **Network-gated**: SKIPs offline (no index → downstream Homebrew steps SKIP too).
 5. `info` — `den info $TEST_PKG` returns package metadata. SKIPs if the index is empty.
 6. `install` — `den install $TEST_PKG` succeeds **and** the package binary appears under `$DEN_HOME`. SKIPs if the index is empty.
-7. `installed_pkg_runs` — the installed binary runs with exit 0, prints a real version string, and matches the host architecture (rejects wrong-arch bottles / loader errors). SKIPs if install was skipped.
+7. `installed_pkg_runs` — the installed binary runs with exit 0, prints a dotted version token (`[0-9]+.[0-9]+`, e.g. `jq-1.8.2`), and matches the host architecture (rejects wrong-arch bottles / loader errors). SKIPs if install was skipped.
 8. `uninstall` — `den uninstall $TEST_PKG` removes the package. SKIPs if nothing was installed.
 9. `state_clean_post_uninstall` — no binary remains under `$DEN_HOME/envs/*/bin/` after uninstall.
 10. `env_create` — `den env create harness-test` creates a new environment.

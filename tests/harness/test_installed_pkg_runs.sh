@@ -76,12 +76,19 @@ assert_check_passes() {
 assert_true  "version_real_jq"            version_output_looks_real "jq-1.7.1-apple"
 assert_true  "version_real_dotted"        version_output_looks_real "foo 1.2.3"
 assert_true  "version_real_vpref"         version_output_looks_real "tool version 2.0"
+assert_true  "version_real_hello"         version_output_looks_real "hello 2.12.3"
+assert_true  "version_real_v_semver"      version_output_looks_real "v1.23.3"
+assert_true  "version_real_go_style"      version_output_looks_real "go version go1.22.5 darwin/arm64"
 assert_false "version_empty"              version_output_looks_real ""
 assert_false "version_whitespace"         version_output_looks_real "   "
 assert_false "version_exec_format"        version_output_looks_real "Exec format error"
 assert_false "version_bad_cpu"            version_output_looks_real "Bad CPU type in executable"
 assert_false "version_wrong_arch"         version_output_looks_real "wrong architecture"
 assert_false "version_no_digit"           version_output_looks_real "not a version at all"
+assert_false "version_bare_integer"       version_output_looks_real "42"
+assert_false "version_error_one"          version_output_looks_real "error 1"
+assert_false "version_v_major_only"       version_output_looks_real "v2"
+assert_false "version_single_digit_word"  version_output_looks_real "ready build 7"
 
 # ---------------------------------------------------------------------------
 # archs_match_host
@@ -128,6 +135,25 @@ exit 0
 EOF
 chmod +x "${_fake_nodigit}"
 assert_check_fails "full_check_no_version_digit" "${_fake_nodigit}"
+
+# Exit 0 with a digit but no dotted version token — must FAIL.
+_fake_bare_int="${_TMP}/fake_bare_int"
+cat > "${_fake_bare_int}" << 'EOF'
+#!/bin/sh
+echo "error 1"
+exit 0
+EOF
+chmod +x "${_fake_bare_int}"
+assert_check_fails "full_check_digit_but_no_dotted_version" "${_fake_bare_int}"
+
+# Exit 0 with empty output — must FAIL.
+_fake_empty="${_TMP}/fake_empty"
+cat > "${_fake_empty}" << 'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "${_fake_empty}"
+assert_check_fails "full_check_empty_version_output" "${_fake_empty}"
 
 # Script that exits non-zero with a plausible-looking version string.
 _fake_badrc="${_TMP}/fake_badrc"
