@@ -38,7 +38,8 @@ uint32_t relocate_binary_paths(const fs::path& dir, const std::string& old_path,
 uint32_t fix_dylib_paths(const fs::path& dir, const fs::path& prefix);
 
 /// Full relocation pass for a poured bottle.
-/// Text placeholders + Mach-O install-name/rpath expansion + ad-hoc re-sign.
+/// Text placeholders + Mach-O install-name/rpath expansion + ad-hoc re-sign
+/// (Apple) + ELF interpreter/RPATH expansion via patchelf (Linux).
 void relocate_bottle(const fs::path& package_dir, const std::string& name,
                      const std::string& version, const fs::path& store);
 

@@ -15,6 +15,10 @@
 
 namespace den {
 
+// Defined below; ELF relocation in the anonymous namespace calls it.
+std::string expand_homebrew_placeholders(std::string path, const std::string& prefix,
+                                         const std::string& cellar);
+
 namespace {
 
 /// Read a file into a string.
@@ -325,6 +329,137 @@ uint32_t fix_macho_placeholders(const fs::path& dir, const std::string& prefix,
 }
 #endif // __APPLE__
 
+/// True if the file starts with the ELF magic number.
+bool is_elf_file(const fs::path& path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f)
+        return false;
+    unsigned char magic[4] = {};
+    f.read(reinterpret_cast<char*>(magic), 4);
+    return f.gcount() == 4 && magic[0] == 0x7f && magic[1] == 'E' && magic[2] == 'L' &&
+           magic[3] == 'F';
+}
+
+/// Trim trailing whitespace/newlines from a tool's single-line output.
+std::string trim_line(std::string s) {
+    while (!s.empty() &&
+           (s.back() == '\n' || s.back() == '\r' || s.back() == ' ' || s.back() == '\t')) {
+        s.pop_back();
+    }
+    size_t start = 0;
+    while (start < s.size() && (s[start] == ' ' || s[start] == '\t')) {
+        ++start;
+    }
+    return s.substr(start);
+}
+
+/// Best-effort path to the host dynamic linker (used when the bottle's
+/// expanded @@HOMEBREW_PREFIX@@/lib/ld.so is absent — e.g. harness containers
+/// that pour into the Linuxbrew prefix without a full Homebrew glibc).
+std::string system_elf_interpreter() {
+    const char* candidates[] = {
+        "/lib64/ld-linux-x86-64.so.2",  "/lib/ld-linux-x86-64.so.2", "/lib/ld-linux-aarch64.so.1",
+        "/lib64/ld-linux-aarch64.so.1", "/lib/ld-linux.so.2",        "/lib/ld64.so.1",
+    };
+    for (const char* c : candidates) {
+        std::error_code ec;
+        if (fs::exists(c, ec) && !ec) {
+            return c;
+        }
+    }
+    return {};
+}
+
+/// Expand @@HOMEBREW_*@@ placeholders in ELF PT_INTERP and DT_RPATH/RUNPATH
+/// via patchelf. Paths grow on Linux (@@HOMEBREW_PREFIX@@ is 19 bytes;
+/// /home/linuxbrew/.linuxbrew is 26), so in-place null-pad patching cannot
+/// work — matching Homebrew's use of patchelf for keg relocation.
+uint32_t fix_elf_placeholders(const fs::path& dir, const std::string& prefix,
+                              const std::string& cellar) {
+    uint32_t count = 0;
+    bool patchelf_checked = false;
+    bool patchelf_ok = false;
+    std::error_code ec;
+    for (const auto& entry : fs::recursive_directory_iterator(dir, ec)) {
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+        auto ext = entry.path().extension().string();
+        if (ext == ".h" || ext == ".pc" || ext == ".cmake" || ext == ".rb" || ext == ".txt" ||
+            ext == ".md" || ext == ".json" || ext == ".1" || ext == ".3" || ext == ".a") {
+            continue;
+        }
+        if (!is_elf_file(entry.path())) {
+            continue;
+        }
+
+        if (!patchelf_checked) {
+            patchelf_checked = true;
+            auto ver = run_tool({"patchelf", "--version"});
+            patchelf_ok = ver.spawned && ver.exit_code == 0;
+            if (!patchelf_ok) {
+                SPDLOG_WARN("patchelf not found on PATH — Linux ELF bottles will not be relocated");
+                return 0;
+            }
+        }
+
+        const auto file = entry.path();
+        bool changed = false;
+
+        // PT_INTERP — bottles ship with @@HOMEBREW_PREFIX@@/lib/ld.so.
+        auto interp_r = run_tool({"patchelf", "--print-interpreter", file.string()});
+        if (interp_r.spawned && interp_r.exit_code == 0) {
+            auto interp = trim_line(interp_r.output);
+            if (!interp.empty() && has_homebrew_placeholder(interp)) {
+                auto new_interp = expand_homebrew_placeholders(interp, prefix, cellar);
+                std::error_code exists_ec;
+                if (!fs::exists(new_interp, exists_ec)) {
+                    auto sys = system_elf_interpreter();
+                    if (!sys.empty()) {
+                        SPDLOG_DEBUG("ELF interpreter {} missing; falling back to {}", new_interp,
+                                     sys);
+                        new_interp = sys;
+                    }
+                }
+                if (new_interp != interp) {
+                    auto r = run_tool({"patchelf", "--set-interpreter", new_interp, file.string()});
+                    if (r.spawned && r.exit_code == 0) {
+                        changed = true;
+                        SPDLOG_DEBUG("relocated ELF interpreter: {} -> {}", interp, new_interp);
+                    } else {
+                        SPDLOG_WARN("patchelf --set-interpreter failed for {}: {}", file.string(),
+                                    r.output);
+                    }
+                }
+            }
+        }
+
+        // DT_RPATH / DT_RUNPATH.
+        auto rpath_r = run_tool({"patchelf", "--print-rpath", file.string()});
+        if (rpath_r.spawned && rpath_r.exit_code == 0) {
+            auto rpath = trim_line(rpath_r.output);
+            if (!rpath.empty() && has_homebrew_placeholder(rpath)) {
+                auto new_rpath = expand_homebrew_placeholders(rpath, prefix, cellar);
+                if (new_rpath != rpath) {
+                    auto r = run_tool({"patchelf", "--set-rpath", new_rpath, file.string()});
+                    if (r.spawned && r.exit_code == 0) {
+                        changed = true;
+                        SPDLOG_DEBUG("relocated ELF rpath: {} -> {}", rpath, new_rpath);
+                    } else {
+                        SPDLOG_WARN("patchelf --set-rpath failed for {}: {}", file.string(),
+                                    r.output);
+                    }
+                }
+            }
+        }
+
+        if (changed) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 } // namespace
 
 std::string expand_homebrew_placeholders(std::string path, const std::string& prefix,
@@ -408,8 +543,13 @@ void relocate_bottle(const fs::path& package_dir, const std::string& name,
     // pour location. Text files use ordinary string replace; Mach-O load
     // commands use install_name_tool because CELLAR can grow (19 → 20 bytes
     // for /opt/homebrew/Cellar) and mid-path null-padding would truncate.
+    // Linux ELF bottles embed @@HOMEBREW_PREFIX@@ in PT_INTERP and RPATH;
+    // those strings grow (/home/linuxbrew/.linuxbrew is longer than the
+    // placeholder), so we rewrite them with patchelf — without this, the
+    // kernel reports "required file not found" for the literal placeholder
+    // interpreter path (harness Linux jq failure).
     auto cellar_path = store.string();
-    auto prefix_path = store.parent_path().string(); // /opt/homebrew
+    auto prefix_path = store.parent_path().string(); // /opt/homebrew or linuxbrew prefix
 
     auto text_count = relocate_text_placeholders(package_dir, prefix_path, cellar_path);
 #ifdef __APPLE__
@@ -417,9 +557,11 @@ void relocate_bottle(const fs::path& package_dir, const std::string& name,
 #else
     uint32_t macho_count = 0;
 #endif
+    auto elf_count = fix_elf_placeholders(package_dir, prefix_path, cellar_path);
 
-    if (text_count > 0 || macho_count > 0) {
-        SPDLOG_INFO("relocated {}: {} text files, {} mach-o files", name, text_count, macho_count);
+    if (text_count > 0 || macho_count > 0 || elf_count > 0) {
+        SPDLOG_INFO("relocated {}: {} text files, {} mach-o files, {} elf files", name, text_count,
+                    macho_count, elf_count);
     }
 }
 

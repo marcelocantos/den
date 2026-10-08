@@ -121,7 +121,7 @@ uint32_t link_package(const fs::path& pkg_path, const fs::path& env_dir, const s
         count += link_tree(src, dst);
     }
 
-    // Create opt/<name> symlink.
+    // Create opt/<name> symlink inside the env.
     auto opt_dir = env_dir / "opt";
     fs::create_directories(opt_dir);
     auto opt_link = opt_dir / name;
@@ -134,6 +134,30 @@ uint32_t link_package(const fs::path& pkg_path, const fs::path& env_dir, const s
         SPDLOG_WARN("failed to create opt symlink: {}", ec.message());
     } else {
         ++count;
+    }
+
+    // Also maintain <prefix>/opt/<name> for bottle RPATH entries like
+    // @@HOMEBREW_PREFIX@@/opt/oniguruma/lib. keg path is
+    // <prefix>/Cellar/<name>/<version>, so prefix is three levels up.
+    // Without this, relocated Linux ELF binaries fail to find deps even
+    // after interpreter/RPATH placeholder expansion.
+    auto cellar = pkg_path.parent_path().parent_path(); // .../Cellar
+    auto prefix = cellar.parent_path();
+    if (!prefix.empty() && cellar.filename() == "Cellar") {
+        auto prefix_opt_dir = prefix / "opt";
+        fs::create_directories(prefix_opt_dir, ec);
+        auto prefix_opt_link = prefix_opt_dir / name;
+        if (fs::exists(prefix_opt_link, ec) || fs::is_symlink(prefix_opt_link, ec)) {
+            fs::remove(prefix_opt_link, ec);
+        }
+        fs::create_symlink(pkg_path, prefix_opt_link, ec);
+        if (ec) {
+            SPDLOG_WARN("failed to create prefix opt symlink {}: {}", prefix_opt_link.string(),
+                        ec.message());
+        } else {
+            ++count;
+            SPDLOG_DEBUG("linked prefix opt {} -> {}", prefix_opt_link.string(), pkg_path.string());
+        }
     }
 
     SPDLOG_INFO("linked {} ({} symlinks)", name, count);
@@ -161,6 +185,27 @@ uint32_t unlink_package(const fs::path& pkg_path, const fs::path& env_dir, const
         fs::remove(opt_link, ec);
         if (!ec) {
             ++count;
+        }
+    }
+
+    // Remove <prefix>/opt/<name> only if it still points at this keg (don't
+    // clobber a newer link owned by another version or by Homebrew).
+    auto cellar = pkg_path.parent_path().parent_path();
+    auto prefix = cellar.parent_path();
+    if (!prefix.empty() && cellar.filename() == "Cellar") {
+        auto prefix_opt_link = prefix / "opt" / name;
+        if (fs::is_symlink(prefix_opt_link, ec)) {
+            auto target = fs::read_symlink(prefix_opt_link, ec);
+            if (!ec) {
+                auto target_canon = fs::weakly_canonical(target, ec);
+                auto pkg_canon = fs::weakly_canonical(pkg_path, ec);
+                if (!ec && target_canon == pkg_canon) {
+                    fs::remove(prefix_opt_link, ec);
+                    if (!ec) {
+                        ++count;
+                    }
+                }
+            }
         }
     }
 
