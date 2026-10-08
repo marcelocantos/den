@@ -10,6 +10,8 @@
 
 #include "build/relocate.h"
 
+#include "core/error.h"
+
 #include <doctest.h>
 
 #include <cstdlib>
@@ -176,6 +178,94 @@ TEST_SUITE("relocate") {
             linux_prefix, linux_prefix + "/Cellar");
         CHECK(rpath.find("@@HOMEBREW_") == std::string::npos);
         CHECK(rpath.find("/home/linuxbrew/.linuxbrew/opt/oniguruma/lib") != std::string::npos);
+    }
+
+    TEST_CASE("relocate_bottle fails loudly when patchelf is missing for ELF placeholders") {
+        // Minimal ELF magic + embedded @@HOMEBREW_*@@ string. No real dynamic
+        // section needed — detection scans for the placeholder before invoking
+        // patchelf. Hiding patchelf via PATH must fail the pour, not warn.
+        auto tmp = fs::temp_directory_path() / ("den-relocate-nopf-" + std::to_string(::getpid()));
+        fs::create_directories(tmp / "bin");
+        auto bin = tmp / "bin" / "fakeelf";
+        {
+            std::ofstream out(bin, std::ios::binary);
+            const unsigned char magic[] = {0x7f, 'E', 'L', 'F'};
+            out.write(reinterpret_cast<const char*>(magic), 4);
+            std::string pad(64, '\0');
+            out.write(pad.data(), static_cast<std::streamsize>(pad.size()));
+            out << "@@HOMEBREW_PREFIX@@/lib/ld.so";
+        }
+
+        const char* old_path = std::getenv("PATH");
+        ::setenv("PATH", "/nonexistent-den-no-patchelf", 1);
+        bool threw = false;
+        std::string msg;
+        try {
+            relocate_bottle(tmp, "fakeelf", "1.0.0", tmp / "Cellar");
+        } catch (const den::UserError& e) {
+            threw = true;
+            msg = e.what();
+        }
+        if (old_path) {
+            ::setenv("PATH", old_path, 1);
+        } else {
+            ::unsetenv("PATH");
+        }
+        fs::remove_all(tmp);
+
+        CHECK(threw);
+        CHECK(msg.find("patchelf") != std::string::npos);
+    }
+
+    TEST_CASE("relocate_bottle fails loudly when patchelf cannot rewrite ELF placeholders") {
+        // Stub patchelf: --version and --print-* succeed, but --set-* fails.
+        auto tmp = fs::temp_directory_path() / ("den-relocate-badpf-" + std::to_string(::getpid()));
+        fs::create_directories(tmp / "bin");
+        auto stub_dir = tmp / "stub";
+        fs::create_directories(stub_dir);
+        auto stub = stub_dir / "patchelf";
+        {
+            std::ofstream out(stub);
+            out << "#!/bin/sh\n"
+                   "case \"$1\" in\n"
+                   "  --version) echo 'patchelf 0.0'; exit 0 ;;\n"
+                   "  --print-interpreter) echo '@@HOMEBREW_PREFIX@@/lib/ld.so'; exit 0 ;;\n"
+                   "  --print-rpath) echo '@@HOMEBREW_PREFIX@@/lib'; exit 0 ;;\n"
+                   "  *) echo 'stub patchelf refusing rewrite' >&2; exit 1 ;;\n"
+                   "esac\n";
+        }
+        fs::permissions(stub,
+                        fs::perms::owner_all | fs::perms::group_exec | fs::perms::others_exec);
+
+        auto bin = tmp / "bin" / "fakeelf";
+        {
+            std::ofstream out(bin, std::ios::binary);
+            const unsigned char magic[] = {0x7f, 'E', 'L', 'F'};
+            out.write(reinterpret_cast<const char*>(magic), 4);
+            std::string pad(64, '\0');
+            out.write(pad.data(), static_cast<std::streamsize>(pad.size()));
+            out << "@@HOMEBREW_PREFIX@@/lib/ld.so";
+        }
+
+        const char* old_path = std::getenv("PATH");
+        ::setenv("PATH", stub_dir.string().c_str(), 1);
+        bool threw = false;
+        std::string msg;
+        try {
+            relocate_bottle(tmp, "fakeelf", "1.0.0", tmp / "Cellar");
+        } catch (const den::UserError& e) {
+            threw = true;
+            msg = e.what();
+        }
+        if (old_path) {
+            ::setenv("PATH", old_path, 1);
+        } else {
+            ::unsetenv("PATH");
+        }
+        fs::remove_all(tmp);
+
+        CHECK(threw);
+        CHECK(msg.find("patchelf") != std::string::npos);
     }
 
 #if !defined(__APPLE__)
