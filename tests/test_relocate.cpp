@@ -180,8 +180,6 @@ TEST_SUITE("relocate") {
 
 #if !defined(__APPLE__)
     TEST_CASE("relocate_bottle expands ELF interpreter and RPATH via patchelf") {
-        // Skip cleanly when the toolchain needed to build a fixture or rewrite
-        // ELF dynamic sections is missing (keeps macOS-style sparse runners green).
         auto pf = den::run_tool({"patchelf", "--version"});
         if (!pf.spawned || pf.exit_code != 0) {
             MESSAGE("SKIP: patchelf not available");
@@ -202,42 +200,70 @@ TEST_SUITE("relocate") {
             out << "#include <stdio.h>\n"
                    "int main(void) { puts(\"probe 1.0.0\"); return 0; }\n";
         }
-        auto build = den::run_tool({"cc", src.string(), "-o", bin.string()});
+
+        // RPATH placeholders via the linker (patchelf --set-rpath stats paths and
+        // rejects @@HOMEBREW_*@@ literals on Ubuntu's patchelf).
+        auto build = den::run_tool({"cc", src.string(), "-o", bin.string(),
+                                    "-Wl,-rpath,@@HOMEBREW_PREFIX@@/Cellar/probe/1.0.0/lib",
+                                    "-Wl,-rpath,@@HOMEBREW_PREFIX@@/opt/dep/lib"});
         REQUIRE(build.spawned);
         REQUIRE(build.exit_code == 0);
 
-        // Stamp placeholder interpreter + rpath like a Linuxbrew bottle.
+        // Interpreter placeholder: patchelf --set-interpreter also stats the
+        // target, so plant a same-length real path then binary-replace it with
+        // @@HOMEBREW_PREFIX@@/lib/ld.so (the bottle shape that caused exit 127).
         const std::string ph_interp = "@@HOMEBREW_PREFIX@@/lib/ld.so";
-        const std::string ph_rpath =
-            "@@HOMEBREW_PREFIX@@/Cellar/probe/1.0.0/lib:@@HOMEBREW_PREFIX@@/opt/dep/lib";
-        auto set_i = den::run_tool({"patchelf", "--set-interpreter", ph_interp, bin.string()});
-        REQUIRE(set_i.spawned);
-        REQUIRE(set_i.exit_code == 0);
-        auto set_r = den::run_tool({"patchelf", "--set-rpath", ph_rpath, bin.string()});
-        REQUIRE(set_r.spawned);
-        REQUIRE(set_r.exit_code == 0);
+        auto sys_ld_r = den::run_tool({"patchelf", "--print-interpreter", bin.string()});
+        REQUIRE(sys_ld_r.spawned);
+        REQUIRE(sys_ld_r.exit_code == 0);
+        std::string real_ld = sys_ld_r.output;
+        while (!real_ld.empty() && (real_ld.back() == '\n' || real_ld.back() == '\r')) {
+            real_ld.pop_back();
+        }
 
-        auto pre_i = den::run_tool({"patchelf", "--print-interpreter", bin.string()});
-        REQUIRE(pre_i.output.find("@@HOMEBREW_PREFIX@@") != std::string::npos);
+        std::string stand = (tmp / "i").string() + "/ld.so";
+        if (stand.size() <= ph_interp.size()) {
+            stand.append(ph_interp.size() - stand.size(), 'x');
+            fs::create_directories(fs::path(stand).parent_path());
+            std::error_code ec;
+            fs::create_symlink(real_ld, stand, ec);
+            auto set_i = den::run_tool({"patchelf", "--set-interpreter", stand, bin.string()});
+            REQUIRE(set_i.spawned);
+            REQUIRE(set_i.exit_code == 0);
 
-        // Pour-style relocate into a fake linuxbrew prefix layout under tmp.
+            std::ifstream in(bin, std::ios::binary);
+            std::string data((std::istreambuf_iterator<char>(in)),
+                             std::istreambuf_iterator<char>());
+            auto pos = data.find(stand);
+            REQUIRE(pos != std::string::npos);
+            data.replace(pos, stand.size(), ph_interp);
+            {
+                std::ofstream out(bin, std::ios::binary | std::ios::trunc);
+                out.write(data.data(), static_cast<std::streamsize>(data.size()));
+            }
+
+            auto pre_i = den::run_tool({"patchelf", "--print-interpreter", bin.string()});
+            REQUIRE(pre_i.output.find("@@HOMEBREW_PREFIX@@") != std::string::npos);
+        }
+
+        auto pre_r = den::run_tool({"patchelf", "--print-rpath", bin.string()});
+        REQUIRE(pre_r.output.find("@@HOMEBREW_PREFIX@@") != std::string::npos);
+
         auto prefix = tmp / "prefix";
         auto cellar = prefix / "Cellar";
         fs::create_directories(cellar);
         relocate_bottle(tmp, "probe", "1.0.0", cellar);
 
-        auto post_i = den::run_tool({"patchelf", "--print-interpreter", bin.string()});
         auto post_r = den::run_tool({"patchelf", "--print-rpath", bin.string()});
-        CHECK(post_i.output.find("@@HOMEBREW_") == std::string::npos);
         CHECK(post_r.output.find("@@HOMEBREW_") == std::string::npos);
-        // RPATH must land under the fake prefix.
         const bool rpath_under_prefix =
             post_r.output.find((prefix / "opt" / "dep" / "lib").string()) != std::string::npos ||
             post_r.output.find(prefix.string()) != std::string::npos;
         CHECK(rpath_under_prefix);
 
-        // Binary must be executable again (system ld fallback when prefix/lib/ld.so
-        // is absent — the harness-container case).
+        auto post_i = den::run_tool({"patchelf", "--print-interpreter", bin.string()});
+        CHECK(post_i.output.find("@@HOMEBREW_") == std::string::npos);
+
         auto run = den::run_tool({bin.string()});
         CHECK(run.spawned);
         CHECK(run.exit_code == 0);
