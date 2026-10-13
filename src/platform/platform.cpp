@@ -278,6 +278,13 @@ std::optional<std::string> best_archive_tag(Arch arch, const std::optional<MacOs
     if (std::find(available_tags.begin(), available_tags.end(), "all") != available_tags.end()) {
         return "all";
     }
+    // Casks are indexed under the synthetic tag "default" (and optional
+    // variation tags). Accept it after bottle-tag matching so app packages
+    // resolve on every macOS version without inventing fake bottle tags.
+    if (std::find(available_tags.begin(), available_tags.end(), "default") !=
+        available_tags.end()) {
+        return "default";
+    }
     return std::nullopt;
 }
 

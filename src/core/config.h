@@ -24,6 +24,11 @@ struct Config {
     fs::path homebrew_caskroom; // /opt/homebrew/Caskroom
     fs::path homebrew_taps;     // /opt/homebrew/Library/Taps
 
+    // Cask install destinations (macOS). den stages under den_home/caskroom
+    // and never writes Homebrew's Caskroom. appdir defaults to /Applications
+    // and is overridable via DEN_APPDIR for tests / alternate layouts.
+    fs::path appdir; // /Applications
+
     // Platform.
     Arch arch;
     std::optional<MacOsVersion> macos_version;

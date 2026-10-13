@@ -173,7 +173,75 @@ Package transform_formula(const json& f) {
     return pkg;
 }
 
-/// Transform a single Homebrew cask JSON object into a Package.
+/// Parse cask artifacts of kinds den can install (app, binary, pkg).
+/// Unsupported kinds (installer scripts, preflight, zap-only, …) are ignored;
+/// install_cask will error if nothing supported remains.
+void parse_cask_artifacts(const json& arts, std::vector<CaskArtifact>& out) {
+    if (!arts.is_array()) {
+        return;
+    }
+    for (const auto& a : arts) {
+        if (!a.is_object()) {
+            continue;
+        }
+        if (a.contains("app")) {
+            CaskArtifact art;
+            art.kind = CaskArtifactKind::App;
+            const auto& app = a["app"];
+            if (app.is_array() && !app.empty() && app[0].is_string()) {
+                art.source = app[0].get<std::string>();
+            } else if (app.is_string()) {
+                art.source = app.get<std::string>();
+            }
+            if (a.contains("target") && a["target"].is_string()) {
+                art.target = a["target"].get<std::string>();
+            }
+            if (!art.source.empty()) {
+                out.push_back(std::move(art));
+            }
+        }
+        if (a.contains("binary")) {
+            CaskArtifact art;
+            art.kind = CaskArtifactKind::Binary;
+            const auto& bin = a["binary"];
+            if (bin.is_array() && !bin.empty()) {
+                if (bin[0].is_string()) {
+                    art.source = bin[0].get<std::string>();
+                }
+                // Optional nested {target: "name"} as second element.
+                if (bin.size() > 1 && bin[1].is_object() && bin[1].contains("target") &&
+                    bin[1]["target"].is_string()) {
+                    art.target = bin[1]["target"].get<std::string>();
+                }
+            } else if (bin.is_string()) {
+                art.source = bin.get<std::string>();
+            }
+            if (a.contains("target") && a["target"].is_string()) {
+                // Full path target e.g. $HOMEBREW_PREFIX/bin/foo
+                if (art.target.empty()) {
+                    art.target = a["target"].get<std::string>();
+                }
+            }
+            if (!art.source.empty()) {
+                out.push_back(std::move(art));
+            }
+        }
+        if (a.contains("pkg")) {
+            CaskArtifact art;
+            art.kind = CaskArtifactKind::Pkg;
+            const auto& pkg = a["pkg"];
+            if (pkg.is_array() && !pkg.empty() && pkg[0].is_string()) {
+                art.source = pkg[0].get<std::string>();
+            } else if (pkg.is_string()) {
+                art.source = pkg.get<std::string>();
+            }
+            if (!art.source.empty()) {
+                out.push_back(std::move(art));
+            }
+        }
+    }
+}
+
 /// Transform a single Homebrew cask JSON object into a Package.
 Package transform_cask(const json& c) {
     Package pkg;
@@ -191,15 +259,56 @@ Package transform_cask(const json& c) {
     }
 
     // Cask URL — direct download URL for the .dmg/.zip/.pkg.
+    auto take_url = [](const json& node, Package::Archive& ar) {
+        if (node.contains("url") && node["url"].is_string()) {
+            ar.url = node["url"].get<std::string>();
+        }
+        if (node.contains("sha256") && node["sha256"].is_string()) {
+            ar.sha256 = node["sha256"].get<std::string>();
+            if (ar.sha256 == "no_check") {
+                ar.sha256.clear();
+            }
+        }
+        ar.relocation = RelocationType::Portable;
+    };
+
     if (c.contains("url") && c["url"].is_string()) {
         Package::Archive ar;
         ar.url = c["url"].get<std::string>();
         if (c.contains("sha256") && c["sha256"].is_string()) {
             ar.sha256 = c["sha256"].get<std::string>();
+            if (ar.sha256 == "no_check") {
+                ar.sha256.clear();
+            }
         }
         ar.relocation = RelocationType::Portable;
         pkg.archives["default"] = std::move(ar);
     }
+
+    // Variations may override url/sha per macOS/arch tag. Store them under
+    // their tag names so best_archive_tag can prefer a native bottle-style tag
+    // before falling back to "default".
+    if (c.contains("variations") && c["variations"].is_object()) {
+        for (auto it = c["variations"].begin(); it != c["variations"].end(); ++it) {
+            if (!it.value().is_object()) {
+                continue;
+            }
+            Package::Archive ar = pkg.archives.count("default") ? pkg.archives["default"]
+                                                                : Package::Archive{};
+            take_url(it.value(), ar);
+            if (!ar.url.empty()) {
+                pkg.archives[it.key()] = std::move(ar);
+            }
+        }
+    }
+
+    if (c.contains("artifacts")) {
+        parse_cask_artifacts(c["artifacts"], pkg.cask_artifacts);
+    }
+
+    // Binary-only casks are still ArtifactType::App at the type level today
+    // (install dispatches on cask_artifacts / the cask index path). Callers
+    // treat anything from cask.json as a cask install.
 
     return pkg;
 }
@@ -236,6 +345,30 @@ json package_to_json(const Package& pkg) {
         j["source_sha256"] = *pkg.source_sha256;
     if (pkg.ruby_source_path)
         j["ruby_source_path"] = *pkg.ruby_source_path;
+
+    if (!pkg.cask_artifacts.empty()) {
+        json arts = json::array();
+        for (const auto& a : pkg.cask_artifacts) {
+            json aj;
+            switch (a.kind) {
+            case CaskArtifactKind::App:
+                aj["kind"] = "app";
+                break;
+            case CaskArtifactKind::Binary:
+                aj["kind"] = "binary";
+                break;
+            case CaskArtifactKind::Pkg:
+                aj["kind"] = "pkg";
+                break;
+            }
+            aj["source"] = a.source;
+            if (!a.target.empty()) {
+                aj["target"] = a.target;
+            }
+            arts.push_back(std::move(aj));
+        }
+        j["cask_artifacts"] = std::move(arts);
+    }
 
     return j;
 }
@@ -285,6 +418,28 @@ Package package_from_json(const json& j) {
     }
     if (j.contains("ruby_source_path") && j["ruby_source_path"].is_string()) {
         pkg.ruby_source_path = j["ruby_source_path"].get<std::string>();
+    }
+
+    if (j.contains("cask_artifacts") && j["cask_artifacts"].is_array()) {
+        for (const auto& aj : j["cask_artifacts"]) {
+            if (!aj.is_object()) {
+                continue;
+            }
+            CaskArtifact a;
+            const std::string kind = aj.value("kind", "app");
+            if (kind == "binary") {
+                a.kind = CaskArtifactKind::Binary;
+            } else if (kind == "pkg") {
+                a.kind = CaskArtifactKind::Pkg;
+            } else {
+                a.kind = CaskArtifactKind::App;
+            }
+            a.source = aj.value("source", "");
+            a.target = aj.value("target", "");
+            if (!a.source.empty()) {
+                pkg.cask_artifacts.push_back(std::move(a));
+            }
+        }
     }
 
     return pkg;

@@ -54,10 +54,16 @@ fs::path fetch_archive(const std::string& url, const std::string& sha256,
 
     // Content-addressed path: cache_dir/<sha256>[.ext from url].
     // Use just the sha256 as the filename with the original extension.
+    // When sha256 is empty (cask "no_check"), key the cache by the URL hash.
     fs::path url_path(url);
     std::string ext;
     // Extract compound extensions like .tar.gz.
     std::string filename = url_path.filename().string();
+    // Strip query strings from extension detection.
+    auto qpos = filename.find('?');
+    if (qpos != std::string::npos) {
+        filename = filename.substr(0, qpos);
+    }
     if (filename.ends_with(".tar.gz")) {
         ext = ".tar.gz";
     } else if (filename.ends_with(".tar.xz")) {
@@ -65,15 +71,18 @@ fs::path fetch_archive(const std::string& url, const std::string& sha256,
     } else if (filename.ends_with(".tar.bz2")) {
         ext = ".tar.bz2";
     } else {
-        ext = url_path.extension().string();
+        auto dot = filename.rfind('.');
+        ext = dot == std::string::npos ? std::string{} : filename.substr(dot);
     }
 
-    fs::path cached = cache_dir / (sha256 + ext);
+    const bool skip_verify = sha256.empty() || sha256 == "no_check";
+    const std::string cache_key = skip_verify ? ("nocheck-" + hash_string(url)) : sha256;
+    fs::path cached = cache_dir / (cache_key + ext);
 
     // If the file already exists and hash matches, skip download.
     if (fs::exists(cached)) {
-        if (verify_file(cached, sha256)) {
-            SPDLOG_INFO("cache hit for {}", sha256);
+        if (skip_verify || verify_file(cached, sha256)) {
+            SPDLOG_INFO("cache hit for {}", cache_key);
             return cached;
         }
         // Hash mismatch — stale/corrupt cache entry. Remove and re-fetch.
@@ -84,16 +93,16 @@ fs::path fetch_archive(const std::string& url, const std::string& sha256,
     SPDLOG_INFO("downloading {}", url);
     std::string data = fetch_url(url);
 
-    // Verify hash before writing to cache.
+    // Verify hash before writing to cache (unless cask declared no_check).
     std::string actual = hash_string(data);
-    if (actual != sha256) {
+    if (!skip_verify && actual != sha256) {
         throw DownloadError("SHA256 mismatch for " + url + ": expected " + sha256 + ", got " +
                             actual);
     }
 
     write_file_atomic(cached, data);
 
-    SPDLOG_INFO("cached {} ({} bytes)", sha256, data.size());
+    SPDLOG_INFO("cached {} ({} bytes)", cache_key, data.size());
     return cached;
 }
 
