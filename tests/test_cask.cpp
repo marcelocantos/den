@@ -1,0 +1,330 @@
+// Copyright 2026 Marcelo Cantos
+// SPDX-License-Identifier: Apache-2.0
+
+// Regression: cask install/list/uninstall must place apps only where den owns
+// them, refuse to overwrite foreign apps, never touch Homebrew's Caskroom,
+// and accept the synthetic "default" archive tag.
+
+#include <doctest.h>
+
+#include "cask/cask.h"
+#include "core/config.h"
+#include "core/error.h"
+#include "index/package.h"
+#include "platform/platform.h"
+#include "settings/settings.h"
+
+#include <nlohmann/json.hpp>
+
+#include <chrono>
+#include <cstdlib>
+#include <fstream>
+#include <string>
+#include <vector>
+
+#ifdef __APPLE__
+#include <archive.h>
+#include <archive_entry.h>
+#endif
+
+namespace den {
+namespace test {
+
+namespace fs = std::filesystem;
+using json = nlohmann::json;
+
+namespace {
+
+struct TmpDir {
+    fs::path path;
+    TmpDir() {
+        path = fs::temp_directory_path() /
+               ("den_test_cask_" +
+                std::to_string(
+                    std::hash<std::string>{}(std::to_string(reinterpret_cast<uintptr_t>(this))) ^
+                    static_cast<size_t>(
+                        std::chrono::steady_clock::now().time_since_epoch().count())));
+        fs::create_directories(path);
+    }
+    ~TmpDir() {
+        std::error_code ec;
+        fs::remove_all(path, ec);
+    }
+    TmpDir(const TmpDir&) = delete;
+    TmpDir& operator=(const TmpDir&) = delete;
+};
+
+void write_file(const fs::path& p, const std::string& body) {
+    fs::create_directories(p.parent_path());
+    std::ofstream out(p);
+    out << body;
+}
+
+Config make_cfg(const fs::path& root) {
+    Config c;
+    c.den_home = root / "den";
+    c.cache = c.den_home / "cache";
+    c.store = root / "cellar";
+    c.homebrew_prefix = root / "opt";
+    c.homebrew_cellar = c.store;
+    c.homebrew_caskroom = root / "homebrew-caskroom"; // foreign; must stay empty
+    c.appdir = root / "Applications";
+    c.arch = Arch::Arm64;
+    c.macos_version = MacOsVersion{15, 0};
+    fs::create_directories(c.den_home);
+    fs::create_directories(c.cache);
+    fs::create_directories(c.store);
+    fs::create_directories(c.homebrew_caskroom);
+    fs::create_directories(c.appdir);
+    // Active env so binary links have a home.
+    fs::create_directories(c.den_home / "envs" / "ROOT" / "bin");
+    write_file(c.den_home / "active_env", "/\n");
+    return c;
+}
+
+void write_receipt_file(const fs::path& version_dir, const std::string& token,
+                        const std::string& version, const std::vector<fs::path>& apps) {
+    fs::create_directories(version_dir);
+    json j;
+    j["poured_by"] = "den";
+    j["token"] = token;
+    j["version"] = version;
+    j["quarantine_cleared"] = true;
+    j["apps"] = json::array();
+    for (const auto& a : apps) {
+        j["apps"].push_back(a.string());
+    }
+    j["binaries"] = json::array();
+    j["pkgs"] = json::array();
+    write_file(version_dir / kDenCaskReceiptFilename, j.dump(2) + "\n");
+}
+
+#ifdef __APPLE__
+/// Build a minimal zip containing a fake .app bundle and optional binary.
+fs::path make_app_zip(const fs::path& dir, const std::string& app_name,
+                      const std::string& bin_name = {}) {
+    const fs::path staging = dir / "content";
+    const fs::path app = staging / app_name;
+    fs::create_directories(app / "Contents" / "MacOS");
+    write_file(app / "Contents" / "Info.plist", "<?xml version=\"1.0\"?><plist></plist>\n");
+    write_file(app / "Contents" / "MacOS" / "AppBin", "#!/bin/sh\necho ok\n");
+    fs::permissions(app / "Contents" / "MacOS" / "AppBin", fs::perms::owner_all);
+
+    if (!bin_name.empty()) {
+        write_file(staging / bin_name, "#!/bin/sh\necho bin\n");
+        fs::permissions(staging / bin_name, fs::perms::owner_all);
+    }
+
+    const fs::path zip_path = dir / "payload.zip";
+    struct archive* a = archive_write_new();
+    archive_write_set_format_zip(a);
+    archive_write_open_filename(a, zip_path.c_str());
+
+    std::error_code ec;
+    for (auto it = fs::recursive_directory_iterator(staging, ec);
+         it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        if (ec) {
+            break;
+        }
+        const auto rel = fs::relative(it->path(), staging).string();
+        struct archive_entry* entry = archive_entry_new();
+        archive_entry_set_pathname(entry, rel.c_str());
+        if (it->is_directory()) {
+            archive_entry_set_filetype(entry, AE_IFDIR);
+            archive_entry_set_perm(entry, 0755);
+            archive_write_header(a, entry);
+        } else {
+            archive_entry_set_filetype(entry, AE_IFREG);
+            archive_entry_set_perm(entry, 0755);
+            auto sz = fs::file_size(it->path());
+            archive_entry_set_size(entry, static_cast<la_int64_t>(sz));
+            archive_write_header(a, entry);
+            std::ifstream in(it->path(), std::ios::binary);
+            std::string data((std::istreambuf_iterator<char>(in)), {});
+            archive_write_data(a, data.data(), data.size());
+        }
+        archive_entry_free(entry);
+    }
+    archive_write_close(a);
+    archive_write_free(a);
+    return zip_path;
+}
+
+Package make_zip_cask(const std::string& token, const std::string& version,
+                      const fs::path& zip_path, const std::string& app_name,
+                      const std::string& bin_name = {}) {
+    Package pkg;
+    pkg.name = token;
+    pkg.version = version;
+    pkg.artifact_type = ArtifactType::App;
+    Package::Archive ar;
+    ar.url = "file://" + zip_path.string();
+    ar.sha256.clear(); // no_check — local fixture
+    ar.relocation = RelocationType::Portable;
+    pkg.archives["default"] = std::move(ar);
+
+    CaskArtifact app;
+    app.kind = CaskArtifactKind::App;
+    app.source = app_name;
+    pkg.cask_artifacts.push_back(app);
+
+    if (!bin_name.empty()) {
+        CaskArtifact bin;
+        bin.kind = CaskArtifactKind::Binary;
+        bin.source = bin_name;
+        bin.target = bin_name;
+        pkg.cask_artifacts.push_back(bin);
+    }
+    return pkg;
+}
+#endif
+
+} // namespace
+
+TEST_SUITE("cask::platform") {
+
+    TEST_CASE("best_archive_tag accepts the cask default tag") {
+        const auto tag = best_archive_tag(Arch::Arm64, MacOsVersion{15, 0}, {"default"});
+        REQUIRE(tag);
+        CHECK(*tag == "default");
+    }
+
+    TEST_CASE("best_archive_tag prefers a native tag over default") {
+        const auto tag =
+            best_archive_tag(Arch::Arm64, MacOsVersion{15, 0}, {"default", "arm64_sequoia"});
+        REQUIRE(tag);
+        CHECK(*tag == "arm64_sequoia");
+    }
+}
+
+TEST_SUITE("cask::ownership") {
+
+    TEST_CASE("read_cask_receipt accepts a well-formed den receipt") {
+        TmpDir tmp;
+        auto cfg = make_cfg(tmp.path);
+        const auto ver = cask_version_path(cfg, "demo", "1.0.0");
+        const auto app = cfg.appdir / "Demo.app";
+        write_receipt_file(ver, "demo", "1.0.0", {app});
+
+        auto r = read_cask_receipt(ver);
+        REQUIRE(r);
+        CHECK(r->token == "demo");
+        CHECK(r->version == "1.0.0");
+        REQUIRE(r->apps.size() == 1);
+        CHECK(r->apps[0] == app);
+        CHECK(app_owned_by_den(cfg, app));
+    }
+
+    TEST_CASE("foreign receipt or mismatched token is not ownership") {
+        TmpDir tmp;
+        auto cfg = make_cfg(tmp.path);
+        const auto ver = cask_version_path(cfg, "demo", "1.0.0");
+        fs::create_directories(ver);
+        // poured_by is not den.
+        write_file(ver / kDenCaskReceiptFilename,
+                   R"({"poured_by":"brew","token":"demo","version":"1.0.0","apps":[]})");
+        CHECK_FALSE(read_cask_receipt(ver));
+
+        // Token does not match directory.
+        write_receipt_file(ver, "other", "1.0.0", {cfg.appdir / "X.app"});
+        CHECK_FALSE(read_cask_receipt(ver));
+        CHECK_FALSE(app_owned_by_den(cfg, cfg.appdir / "X.app"));
+    }
+
+    TEST_CASE("Homebrew Caskroom is never used as den staging") {
+        TmpDir tmp;
+        auto cfg = make_cfg(tmp.path);
+        CHECK(den_caskroom(cfg) == cfg.den_home / "caskroom");
+        CHECK(den_caskroom(cfg) != cfg.homebrew_caskroom);
+    }
+}
+
+#ifdef __APPLE__
+
+TEST_SUITE("cask::install_zip") {
+
+    TEST_CASE("install zip app + binary, list, uninstall; foreign app refused") {
+        TmpDir tmp;
+        auto cfg = make_cfg(tmp.path);
+        setenv("DEN_APPDIR", cfg.appdir.c_str(), 1);
+        setenv("DEN_HOME", cfg.den_home.c_str(), 1);
+
+        // Foreign app already present — den must refuse to overwrite it.
+        const fs::path foreign = cfg.appdir / "Foreign.app";
+        fs::create_directories(foreign / "Contents");
+        write_file(foreign / "Contents" / "marker", "not-den\n");
+
+        {
+            auto zip = make_app_zip(tmp.path / "zip1", "Foreign.app");
+            auto pkg = make_zip_cask("foreign-cask", "1.0", zip, "Foreign.app");
+            CHECK_THROWS_AS(install_cask(cfg, pkg), UserError);
+            CHECK(fs::exists(foreign / "Contents" / "marker"));
+            // Homebrew Caskroom must remain untouched.
+            CHECK(fs::is_empty(cfg.homebrew_caskroom));
+        }
+
+        // Happy path: install a free app + binary.
+        {
+            auto zip = make_app_zip(tmp.path / "zip2", "Demo.app", "democtl");
+            auto pkg = make_zip_cask("demo", "2.1.0", zip, "Demo.app", "democtl");
+            auto result = install_cask(cfg, pkg);
+            CHECK(result.resolved_version == "2.1.0");
+
+            CHECK(fs::exists(cfg.appdir / "Demo.app" / "Contents" / "MacOS" / "AppBin"));
+            CHECK(is_cask_installed(cfg, "demo"));
+            CHECK(installed_cask_version(cfg, "demo") == "2.1.0");
+
+            auto listed = list_den_casks(cfg);
+            REQUIRE(listed.size() == 1);
+            CHECK(listed[0].name == "demo");
+            CHECK(listed[0].version == "2.1.0");
+
+            // Settings recorded.
+            auto settings = read_settings(cfg.den_home);
+            CHECK(settings.casks.at("demo") == "2.1.0");
+
+            // Binary linked into active env bin.
+            const auto link = cfg.den_home / "envs" / "ROOT" / "bin" / "democtl";
+            CHECK(fs::is_symlink(link));
+
+            // Receipt marks ownership.
+            CHECK(app_owned_by_den(cfg, cfg.appdir / "Demo.app"));
+
+            // Homebrew Caskroom still empty.
+            CHECK(fs::is_empty(cfg.homebrew_caskroom));
+
+            uninstall_cask(cfg, "demo");
+            CHECK_FALSE(fs::exists(cfg.appdir / "Demo.app"));
+            CHECK_FALSE(is_cask_installed(cfg, "demo"));
+            CHECK_FALSE(fs::exists(link));
+            // Foreign app still intact.
+            CHECK(fs::exists(foreign / "Contents" / "marker"));
+            CHECK(fs::is_empty(cfg.homebrew_caskroom));
+        }
+
+        unsetenv("DEN_APPDIR");
+        unsetenv("DEN_HOME");
+    }
+}
+
+#else
+
+TEST_SUITE("cask::linux") {
+    TEST_CASE("install_cask errors cleanly on Linux") {
+        TmpDir tmp;
+        auto cfg = make_cfg(tmp.path);
+        Package pkg;
+        pkg.name = "demo";
+        pkg.version = "1.0";
+        pkg.artifact_type = ArtifactType::App;
+        Package::Archive ar;
+        ar.url = "https://example.com/demo.zip";
+        pkg.archives["default"] = ar;
+        CHECK_THROWS_AS(install_cask(cfg, pkg), UserError);
+    }
+}
+
+#endif
+
+} // namespace test
+} // namespace den

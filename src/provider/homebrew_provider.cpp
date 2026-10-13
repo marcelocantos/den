@@ -4,6 +4,7 @@
 #include "homebrew_provider.h"
 
 #include "../build/relocate.h"
+#include "../cask/cask.h"
 #include "../core/config.h"
 #include "../core/error.h"
 #include "../download/archive.h"
@@ -37,6 +38,18 @@ std::string ghcr_repo_path(const std::string& name) {
 }
 
 bool install_one(const Config& config, const Package& pkg) {
+    // Cask / app packages take a completely different path from Cellar bottles.
+    // Dispatch before any bottle-tag / GHCR logic so "default" archives and
+    // DMG/ZIP/PKG artifacts are handled by the cask installer.
+    if (pkg.artifact_type == ArtifactType::App || !pkg.cask_artifacts.empty()) {
+#ifndef __APPLE__
+        throw UserError("casks are not supported on Linux (macOS only)");
+#else
+        install_cask(config, pkg);
+        return true;
+#endif
+    }
+
     if (is_installed(config.store, pkg.name, pkg.version)) {
         SPDLOG_DEBUG("{} {} already installed", pkg.name, pkg.version);
         return false;
@@ -239,7 +252,11 @@ InstallResult HomebrewProvider::install(const Config& config, std::string_view n
     InstallResult result;
     result.resolved_version = pkg->version;
     for (const auto* p : resolution.install_order) {
-        if (::den::is_installed(config.store, p->name, p->version)) {
+        const bool is_cask =
+            p->artifact_type == ArtifactType::App || !p->cask_artifacts.empty();
+        if (is_cask) {
+            install_one(config, *p);
+        } else if (::den::is_installed(config.store, p->name, p->version)) {
             // Already present in the shared Cellar — skip the download/extract.
             SPDLOG_DEBUG("{} {} already installed", p->name, p->version);
         } else {
@@ -253,7 +270,14 @@ InstallResult HomebrewProvider::install(const Config& config, std::string_view n
     return result;
 }
 
-void HomebrewProvider::uninstall(const Config& /*config*/, std::string_view /*name*/) {
+void HomebrewProvider::uninstall(const Config& config, std::string_view name) {
+    // Casks den installed live under den's caskroom (not the shared Cellar).
+    // Remove their apps/binaries via receipt-scoped uninstall.
+    std::string token(name);
+    if (is_cask_installed(config, token)) {
+        uninstall_cask(config, token);
+        return;
+    }
     // The shared Cellar is retained for fast reinstall. The CLI drops the
     // package from the active env manifest and rematerialises; the keg stays
     // on disk until `den cleanup`, which removes it only if den poured it and
@@ -261,17 +285,37 @@ void HomebrewProvider::uninstall(const Config& /*config*/, std::string_view /*na
 }
 
 std::vector<InstalledPackage> HomebrewProvider::list_installed(const Config& config) const {
-    return ::den::list_installed(config.store);
+    auto pkgs = ::den::list_installed(config.store);
+    for (auto& c : list_den_casks(config)) {
+        pkgs.push_back(std::move(c));
+    }
+    return pkgs;
 }
 
 fs::path HomebrewProvider::package_root(const Config& config, std::string_view name,
                                         std::string_view version) const {
+    // Casks live under den's caskroom, not the shared Cellar.
+    std::string token(name);
+    if (token.starts_with("cask/")) {
+        token = token.substr(5);
+    }
+    auto cask_path = cask_version_path(config, token, std::string(version));
+    if (fs::exists(cask_path)) {
+        return cask_path;
+    }
     // Cellar layout: <store>/<name>/<version>/
     return config.store / std::string(name) / std::string(version);
 }
 
 std::vector<fs::path> HomebrewProvider::binary_paths(const Config& /*config*/,
                                                      const InstalledPackage& pkg) const {
+    // Cask stages do not use the Cellar bin/lib layout. Binaries are linked
+    // at install time into the env bin; materialise should not re-link the
+    // whole stage tree. Returning no subdirs makes materialise a no-op for
+    // the package body while still recording the linked version.
+    if (pkg.path.string().find("/caskroom/") != std::string::npos) {
+        return {};
+    }
     // Homebrew kegs expose five standard subdirectories — the materialiser
     // symlinks the contents of each into the env's matching subdir.
     std::vector<fs::path> paths;

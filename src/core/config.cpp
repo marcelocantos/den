@@ -47,6 +47,12 @@ Config Config::detect() {
     c.homebrew_taps = c.homebrew_prefix / "Library" / "Taps";
     c.store = c.homebrew_cellar; // Shared Cellar — bottles pour at expected prefix
 
+#ifdef __APPLE__
+    c.appdir = env_or("DEN_APPDIR", "/Applications");
+#else
+    c.appdir = env_or("DEN_APPDIR", c.den_home / "Applications");
+#endif
+
     return c;
 }
 

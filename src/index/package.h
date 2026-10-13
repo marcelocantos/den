@@ -17,6 +17,20 @@ namespace den {
 // enum so the index, solver, and CLI share a single ordered vocabulary.
 using Stability = sat::Stability;
 
+/// Kind of cask artifact den knows how to place.
+enum class CaskArtifactKind {
+    App,    // .app bundle → appdir (/Applications or DEN_APPDIR)
+    Binary, // bare executable → env bin symlink
+    Pkg,    // macOS installer package
+};
+
+/// One installable artifact declared by a Homebrew cask.
+struct CaskArtifact {
+    CaskArtifactKind kind = CaskArtifactKind::App;
+    std::string source; // Path inside the container (e.g. "Foo.app", "bin/foo")
+    std::string target; // Optional install target (app path or $HOMEBREW_PREFIX/bin/foo)
+};
+
 // A package in den's index. Unified model — no formula/cask distinction.
 // The artifact_type field controls install behaviour internally.
 struct Package {
@@ -35,12 +49,16 @@ struct Package {
     std::vector<std::string> build_dependencies;
 
     // Pre-built archive info, keyed by platform tag (e.g. "arm64_sequoia").
+    // Casks use the synthetic tag "default" (and optional variation tags).
     struct Archive {
         std::string url;
         std::string sha256;
         RelocationType relocation = RelocationType::Portable;
     };
     std::map<std::string, Archive> archives;
+
+    // Cask artifacts (app / binary / pkg). Empty for formulae.
+    std::vector<CaskArtifact> cask_artifacts;
 
     // Source build info.
     std::optional<std::string> source_url;
