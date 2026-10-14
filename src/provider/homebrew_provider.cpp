@@ -37,6 +37,33 @@ std::string ghcr_repo_path(const std::string& name) {
     return "homebrew/core/" + path;
 }
 
+} // namespace
+
+fs::path find_bottle_keg_dir(const fs::path& extract_root, const std::string& name,
+                             const std::string& version) {
+    std::error_code ec;
+    const fs::path base = extract_root / name;
+    if (fs::is_directory(base / version, ec)) {
+        return base / version;
+    }
+    fs::path match;
+    for (const auto& e : fs::directory_iterator(base, ec)) {
+        if (!e.is_directory()) {
+            continue;
+        }
+        const auto d = e.path().filename().string();
+        if (d == version || d.starts_with(version + "_")) {
+            if (!match.empty()) {
+                return {}; // ambiguous
+            }
+            match = e.path();
+        }
+    }
+    return match;
+}
+
+namespace {
+
 bool install_one(const Config& config, const Package& pkg) {
     // Cask / app packages take a completely different path from Cellar bottles.
     // Dispatch before any bottle-tag / GHCR logic so "default" archives and
@@ -132,7 +159,13 @@ bool install_one(const Config& config, const Package& pkg) {
 
     auto inner = tmp_dir / pkg.name / pkg.version;
     if (!fs::is_directory(inner)) {
-        inner = tmp_dir / result.root;
+        // Revisioned/rebuilt bottles unpack as <name>/<version>_<rev>/ (e.g.
+        // libgit2/1.9.7_2/). Taking <name>/ as the keg nested the real keg one
+        // level down, so <keg>/lib didn't exist and dependents failed to load.
+        inner = find_bottle_keg_dir(tmp_dir, pkg.name, pkg.version);
+        if (inner.empty()) {
+            inner = tmp_dir / result.root;
+        }
     }
 
     if (fs::exists(dest)) {
@@ -155,7 +188,16 @@ bool install_one(const Config& config, const Package& pkg) {
 
     if (archive.relocation != RelocationType::Portable) {
         std::cout << "==> Relocating " << pkg.name << "\n";
-        relocate_bottle(dest, pkg.name, pkg.version, config.store);
+        try {
+            relocate_bottle(dest, pkg.name, pkg.version, config.store);
+        } catch (...) {
+            // Never leave a keg that can't load: a later install would see it
+            // as present and skip re-pouring.
+            std::error_code rec;
+            fs::remove_all(dest, rec);
+            fs::remove_all(tmp_dir, rec);
+            throw;
+        }
     }
 
     std::error_code ec;
@@ -252,8 +294,7 @@ InstallResult HomebrewProvider::install(const Config& config, std::string_view n
     InstallResult result;
     result.resolved_version = pkg->version;
     for (const auto* p : resolution.install_order) {
-        const bool is_cask =
-            p->artifact_type == ArtifactType::App || !p->cask_artifacts.empty();
+        const bool is_cask = p->artifact_type == ArtifactType::App || !p->cask_artifacts.empty();
         if (is_cask) {
             install_one(config, *p);
         } else if (::den::is_installed(config.store, p->name, p->version)) {

@@ -8,8 +8,11 @@
 
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <string_view>
 #include <vector>
@@ -105,27 +108,9 @@ bool is_macho_file(const fs::path& path) {
     std::ifstream f(path, std::ios::binary);
     if (!f)
         return false;
-    unsigned char magic[4] = {};
-    f.read(reinterpret_cast<char*>(magic), 4);
-    if (f.gcount() < 4)
-        return false;
-    // MH_MAGIC / MH_CIGAM / MH_MAGIC_64 / MH_CIGAM_64 / FAT_MAGIC / FAT_CIGAM
-    // (and 64-bit fat variants).
-    const uint32_t m = (uint32_t(magic[0]) << 24) | (uint32_t(magic[1]) << 16) |
-                       (uint32_t(magic[2]) << 8) | uint32_t(magic[3]);
-    switch (m) {
-    case 0xFEEDFACE: // MH_MAGIC
-    case 0xCEFAEDFE: // MH_CIGAM
-    case 0xFEEDFACF: // MH_MAGIC_64
-    case 0xCFFAEDFE: // MH_CIGAM_64
-    case 0xCAFEBABE: // FAT_MAGIC
-    case 0xBEBAFECA: // FAT_CIGAM
-    case 0xCAFEBABF: // FAT_MAGIC_64
-    case 0xBFBAFECA: // FAT_CIGAM_64
-        return true;
-    default:
-        return false;
-    }
+    unsigned char header[8] = {};
+    f.read(reinterpret_cast<char*>(header), sizeof header);
+    return looks_like_macho_header(header, static_cast<std::size_t>(f.gcount()));
 }
 
 /// Strip the " (compatibility version …)" suffix from an otool -L line.
@@ -145,7 +130,7 @@ std::string strip_otool_compat(std::string line) {
 /// Collect install names from `otool -L` (includes the dylib id as the first
 /// dependency line for dylibs; for executables every line is a dependency).
 std::vector<std::string> otool_load_names(const fs::path& file) {
-    auto result = run_tool({"otool", "-L", file.string()});
+    auto result = run_tool({macho_tool("otool"), "-L", file.string()});
     if (!result.spawned || result.exit_code != 0) {
         return {};
     }
@@ -169,7 +154,7 @@ std::vector<std::string> otool_load_names(const fs::path& file) {
 
 /// Dylib identity from `otool -D` (empty for executables).
 std::string otool_dylib_id(const fs::path& file) {
-    auto result = run_tool({"otool", "-D", file.string()});
+    auto result = run_tool({macho_tool("otool"), "-D", file.string()});
     if (!result.spawned || result.exit_code != 0) {
         return {};
     }
@@ -191,7 +176,7 @@ std::string otool_dylib_id(const fs::path& file) {
 
 /// LC_RPATH values from `otool -l`.
 std::vector<std::string> otool_rpaths(const fs::path& file) {
-    auto result = run_tool({"otool", "-l", file.string()});
+    auto result = run_tool({macho_tool("otool"), "-l", file.string()});
     if (!result.spawned || result.exit_code != 0) {
         return {};
     }
@@ -242,7 +227,11 @@ void codesign_adhoc(const fs::path& file) {
 /// bytes; /opt/homebrew/Cellar is 20), so in-place null-pad patching is not
 /// sufficient for load commands.
 uint32_t fix_macho_placeholders(const fs::path& dir, const std::string& prefix,
-                                const std::string& cellar) {
+                                const std::string& cellar, const std::string& self_name) {
+    auto rewrite = [&](const std::string& n) {
+        return expand_homebrew_placeholders(pin_opt_reference(n, cellar, self_name, dir), prefix,
+                                            cellar);
+    };
     uint32_t count = 0;
     std::error_code ec;
     for (const auto& entry : fs::recursive_directory_iterator(dir, ec)) {
@@ -269,9 +258,9 @@ uint32_t fix_macho_placeholders(const fs::path& dir, const std::string& prefix,
         auto load_names = otool_load_names(file);
 
         if (!id.empty() && has_homebrew_placeholder(id)) {
-            auto new_id = expand_homebrew_placeholders(id, prefix, cellar);
+            auto new_id = rewrite(id);
             if (new_id != id) {
-                auto r = run_tool({"install_name_tool", "-id", new_id, file.string()});
+                auto r = run_tool({macho_tool("install_name_tool"), "-id", new_id, file.string()});
                 if (r.spawned && r.exit_code == 0) {
                     changed = true;
                     SPDLOG_DEBUG("relocated dylib id: {} -> {}", id, new_id);
@@ -289,11 +278,12 @@ uint32_t fix_macho_placeholders(const fs::path& dir, const std::string& prefix,
             if (!has_homebrew_placeholder(name)) {
                 continue;
             }
-            auto new_name = expand_homebrew_placeholders(name, prefix, cellar);
+            auto new_name = rewrite(name);
             if (new_name == name) {
                 continue;
             }
-            auto r = run_tool({"install_name_tool", "-change", name, new_name, file.string()});
+            auto r = run_tool(
+                {macho_tool("install_name_tool"), "-change", name, new_name, file.string()});
             if (r.spawned && r.exit_code == 0) {
                 changed = true;
                 SPDLOG_DEBUG("relocated install name: {} -> {}", name, new_name);
@@ -308,11 +298,12 @@ uint32_t fix_macho_placeholders(const fs::path& dir, const std::string& prefix,
             if (!has_homebrew_placeholder(rpath)) {
                 continue;
             }
-            auto new_rpath = expand_homebrew_placeholders(rpath, prefix, cellar);
+            auto new_rpath = rewrite(rpath);
             if (new_rpath == rpath) {
                 continue;
             }
-            auto r = run_tool({"install_name_tool", "-rpath", rpath, new_rpath, file.string()});
+            auto r = run_tool(
+                {macho_tool("install_name_tool"), "-rpath", rpath, new_rpath, file.string()});
             if (r.spawned && r.exit_code == 0) {
                 changed = true;
                 SPDLOG_DEBUG("relocated rpath: {} -> {}", rpath, new_rpath);
@@ -328,6 +319,37 @@ uint32_t fix_macho_placeholders(const fs::path& dir, const std::string& prefix,
     }
     return count;
 }
+
+/// After relocation, every Mach-O load name, id and rpath must be free of
+/// @@HOMEBREW_*@@ placeholders; otherwise dyld fails at runtime with an
+/// opaque "Symbol not found … Expected in: unknown". Returns offending
+/// "<file>: <name>" entries (or a tool-failure note).
+std::vector<std::string> unresolved_macho_placeholders(const fs::path& dir) {
+    std::vector<std::string> bad;
+    std::error_code ec;
+    for (const auto& entry : fs::recursive_directory_iterator(dir, ec)) {
+        if (!entry.is_regular_file() || !is_macho_file(entry.path())) {
+            continue;
+        }
+        auto r = run_tool({macho_tool("otool"), "-L", entry.path().string()});
+        if (!r.spawned || r.exit_code != 0) {
+            bad.push_back(entry.path().string() + ": otool failed (" + r.output.substr(0, 120) +
+                          ")");
+            continue;
+        }
+        std::vector<std::string> names = otool_load_names(entry.path());
+        for (const auto& rp : otool_rpaths(entry.path())) {
+            names.push_back(rp);
+        }
+        for (const auto& n : names) {
+            if (has_homebrew_placeholder(n)) {
+                bad.push_back(entry.path().string() + ": " + n);
+            }
+        }
+    }
+    return bad;
+}
+
 #endif // __APPLE__
 
 /// True if the file starts with the ELF magic number.
@@ -619,6 +641,127 @@ uint32_t fix_dylib_paths(const fs::path& dir, const fs::path& prefix) {
     return 0;
 }
 
+int compare_keg_versions(const std::string& a, const std::string& b) {
+    auto split = [](const std::string& v) {
+        std::vector<std::string> parts;
+        std::string cur;
+        for (char c : v) {
+            if (c == '.' || c == '_' || c == '-') {
+                parts.push_back(cur);
+                cur.clear();
+            } else {
+                cur.push_back(c);
+            }
+        }
+        parts.push_back(cur);
+        return parts;
+    };
+    auto pa = split(a), pb = split(b);
+    for (size_t i = 0; i < std::max(pa.size(), pb.size()); ++i) {
+        const std::string x = i < pa.size() ? pa[i] : "";
+        const std::string y = i < pb.size() ? pb[i] : "";
+        const bool xn = !x.empty() && std::all_of(x.begin(), x.end(), ::isdigit);
+        const bool yn = !y.empty() && std::all_of(y.begin(), y.end(), ::isdigit);
+        if (xn && yn) {
+            const auto xv = std::stoull(x), yv = std::stoull(y);
+            if (xv != yv) {
+                return xv < yv ? -1 : 1;
+            }
+        } else if (x != y) {
+            if (x.empty()) {
+                return -1;
+            }
+            if (y.empty()) {
+                return 1;
+            }
+            return x < y ? -1 : 1;
+        }
+    }
+    return 0;
+}
+
+fs::path select_dep_keg(const fs::path& cellar, const std::string& dep) {
+    std::error_code ec;
+    const fs::path base = cellar / dep;
+    if (!fs::is_directory(base, ec)) {
+        return {};
+    }
+    fs::path best;
+    std::string best_ver;
+    for (const auto& e : fs::directory_iterator(base, ec)) {
+        if (!e.is_directory()) {
+            continue;
+        }
+        // Skip malformed kegs whose only content is one nested version
+        // directory (e.g. 1.9.7/1.9.7_2/…, from the old revisioned-pour bug):
+        // binding to them breaks dyld lookups.
+        const auto kver = e.path().filename().string();
+        size_t n = 0;
+        bool nested_version = false;
+        for (const auto& c : fs::directory_iterator(e.path(), ec)) {
+            ++n;
+            nested_version = c.is_directory() && c.path().filename().string().starts_with(kver);
+        }
+        if (n == 0 || (n == 1 && nested_version)) {
+            continue;
+        }
+        const auto ver = e.path().filename().string();
+        if (best.empty() || compare_keg_versions(ver, best_ver) > 0) {
+            best = e.path();
+            best_ver = ver;
+        }
+    }
+    return best;
+}
+
+std::string pin_opt_reference(const std::string& name, const fs::path& cellar,
+                              const std::string& self_name, const fs::path& self_dir) {
+    static constexpr std::string_view kOpt = "@@HOMEBREW_PREFIX@@/opt/";
+    if (!name.starts_with(kOpt)) {
+        return name;
+    }
+    const auto rest = name.substr(kOpt.size());
+    const auto slash = rest.find('/');
+    const std::string dep = rest.substr(0, slash);
+    const std::string tail = slash == std::string::npos ? "" : rest.substr(slash);
+    fs::path keg = dep == self_name ? self_dir : select_dep_keg(cellar, dep);
+    if (keg.empty()) {
+        SPDLOG_WARN("relocate: no keg for dependency '{}' in {}; leaving opt reference", dep,
+                    cellar.string());
+        return name;
+    }
+    return keg.string() + tail;
+}
+
+std::string macho_tool(const std::string& tool) {
+    static std::map<std::string, std::string> cache;
+    if (auto it = cache.find(tool); it != cache.end()) {
+        return it->second;
+    }
+    std::string chosen = tool;
+#ifdef __APPLE__
+    // Probe the PATH shim against a binary that is always present.
+    const std::vector<std::string> probe =
+        tool == "otool" ? std::vector<std::string>{tool, "-L", "/usr/lib/libSystem.B.dylib"}
+                        : std::vector<std::string>{tool};
+    auto r = run_tool(probe);
+    // install_name_tool with no args prints usage and exits non-zero, so
+    // treat "spawned and no xcode-select/loader error" as working.
+    const bool shim_broken =
+        !r.spawned || r.output.find("xcode-select") != std::string::npos ||
+        r.output.find("Error loading required libraries") != std::string::npos ||
+        (tool == "otool" && r.exit_code != 0);
+    const std::string clt = "/Library/Developer/CommandLineTools/usr/bin/" + tool;
+    std::error_code ec;
+    if (shim_broken && fs::exists(clt, ec)) {
+        SPDLOG_WARN("{} from PATH is unusable (stale Xcode selection?); using {}", tool, clt);
+        chosen = clt;
+    }
+#endif
+    cache[tool] = chosen;
+    return chosen;
+}
+
 void relocate_bottle(const fs::path& package_dir, const std::string& name,
                      const std::string& version, const fs::path& store) {
     (void)version;
@@ -638,7 +781,18 @@ void relocate_bottle(const fs::path& package_dir, const std::string& name,
 
     auto text_count = relocate_text_placeholders(package_dir, prefix_path, cellar_path);
 #ifdef __APPLE__
-    auto macho_count = fix_macho_placeholders(package_dir, prefix_path, cellar_path);
+    auto macho_count = fix_macho_placeholders(package_dir, prefix_path, cellar_path, name);
+    if (auto bad = unresolved_macho_placeholders(package_dir); !bad.empty()) {
+        std::string msg = "relocation of '" + name +
+                          "' left unresolved Homebrew placeholders "
+                          "(the keg would fail to load):";
+        for (size_t i = 0; i < bad.size() && i < 5; ++i) {
+            msg += "\n  " + bad[i];
+        }
+        msg += "\nCheck that otool/install_name_tool work (xcode-select -p; "
+               "xcode-select --install).";
+        throw Error(msg);
+    }
 #else
     uint32_t macho_count = 0;
 #endif
@@ -683,6 +837,35 @@ void relocate_ruby(const fs::path& ruby_dir, const std::string& original_prefix)
                 SPDLOG_INFO("relocated rbconfig.rb");
             }
         }
+    }
+}
+
+bool looks_like_macho_header(const unsigned char* header, std::size_t size) {
+    if (size < 4)
+        return false;
+    auto be32 = [&](std::size_t off) {
+        return (uint32_t(header[off]) << 24) | (uint32_t(header[off + 1]) << 16) |
+               (uint32_t(header[off + 2]) << 8) | uint32_t(header[off + 3]);
+    };
+    switch (be32(0)) {
+    case 0xFEEDFACE: // MH_MAGIC
+    case 0xCEFAEDFE: // MH_CIGAM
+    case 0xFEEDFACF: // MH_MAGIC_64
+    case 0xCFFAEDFE: // MH_CIGAM_64
+        return true;
+    case 0xCAFEBABE: // FAT_MAGIC (big-endian on disk)
+    case 0xCAFEBABF: // FAT_MAGIC_64
+    {
+        // Java .class files share 0xCAFEBABE. In a fat header the next word
+        // is nfat_arch (small); in a class file it is minor<<16|major with
+        // major >= 45. Same heuristic as file(1).
+        if (size < 8)
+            return false;
+        const uint32_t nfat = be32(4);
+        return nfat > 0 && nfat < 20;
+    }
+    default:
+        return false;
     }
 }
 

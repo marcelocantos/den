@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -20,6 +21,29 @@ namespace fs = std::filesystem;
 /// / @@HOMEBREW_LIBRARY@@ tokens in a path string.
 std::string expand_homebrew_placeholders(std::string path, const std::string& prefix,
                                          const std::string& cellar);
+
+/// Order Homebrew version strings segment-wise ("1.9.10" > "1.9.7",
+/// "1.9.7_2" > "1.9.7"). Returns <0, 0, >0.
+int compare_keg_versions(const std::string& a, const std::string& b);
+
+/// Pick the keg directory den should bind a dependency to: the highest
+/// version under <cellar>/<dep>/ that looks like a real keg (has content
+/// other than a single nested directory). Empty if none.
+fs::path select_dep_keg(const fs::path& cellar, const std::string& dep);
+
+/// Rewrite a Mach-O install name / rpath that points through Homebrew's
+/// shared opt link (`@@HOMEBREW_PREFIX@@/opt/<dep>/...`) to the exact keg
+/// den binds instead (`<cellar>/<dep>/<version>/...`). The package's own name
+/// maps to `self_dir`. Den never depends on Homebrew's opt links (which
+/// Homebrew may repoint to an ABI-incompatible version), and never writes
+/// them. Returns the input unchanged when no keg can be found.
+std::string pin_opt_reference(const std::string& name, const fs::path& cellar,
+                              const std::string& self_name, const fs::path& self_dir);
+
+/// Resolve a Mach-O tool (otool, install_name_tool). Uses the PATH shim when
+/// it works; otherwise falls back to /Library/Developer/CommandLineTools,
+/// because a stale Xcode.app selection makes the /usr/bin shims fail.
+std::string macho_tool(const std::string& tool);
 
 /// Replace @@HOMEBREW_PREFIX@@, @@HOMEBREW_CELLAR@@, and similar
 /// placeholders in all text files under a directory tree.
@@ -45,5 +69,9 @@ void relocate_bottle(const fs::path& package_dir, const std::string& name,
 
 /// Relocate the bundled Portable Ruby binary to work from a new prefix.
 void relocate_ruby(const fs::path& ruby_dir, const std::string& original_prefix);
+
+/// True if the first bytes of a file are a Mach-O (thin or fat) header.
+/// Distinguishes fat Mach-O from Java .class files, which share 0xCAFEBABE.
+bool looks_like_macho_header(const unsigned char* header, std::size_t size);
 
 } // namespace den
