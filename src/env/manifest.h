@@ -68,6 +68,14 @@ std::map<std::string, std::string> resolve(const fs::path& den_home, const std::
 std::map<std::string, std::map<std::string, std::string>>
 resolve_per_provider(const fs::path& den_home, const std::string& env_path);
 
+/// The inheritance chain of `env_path`, starting with itself and ending at
+/// the topmost ancestor (explicit origin, else path parent). Cycle-safe.
+std::vector<std::string> ancestor_chain(const fs::path& den_home, const std::string& env_path);
+
+/// Every environment (with a manifest) that inherits from `env_path`,
+/// directly or transitively. Excludes `env_path` itself. Sorted.
+std::vector<std::string> env_descendants(const fs::path& den_home, const std::string& env_path);
+
 /// List all environment paths that have manifests.
 std::vector<std::string> list_all(const fs::path& den_home);
 

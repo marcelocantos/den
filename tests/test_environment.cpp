@@ -11,6 +11,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 
 namespace den {
@@ -219,6 +220,123 @@ TEST_SUITE("environment::materialise") {
 
         auto eDir = env_dir(den_home, "/");
         CHECK(fs::is_symlink(eDir / "bin" / "tree"));
+    }
+}
+
+TEST_SUITE("environment::descendants") {
+
+    struct Fixture {
+        TmpDir tmp;
+        fs::path den_home, store;
+        Fixture() : den_home(tmp.path / "den_home"), store(tmp.path / "store") {}
+        fs::path pkg(const std::string& name, const std::string& ver) {
+            auto p = store / name / ver;
+            fs::create_directories(p / "bin");
+            std::ofstream(p / "bin" / name) << ver;
+            return p;
+        }
+        void set(const std::string& env, const std::string& name, const std::string& ver,
+                 std::optional<std::string> origin = std::nullopt) {
+            auto m = read_manifest(den_home, env);
+            m.packages["homebrew"][name] = ver;
+            if (origin) {
+                m.origin = origin;
+            }
+            write_manifest(den_home, env, m);
+        }
+        void erase(const std::string& env, const std::string& name) {
+            auto m = read_manifest(den_home, env);
+            m.packages["homebrew"].erase(name);
+            write_manifest(den_home, env, m);
+        }
+        void make_env(const std::string& env) {
+            Manifest m;
+            m.origin = env_parent(env);
+            write_manifest(den_home, env, m);
+        }
+        fs::path bin(const std::string& env, const std::string& name) {
+            return env_dir(den_home, env) / "bin" / name;
+        }
+    };
+
+    TEST_CASE("env_descendants finds direct and transitive children only") {
+        Fixture f;
+        f.make_env("/");
+        f.make_env("/ml");
+        f.make_env("/ml/exp");
+        f.make_env("/web");
+        auto d = env_descendants(f.den_home, "/ml");
+        REQUIRE(d.size() == 1);
+        CHECK(d[0] == "/ml/exp");
+        auto r = env_descendants(f.den_home, "/");
+        CHECK(r.size() == 3);
+        CHECK(env_descendants(f.den_home, "/ml/exp").empty());
+    }
+
+    TEST_CASE("installing into the parent links the package into child and grandchild bins") {
+        Fixture f;
+        auto pv = f.pkg("pv", "1.12.0");
+        f.make_env("/ml");
+        f.make_env("/ml/exp");
+        materialise(f.den_home, f.store, "/ml");
+        materialise(f.den_home, f.store, "/ml/exp");
+        CHECK_FALSE(fs::exists(f.bin("/ml", "pv")));
+
+        f.set("/", "pv", "1.12.0");
+        materialise(f.den_home, f.store, "/");
+        CHECK(fs::read_symlink(f.bin("/ml", "pv")) == pv / "bin" / "pv");
+        CHECK(fs::read_symlink(f.bin("/ml/exp", "pv")) == pv / "bin" / "pv");
+    }
+
+    TEST_CASE("a child override survives a parent upgrade") {
+        Fixture f;
+        auto old = f.pkg("jq", "1.7");
+        auto nw = f.pkg("jq", "1.8");
+        f.set("/", "jq", "1.7");
+        f.make_env("/pinned");
+        f.set("/pinned", "jq", "1.7");
+        f.make_env("/follow");
+        materialise(f.den_home, f.store, "/");
+        CHECK(fs::read_symlink(f.bin("/follow", "jq")) == old / "bin" / "jq");
+
+        f.set("/", "jq", "1.8"); // upgrade in the parent
+        materialise(f.den_home, f.store, "/");
+        CHECK(fs::read_symlink(f.bin("/", "jq")) == nw / "bin" / "jq");
+        CHECK(fs::read_symlink(f.bin("/follow", "jq")) == nw / "bin" / "jq");
+        CHECK(fs::read_symlink(f.bin("/pinned", "jq")) == old / "bin" / "jq");
+    }
+
+    TEST_CASE("removing from the parent unlinks it from inheriting children") {
+        Fixture f;
+        f.pkg("pv", "1.12.0");
+        f.pkg("tree", "2.3.2");
+        f.set("/", "pv", "1.12.0");
+        f.set("/", "tree", "2.3.2");
+        f.make_env("/ml");
+        f.make_env("/keep");
+        f.set("/keep", "tree", "2.3.2"); // declared directly in the child
+        materialise(f.den_home, f.store, "/");
+        CHECK(fs::is_symlink(f.bin("/ml", "pv")));
+
+        f.erase("/", "pv");
+        f.erase("/", "tree");
+        materialise(f.den_home, f.store, "/");
+        CHECK_FALSE(fs::exists(f.bin("/", "pv")));
+        CHECK_FALSE(fs::is_symlink(f.bin("/ml", "pv")));
+        CHECK_FALSE(fs::is_symlink(f.bin("/ml", "tree")));
+        CHECK(fs::is_symlink(f.bin("/keep", "tree"))); // child's own entry stays
+    }
+
+    TEST_CASE("materialising a child does not touch its parent or siblings") {
+        Fixture f;
+        f.pkg("pv", "1.12.0");
+        f.make_env("/a");
+        f.make_env("/b");
+        f.set("/a", "pv", "1.12.0");
+        materialise(f.den_home, f.store, "/a");
+        CHECK(fs::is_symlink(f.bin("/a", "pv")));
+        CHECK_FALSE(fs::exists(f.bin("/b", "pv")));
+        CHECK_FALSE(fs::exists(f.bin("/", "pv")));
     }
 }
 

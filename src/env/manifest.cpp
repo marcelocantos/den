@@ -8,6 +8,7 @@
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <fstream>
 #include <set>
@@ -287,6 +288,32 @@ resolve_per_provider(const fs::path& den_home, const std::string& env_path) {
     }
 
     return result;
+}
+
+std::vector<std::string> ancestor_chain(const fs::path& den_home, const std::string& env_path) {
+    std::vector<std::string> chain;
+    std::set<std::string> visited;
+    std::string current = env_path;
+    while (!current.empty() && visited.insert(current).second) {
+        chain.push_back(current);
+        current = next_in_chain(current, read_manifest(den_home, current));
+    }
+    return chain;
+}
+
+std::vector<std::string> env_descendants(const fs::path& den_home, const std::string& env_path) {
+    std::vector<std::string> out;
+    for (const auto& e : list_all(den_home)) {
+        if (e == env_path) {
+            continue;
+        }
+        auto chain = ancestor_chain(den_home, e);
+        if (std::find(chain.begin() + 1, chain.end(), env_path) != chain.end()) {
+            out.push_back(e);
+        }
+    }
+    std::sort(out.begin(), out.end());
+    return out;
 }
 
 std::vector<std::string> list_all(const fs::path& den_home) {

@@ -947,6 +947,17 @@ void Cli::M::setup() {
             return;
         }
         auto cfg = Config::detect();
+        // Path naming makes /ml/exp a child of /ml; silently re-parenting it
+        // to / would change what it contains. Refuse and name the children.
+        if (auto kids = env_descendants(cfg.den_home, env_remove_name); !kids.empty()) {
+            std::string list;
+            for (const auto& k : kids) {
+                list += "\n  " + k;
+            }
+            throw UserError("cannot remove environment '" + env_remove_name +
+                            "': other environments inherit from it:" + list +
+                            "\nRemove those first.");
+        }
         auto manifest_dir = cfg.den_home / "manifests" / env_slug(env_remove_name);
         auto envdir = env_dir(cfg.den_home, env_remove_name);
         std::error_code ec;
