@@ -113,10 +113,28 @@ uint32_t link_opt_only(const fs::path& pkg_path, const fs::path& env_dir, const 
     return ec ? 0 : 1;
 }
 
+uint32_t materialise_one(const fs::path& den_home, const fs::path& store,
+                         const std::string& env_path, const PackageIndex* idx);
+
 } // namespace
 
 uint32_t materialise(const fs::path& den_home, const fs::path& store, const std::string& env_path,
                      const PackageIndex* idx) {
+    const auto links = materialise_one(den_home, store, env_path, idx);
+    // A change to this env's manifest changes the resolved set of every env
+    // that inherits from it, so re-materialise descendants too. Their own
+    // overrides win in resolve(), so overridden packages stay overridden.
+    for (const auto& child : env_descendants(den_home, env_path)) {
+        SPDLOG_DEBUG("materialise: refreshing descendant env '{}'", child);
+        materialise_one(den_home, store, child, idx);
+    }
+    return links;
+}
+
+namespace {
+
+uint32_t materialise_one(const fs::path& den_home, const fs::path& store,
+                         const std::string& env_path, const PackageIndex* idx) {
     // The materialiser asks each provider for its package layout (root +
     // subdirs to surface) and dispatches the link layer accordingly. The
     // result is provider-agnostic — a Homebrew keg, a pip-installed
@@ -285,6 +303,8 @@ uint32_t materialise(const fs::path& den_home, const fs::path& store, const std:
     SPDLOG_INFO("materialised env '{}' ({} symlinks)", env_path, total);
     return total;
 }
+
+} // namespace
 
 std::string active_env_path(const fs::path& den_home) {
     auto path = den_home / "active_env";

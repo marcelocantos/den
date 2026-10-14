@@ -1286,7 +1286,7 @@ targets:
     achieved: 2026-04-11
   T9:
     name: Environment management
-    status: converging
+    status: achieved
     value: 1.0
     cost: 1.0
     actual_cost: 1.0
@@ -1295,8 +1295,9 @@ targets:
     - Child envs inherit their parent's packages and can override versions. `den env create` records the origin, and envs without one inherit from their path parent. **Done (#62).** Before #62, `origin` was never written, so children inherited nothing.
     - '`den env create` refuses to overwrite an existing env. **Done (#62).**'
     - 'Shell integration via `eval "$(den init)"`. **Done.**'
-    - 'Changing a parent env re-materialises its descendants, so inherited packages appear in a child''s bin. **Remaining:** installing into `/` updates the resolved view of `/ml` but not `envs/ml/bin` until something re-materialises `/ml` (verified on den-test-mac 2026-10-14; `den env use` alone does not).'
-    - Removing an env that has children is handled explicitly (refuse or re-parent). **Remaining:** children silently fall back to the next ancestor.
-    context: 'Downgraded from achieved on 2026-10-14. Manifest-level inheritance existed in `resolve`, but nothing ever set `origin`, so it was dead code until #62. Materialisation of descendants on parent change is still missing.'
+    - Changing a parent env (install, uninstall, upgrade, `den use`) re-materialises every descendant env, so inherited packages appear in or disappear from the child's bin, and a child's own version overrides stay put. **Done (#63).**
+    - '`den env remove` on an env that other envs inherit from is refused with a clear error naming them. Re-parenting was rejected because path naming makes `/ml/exp` part of `/ml`. **Done (#63).**'
+    context: 'Re-achieved 2026-10-14. It had been downgraded the same day because `origin` was never written, which made inheritance dead code. #62 added origin inheritance and #63 added descendant re-materialisation and safe removal. Both were proven on den-test-mac (arm64).'
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-10-14
