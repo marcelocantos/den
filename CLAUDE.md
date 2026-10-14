@@ -45,7 +45,8 @@ rendered Markdown copy.
 
 - **Shared Cellar at /opt/homebrew**: Den uses the same Cellar as
   Homebrew (`/opt/homebrew/Cellar/`). Bottles pour at their expected
-  prefix with zero relocation — 100% of bottles work immediately.
+  prefix, so macOS bottles need no relocation. On Linux, den rewrites
+  ELF interpreter/RPATH entries with patchelf when pouring bottles.
   Den and Homebrew coexist on the same Cellar. Den tracks what it
   manages via its own manifest in `~/.den/`.
 - **Environments are symlink sets**: Each environment is a directory
@@ -69,6 +70,7 @@ src/
 ├── main.cpp        # CLI entry point
 ├── activity/       # User-facing progress / activity reporting
 ├── build/          # Source-build pipeline (incl. native formula parser)
+├── cask/           # macOS cask install/upgrade/uninstall (receipts, stage-then-swap)
 ├── cli/            # Command parsing and dispatch
 ├── core/           # Shared utilities and primitives
 ├── daemon/         # Background upgrade / supervisor daemon

@@ -6,7 +6,8 @@ everything — not just Python, but every package on your system.
 ## What den does
 
 - **Shared Cellar** — den uses `/opt/homebrew/Cellar` directly, so
-  bottles pour at their expected prefix with zero relocation. Den and
+  bottles pour at their expected prefix (no relocation on macOS; Linux
+  bottles get their ELF paths patched with patchelf). Den and
   Homebrew coexist on the same Cellar.
 - **Unified package model** — no formula/cask distinction. Just
   `den install firefox` or `den install ffmpeg`.
@@ -89,8 +90,8 @@ are available via `--provider <name>` without changes to the CLI,
 manifest, or environment-composition layers.
 
 - **Shared Cellar** (`/opt/homebrew/Cellar/`) holds Homebrew-installed
-  package versions — shared with Homebrew, so bottles work without
-  relocation. Other providers keep their own storage areas.
+  package versions — shared with Homebrew, so macOS bottles work without
+  relocation (Linux bottles are patched with patchelf on pour). Other providers keep their own storage areas.
 - **Manifests** declare what each environment contains, grouped per
   provider. Child environments inherit from parents and override
   specific packages.
