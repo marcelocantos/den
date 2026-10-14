@@ -136,29 +136,39 @@ uint32_t link_package(const fs::path& pkg_path, const fs::path& env_dir, const s
         ++count;
     }
 
-    // Also maintain <prefix>/opt/<name> for bottle RPATH entries like
-    // @@HOMEBREW_PREFIX@@/opt/oniguruma/lib. keg path is
-    // <prefix>/Cellar/<name>/<version>, so prefix is three levels up.
-    // Without this, relocated Linux ELF binaries fail to find deps even
-    // after interpreter/RPATH placeholder expansion.
+    // <prefix>/opt/<name> is Homebrew's shared, single-version link. On macOS
+    // den never touches it: den-poured Mach-O kegs are relocated to the exact
+    // dependency keg (pin_opt_reference), so they don't need it, and
+    // repointing it breaks Homebrew-installed packages built against another
+    // ABI (e.g. bat → libgit2.1.8 vs 1.9). On Linux, relocated ELF RPATHs
+    // still use <prefix>/opt/<dep>/lib, so den creates the link only when it
+    // is missing or dangling, never repointing one that resolves to a keg.
+#ifndef __APPLE__
     auto cellar = pkg_path.parent_path().parent_path(); // .../Cellar
     auto prefix = cellar.parent_path();
     if (!prefix.empty() && cellar.filename() == "Cellar") {
         auto prefix_opt_dir = prefix / "opt";
         fs::create_directories(prefix_opt_dir, ec);
         auto prefix_opt_link = prefix_opt_dir / name;
-        if (fs::exists(prefix_opt_link, ec) || fs::is_symlink(prefix_opt_link, ec)) {
+        const bool present = fs::is_symlink(prefix_opt_link, ec) || fs::exists(prefix_opt_link, ec);
+        const bool dangling =
+            fs::is_symlink(prefix_opt_link, ec) && !fs::exists(prefix_opt_link, ec);
+        if (dangling) {
             fs::remove(prefix_opt_link, ec);
         }
-        fs::create_symlink(pkg_path, prefix_opt_link, ec);
-        if (ec) {
-            SPDLOG_WARN("failed to create prefix opt symlink {}: {}", prefix_opt_link.string(),
-                        ec.message());
+        if (!present || dangling) {
+            fs::create_symlink(pkg_path, prefix_opt_link, ec);
+            if (ec) {
+                SPDLOG_WARN("failed to create prefix opt symlink {}: {}", prefix_opt_link.string(),
+                            ec.message());
+            } else {
+                ++count;
+            }
         } else {
-            ++count;
-            SPDLOG_DEBUG("linked prefix opt {} -> {}", prefix_opt_link.string(), pkg_path.string());
+            SPDLOG_DEBUG("leaving existing prefix opt link {}", prefix_opt_link.string());
         }
     }
+#endif
 
     SPDLOG_INFO("linked {} ({} symlinks)", name, count);
     return count;

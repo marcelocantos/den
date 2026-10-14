@@ -8,6 +8,12 @@
 
 namespace den {
 
+/// Locate the keg directory inside an extracted bottle: <root>/<name>/<version>,
+/// or the single <root>/<name>/<version>_<rev> for revisioned/rebuilt bottles.
+/// Empty if absent or ambiguous.
+fs::path find_bottle_keg_dir(const fs::path& extract_root, const std::string& name,
+                             const std::string& version);
+
 /// Homebrew implementation of `PackageProvider`. Wraps the bottle-pour
 /// install/uninstall/list flow that den has used since v0.1.
 ///
