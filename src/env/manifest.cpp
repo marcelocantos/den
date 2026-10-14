@@ -51,7 +51,33 @@ fs::path manifest_file(const fs::path& den_home, const std::string& env_path) {
     return den_home / "manifests" / env_slug(env_path) / "manifest.json";
 }
 
+/// Next environment up the inheritance chain from `current`. An explicit
+/// `origin` wins; otherwise a non-root env inherits from its path parent
+/// (`/ml/exp` -> `/ml` -> `/`). This makes envs created before origins were
+/// recorded inherit too, with no migration.
+std::string next_in_chain(const std::string& current, const Manifest& m) {
+    if (m.origin && !m.origin->empty()) {
+        return *m.origin;
+    }
+    return env_parent(current);
+}
+
 } // namespace
+
+std::string env_parent(const std::string& env_path) {
+    std::string p = env_path;
+    while (p.size() > 1 && p.back() == '/') {
+        p.pop_back();
+    }
+    if (p.empty() || p == "/") {
+        return {};
+    }
+    auto pos = p.rfind('/');
+    if (pos == std::string::npos || pos == 0) {
+        return "/";
+    }
+    return p.substr(0, pos);
+}
 
 std::string env_slug(const std::string& env_path) {
     if (env_path == "/") {
@@ -217,7 +243,7 @@ std::map<std::string, std::string> resolve(const fs::path& den_home, const std::
         visited.insert(current);
         auto m = read_manifest(den_home, current);
         chain.push_back(std::move(m));
-        current = chain.back().origin.value_or("");
+        current = next_in_chain(current, chain.back());
     }
 
     // Apply in reverse order (root first, then children override).
@@ -248,7 +274,7 @@ resolve_per_provider(const fs::path& den_home, const std::string& env_path) {
         visited.insert(current);
         auto m = read_manifest(den_home, current);
         chain.push_back(std::move(m));
-        current = chain.back().origin.value_or("");
+        current = next_in_chain(current, chain.back());
     }
 
     // Apply in reverse order (root first, then children override).
