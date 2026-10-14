@@ -8,7 +8,7 @@ binary.
 
 - **Cellar**: Shared package storage at `/opt/homebrew/Cellar/<name>/<version>/`.
   Den uses the same Cellar as Homebrew — bottles pour at their expected
-  prefix with zero relocation.
+  prefix (no relocation on macOS; Linux bottles are patchelf'd on pour).
 - **Environment**: A named set of symlinks into the Cellar.
   Environments use path-based naming (`/` is root, `/ml`,
   `/work/legacy`) with manifest-level inheritance.

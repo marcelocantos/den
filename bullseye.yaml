@@ -52,28 +52,38 @@ targets:
     achieved: 2026-06-22
   T12:
     name: Cask support
-    status: achieved
+    status: converging
     value: 1.0
     cost: 1.0
     actual_cost: 1.0
     acceptance:
-    - TODO
-    context: '`den install --cask` handles DMG and ZIP casks with app artifacts. Downloads, mounts/extracts, copies .app to /Applications, tracks in manifest. **Achieved.**'
+    - '`den install <cask>` installs .app casks from .dmg and .zip, and binary-only casks, on macOS arm64; `den list` shows them; `den uninstall` removes them. **Done (#61).**'
+    - Apps go to `DEN_APPDIR` (default /Applications); den stages under `~/.den/caskroom/<token>/<version>/`, never Homebrew's Caskroom, and writes `DEN_CASK_RECEIPT.json`. Den only overwrites or deletes apps a den receipt names. **Done (#61).**
+    - Quarantine (`com.apple.quarantine`) is cleared on placed artifacts. **Done (#61).**
+    - 'Upgrades stage the new version fully (download, extract, copy, quarantine) and then swap it in with rollback. A failure at any stage leaves the previous app intact, and the receipt and settings consistent. **Done (#62).**'
+    - '.pkg casks install without manual sudo, or prompt for admin cleanly. **Remaining:** den runs `installer` but needs admin; uninstall does not run `pkgutil --forget`.'
+    - '`preflight` / `postflight` blocks are honoured. **Remaining.**'
+    - '`uninstall` stanzas (scripts, launchctl, quit, signal, delete) run on uninstall. **Remaining.**'
+    - '`zap` stanzas are supported (opt-in deep clean). **Remaining.**'
+    - Running apps are quit (or the user is warned) before uninstall or upgrade. **Remaining.**
+    context: 'Downgraded from achieved on 2026-10-14. The original claim (`den install --cask`, copied to /Applications, tracked in the manifest) predated a working implementation; real cask install landed in #61 and upgrade safety landed in #62. Linux: casks fail with a clear "macOS only" error.'
     origin: manual
     discovered: 2026-04-09
-    achieved: 2026-04-11
   T13:
     name: Background maintenance daemon
-    status: achieved
+    status: identified
     value: 1.0
     cost: 1.0
     actual_cost: 1.0
     acceptance:
-    - TODO
-    context: '`den daemon run/stop/status/install/uninstall` implemented. Daemon runs as a long-lived process, refreshes the formula index, downloads bottles for outdated packages, and supports auto-upgrade with configurable maintenance windows. State stored in `~/.den/daemon_state.json`. Granular user control via `daemon.auto_download` (default: on) and `daemon.auto_upgrade` (default: off). **Achieved.**'
+    - '`den daemon run/stop/status/install/uninstall` work, state persists in `~/.den/daemon_state.json`, and `daemon.auto_download`, `daemon.auto_upgrade` and `daemon.upgrade_window` are honoured. **Done (scaffolding).**'
+    - The daemon cycle refreshes the package index. **Remaining:** `src/daemon/daemon.cpp` has `// TODO: Refresh package index`.
+    - The daemon detects outdated packages and fills `state.pending`. **Remaining:** marked TODO, so `pending` is never populated and the download/upgrade passes never run.
+    - With auto_download on, bottles for pending upgrades are pre-downloaded. **Remaining:** marked TODO.
+    - With auto_upgrade on and inside the window, the upgrade pass applies pending upgrades and defers in-use kegs (T51/T72). **Implemented**, but unreachable until pending is populated.
+    context: 'Downgraded from achieved on 2026-10-14. The process lifecycle, settings and upgrade-pass machinery exist, but the maintenance cycle is a stub. Index refresh, outdated detection and pre-download are TODOs in `src/daemon/daemon.cpp`, so in practice the daemon never downloads or upgrades anything.'
     origin: manual
     discovered: 2026-04-09
-    achieved: 2026-04-11
   T14:
     name: Info, search, and query commands
     status: achieved
@@ -1276,13 +1286,17 @@ targets:
     achieved: 2026-04-11
   T9:
     name: Environment management
-    status: achieved
+    status: converging
     value: 1.0
     cost: 1.0
     actual_cost: 1.0
     acceptance:
-    - TODO
-    context: Manifest-based environment hierarchy with path naming (/ is root, /ml, /work/legacy). Inheritance at the manifest level — child envs inherit packages and can override versions. Materialisation produces flat symlink directories. Shell integration via `eval "$(den init)"`. **Achieved.**
+    - Path-named env hierarchy (`/`, `/ml`, `/work/legacy`) with create/list/use/show/remove. **Done.**
+    - Child envs inherit their parent's packages and can override versions. `den env create` records the origin, and envs without one inherit from their path parent. **Done (#62).** Before #62, `origin` was never written, so children inherited nothing.
+    - '`den env create` refuses to overwrite an existing env. **Done (#62).**'
+    - 'Shell integration via `eval "$(den init)"`. **Done.**'
+    - 'Changing a parent env re-materialises its descendants, so inherited packages appear in a child''s bin. **Remaining:** installing into `/` updates the resolved view of `/ml` but not `envs/ml/bin` until something re-materialises `/ml` (verified on den-test-mac 2026-10-14; `den env use` alone does not).'
+    - Removing an env that has children is handled explicitly (refuse or re-parent). **Remaining:** children silently fall back to the next ancestor.
+    context: 'Downgraded from achieved on 2026-10-14. Manifest-level inheritance existed in `resolve`, but nothing ever set `origin`, so it was dead code until #62. Materialisation of descendants on parent change is still missing.'
     origin: manual
     discovered: 2026-04-09
-    achieved: 2026-04-11

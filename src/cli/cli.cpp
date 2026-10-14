@@ -905,8 +905,26 @@ void Cli::M::setup() {
     env_create->add_option("name", env_create_name, "Environment name")->required();
     env_create->callback([this] {
         auto cfg = Config::detect();
-        write_manifest(cfg.den_home, env_create_name, Manifest{});
-        std::cout << "Created environment '" << env_create_name << "'.\n";
+        std::string name = env_create_name;
+        if (name.empty() || name[0] != '/') {
+            name = "/" + name;
+        }
+        while (name.size() > 1 && name.back() == '/') {
+            name.pop_back();
+        }
+        if (name == "/") {
+            throw UserError("the root environment '/' always exists");
+        }
+        const auto mf = cfg.den_home / "manifests" / env_slug(name) / "manifest.json";
+        if (fs::exists(mf)) {
+            // Never clobber an existing env's packages.
+            throw UserError("environment '" + name + "' already exists");
+        }
+        Manifest m;
+        m.origin = env_parent(name);
+        write_manifest(cfg.den_home, name, m);
+        std::cout << "Created environment '" << name << "' (inherits from " << *m.origin
+                  << ").\n";
     });
 
     auto* env_list = env->add_subcommand("list", "List environments");

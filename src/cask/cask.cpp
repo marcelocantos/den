@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <system_error>
 
@@ -287,7 +288,8 @@ fs::path stage_archive(const fs::path& archive, const fs::path& version_dir) {
         }
     } else {
         // Bare binary (no container): place under stage using the URL basename.
-        const auto name = archive.filename().string().empty() ? "binary" : archive.filename().string();
+        const auto name =
+            archive.filename().string().empty() ? "binary" : archive.filename().string();
         fs::copy_file(archive, stage / name, fs::copy_options::overwrite_existing);
     }
 
@@ -340,14 +342,25 @@ bool install_pkg_file(const fs::path& pkg_file) {
             target = root;
         }
     }
-    const std::string cmd =
-        "installer -pkg " + sh_quote(pkg_file) + " -target " + sh_quote(target);
+    const std::string cmd = "installer -pkg " + sh_quote(pkg_file) + " -target " + sh_quote(target);
     std::cout << "==> Running installer for " << pkg_file.filename().string() << "\n";
     return run_cmd(cmd) == 0;
 #else
     (void)pkg_file;
     return false;
 #endif
+}
+
+/// Test-only fault injection for cask install/upgrade. When DEN_CASK_FAULT
+/// names `stage` (download, extract, copy, quarantine, swap, receipt), throw
+/// as if that step failed. Used by regression tests and the den-test-mac
+/// proof to show a failed upgrade never damages the installed version.
+void maybe_inject_fault(std::string_view stage) {
+    if (const char* f = std::getenv("DEN_CASK_FAULT")) {
+        if (stage == f) {
+            throw Error("injected cask fault at stage '" + std::string(stage) + "'");
+        }
+    }
 }
 
 } // namespace
@@ -527,14 +540,15 @@ std::vector<InstalledPackage> list_den_casks(const Config& config) {
             .path = cask_version_path(config, token, version),
         });
     }
-    std::sort(out.begin(), out.end(), [](const InstalledPackage& a, const InstalledPackage& b) {
-        return a.name < b.name;
-    });
+    std::sort(out.begin(), out.end(),
+              [](const InstalledPackage& a, const InstalledPackage& b) { return a.name < b.name; });
     return out;
 }
 
 InstallResult install_cask(const Config& config, const Package& pkg) {
 #ifndef __APPLE__
+    (void)config;
+    (void)pkg;
     throw UserError("casks are not supported on Linux (macOS only)");
 #else
     if (pkg.archives.empty()) {
@@ -562,228 +576,321 @@ InstallResult install_cask(const Config& config, const Package& pkg) {
         token = token.substr(5);
     }
 
+    // Upgrade safety: the previously installed version (if any) is left
+    // completely untouched until the new version is fully staged. Only the
+    // final swap modifies the appdir, and it rolls back on any failure.
+    std::optional<CaskReceipt> old_receipt;
+    std::string old_version;
     if (is_cask_installed(config, token)) {
-        const auto ver = installed_cask_version(config, token);
-        if (ver == pkg.version) {
-            SPDLOG_INFO("cask {} {} already installed", token, ver);
+        old_version = installed_cask_version(config, token);
+        if (old_version == pkg.version) {
+            SPDLOG_INFO("cask {} {} already installed", token, old_version);
             InstallResult r;
             r.resolved_version = pkg.version;
             return r;
         }
-        // Different version — uninstall the old one first (receipt-scoped).
-        uninstall_cask(config, token);
+        old_receipt = read_cask_receipt(cask_version_path(config, token, old_version));
     }
 
     const auto version_dir = cask_version_path(config, token, pkg.version);
-    std::error_code ec;
-    fs::remove_all(version_dir, ec);
-    fs::create_directories(version_dir);
-
-    std::cout << "==> Downloading cask " << token << " " << pkg.version << "\n";
-    fs::path archive_path;
-    // Local fixtures (unit tests) may pass file:// or absolute paths.
-    if (archive.url.starts_with("file://")) {
-        archive_path = fs::path(archive.url.substr(7));
-        if (!fs::exists(archive_path)) {
-            throw UserError("local cask archive not found: " + archive_path.string());
-        }
-    } else if (!archive.url.empty() && archive.url[0] == '/') {
-        archive_path = fs::path(archive.url);
-        if (!fs::exists(archive_path)) {
-            throw UserError("local cask archive not found: " + archive_path.string());
-        }
-    } else {
-        auto cache_dir = config.cache / "cask-archives";
-        fs::create_directories(cache_dir);
-        archive_path = fetch_archive(archive.url, archive.sha256, cache_dir);
-    }
-
-    std::cout << "==> Staging " << token << "\n";
-    fs::path stage;
-    try {
-        stage = stage_archive(archive_path, version_dir);
-    } catch (...) {
-        fs::remove_all(version_dir, ec);
-        throw;
-    }
-
     const fs::path appdir = cask_appdir(config);
-    fs::create_directories(appdir);
+    // Staging lives inside the appdir so the final swap is a same-volume rename.
+    const fs::path app_staging = appdir / (".den-staging-" + token + "-" + pkg.version);
+
+    std::error_code ec;
+    // Everything below up to the swap only creates new state; on failure we
+    // discard it and the old version is exactly as it was.
+    auto discard_new = [&]() {
+        std::error_code dec;
+        fs::remove_all(app_staging, dec);
+        fs::remove_all(version_dir, dec);
+    };
+
+    struct StagedApp {
+        fs::path staged;
+        fs::path dest;
+    };
+    struct PlannedLink {
+        fs::path link;
+        fs::path target;
+    };
+    std::vector<StagedApp> staged_apps;
+    std::vector<PlannedLink> planned_links;
 
     CaskReceipt receipt;
     receipt.token = token;
     receipt.version = pkg.version;
 
-    // Determine artifacts. If the index carried none, fall back to "any .app
-    // in the stage" so simple casks still install after a partial index.
-    std::vector<CaskArtifact> artifacts = pkg.cask_artifacts;
-    if (artifacts.empty()) {
-        for (auto it = fs::recursive_directory_iterator(
-                 stage, fs::directory_options::skip_permission_denied, ec);
-             it != fs::recursive_directory_iterator(); it.increment(ec)) {
-            if (ec) {
-                ec.clear();
-                continue;
+    try {
+        fs::remove_all(version_dir, ec);
+        fs::create_directories(version_dir);
+
+        std::cout << "==> Downloading cask " << token << " " << pkg.version << "\n";
+        fs::path archive_path;
+        // Local fixtures (unit tests) may pass file:// or absolute paths.
+        if (archive.url.starts_with("file://")) {
+            archive_path = fs::path(archive.url.substr(7));
+            if (!fs::exists(archive_path)) {
+                throw UserError("local cask archive not found: " + archive_path.string());
             }
-            if (it->path().extension() == ".app" && it->is_directory()) {
-                CaskArtifact a;
-                a.kind = CaskArtifactKind::App;
-                a.source = fs::relative(it->path(), stage).string();
-                artifacts.push_back(std::move(a));
-                it.disable_recursion_pending();
+        } else if (!archive.url.empty() && archive.url[0] == '/') {
+            archive_path = fs::path(archive.url);
+            if (!fs::exists(archive_path)) {
+                throw UserError("local cask archive not found: " + archive_path.string());
+            }
+        } else {
+            auto cache_dir = config.cache / "cask-archives";
+            fs::create_directories(cache_dir);
+            archive_path = fetch_archive(archive.url, archive.sha256, cache_dir);
+        }
+        maybe_inject_fault("download");
+
+        std::cout << "==> Staging " << token << "\n";
+        const fs::path stage = stage_archive(archive_path, version_dir);
+        maybe_inject_fault("extract");
+
+        fs::create_directories(appdir);
+
+        // Determine artifacts. If the index carried none, fall back to "any
+        // .app in the stage" so simple casks still install after a partial index.
+        std::vector<CaskArtifact> artifacts = pkg.cask_artifacts;
+        if (artifacts.empty()) {
+            for (auto it = fs::recursive_directory_iterator(
+                     stage, fs::directory_options::skip_permission_denied, ec);
+                 it != fs::recursive_directory_iterator(); it.increment(ec)) {
+                if (ec) {
+                    ec.clear();
+                    continue;
+                }
+                if (it->path().extension() == ".app" && it->is_directory()) {
+                    CaskArtifact a;
+                    a.kind = CaskArtifactKind::App;
+                    a.source = fs::relative(it->path(), stage).string();
+                    artifacts.push_back(std::move(a));
+                    it.disable_recursion_pending();
+                }
             }
         }
-    }
 
-    bool placed_anything = false;
+        bool placed_anything = false;
+        const auto active = active_env_path(config.den_home);
+        const fs::path bin_dir = env_dir(config.den_home, active) / "bin";
 
-    for (const auto& art : artifacts) {
-        if (art.kind == CaskArtifactKind::App) {
-            const fs::path src = find_app_in_stage(stage, art.source);
-            if (!fs::exists(src)) {
-                throw UserError("cask '" + token + "': app not found in archive: " + art.source);
-            }
-            const std::string app_name =
-                art.target.empty() ? src.filename().string() : fs::path(art.target).filename().string();
-            // Refuse path traversal in app names.
-            if (app_name.find('/') != std::string::npos || app_name == ".." ||
-                app_name.find("..") != std::string::npos) {
-                throw UserError("cask '" + token + "': unsafe app name: " + app_name);
-            }
-            const fs::path dest = appdir / app_name;
-            if (fs::exists(dest)) {
-                if (!app_owned_by_den(config, dest)) {
-                    // Roll back stage; do not touch the foreign app.
-                    fs::remove_all(version_dir, ec);
+        for (const auto& art : artifacts) {
+            if (art.kind == CaskArtifactKind::App) {
+                const fs::path src = find_app_in_stage(stage, art.source);
+                if (!fs::exists(src)) {
+                    throw UserError("cask '" + token +
+                                    "': app not found in archive: " + art.source);
+                }
+                const std::string app_name = art.target.empty()
+                                                 ? src.filename().string()
+                                                 : fs::path(art.target).filename().string();
+                if (app_name.find('/') != std::string::npos || app_name == ".." ||
+                    app_name.find("..") != std::string::npos) {
+                    throw UserError("cask '" + token + "': unsafe app name: " + app_name);
+                }
+                const fs::path dest = appdir / app_name;
+                if (fs::exists(dest) && !app_owned_by_den(config, dest)) {
                     throw UserError("refusing to overwrite '" + dest.string() +
                                     "': not installed by den. "
                                     "Remove it manually or choose a different DEN_APPDIR.");
                 }
-                // Owned by den (prior version) — safe to replace.
-                fs::remove_all(dest, ec);
-            }
-            std::cout << "==> Installing " << app_name << " to " << appdir.string() << "\n";
-            copy_app_bundle(src, dest);
-            clear_quarantine(dest);
-            receipt.apps.push_back(dest);
-            placed_anything = true;
-        } else if (art.kind == CaskArtifactKind::Binary) {
-            const fs::path src = resolve_binary_source(stage, appdir, art.source);
-            if (!fs::exists(src)) {
-                // Binary may live inside an app we just installed; retry.
-                throw UserError("cask '" + token + "': binary not found: " + art.source);
-            }
-            const std::string link_name = binary_link_name(art);
-            if (link_name.empty() || link_name.find('/') != std::string::npos) {
-                throw UserError("cask '" + token + "': unsafe binary name");
-            }
-            // Keep a durable copy under the stage so env rebuilds can relink.
-            fs::path staged_bin = stage / link_name;
-            if (fs::weakly_canonical(src) != fs::weakly_canonical(staged_bin, ec)) {
-                if (!fs::exists(staged_bin)) {
-                    // If source is inside stage already, just reference it.
-                    if (src.string().find(stage.string()) == 0) {
-                        staged_bin = src;
-                    } else {
-                        fs::copy_file(src, staged_bin, fs::copy_options::overwrite_existing);
-                    }
+                const fs::path staged = app_staging / app_name;
+                std::cout << "==> Staging " << app_name << " in " << appdir.string() << "\n";
+                copy_app_bundle(src, staged);
+                maybe_inject_fault("copy");
+                // Codesign/quarantine step runs on the staged copy, never on
+                // the live app.
+                clear_quarantine(staged);
+                maybe_inject_fault("quarantine");
+                staged_apps.push_back({staged, dest});
+                receipt.apps.push_back(dest);
+                placed_anything = true;
+            } else if (art.kind == CaskArtifactKind::Binary) {
+                const fs::path src = resolve_binary_source(stage, appdir, art.source);
+                if (!fs::exists(src)) {
+                    throw UserError("cask '" + token + "': binary not found: " + art.source);
                 }
-            } else {
-                staged_bin = src;
-            }
-            // Make executable.
-            fs::permissions(staged_bin,
-                            fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
-                            fs::perm_options::add, ec);
-
-            const auto active = active_env_path(config.den_home);
-            const fs::path bin_dir = env_dir(config.den_home, active) / "bin";
-            fs::create_directories(bin_dir);
-            const fs::path link = bin_dir / link_name;
-            if (fs::exists(link) || fs::is_symlink(link)) {
-                // Only replace if it points into our caskroom or doesn't exist as foreign file.
-                std::error_code ec2;
-                if (fs::is_symlink(link, ec2)) {
-                    auto tgt = fs::read_symlink(link, ec2);
-                    auto canon = fs::weakly_canonical(link.parent_path() / tgt, ec2);
-                    if (!ec2 && canon.string().find(den_caskroom(config).string()) != 0 &&
-                        fs::exists(link)) {
-                        // Could be a den env link from a formula — still our env, replace.
+                const std::string link_name = binary_link_name(art);
+                if (link_name.empty() || link_name.find('/') != std::string::npos) {
+                    throw UserError("cask '" + token + "': unsafe binary name");
+                }
+                // Keep a durable copy under the stage so env rebuilds can relink.
+                fs::path staged_bin = stage / link_name;
+                if (src.string().find(stage.string()) == 0) {
+                    if (!fs::exists(staged_bin)) {
+                        staged_bin = src;
                     }
-                    fs::remove(link, ec2);
-                } else if (fs::exists(link)) {
-                    fs::remove_all(version_dir, ec);
+                } else if (!fs::exists(staged_bin)) {
+                    fs::copy_file(src, staged_bin, fs::copy_options::overwrite_existing);
+                }
+                fs::permissions(staged_bin,
+                                fs::perms::owner_exec | fs::perms::group_exec |
+                                    fs::perms::others_exec,
+                                fs::perm_options::add, ec);
+                clear_quarantine(staged_bin);
+                const fs::path link = bin_dir / link_name;
+                if (!fs::is_symlink(link, ec) && fs::exists(link, ec)) {
                     throw UserError("refusing to overwrite binary '" + link.string() + "'");
                 }
-            }
-            fs::create_symlink(staged_bin, link, ec);
-            if (ec) {
-                fs::remove_all(version_dir, ec);
-                throw Error("failed to link binary " + link.string() + ": " + ec.message());
-            }
-            clear_quarantine(staged_bin);
-            receipt.binaries.push_back(CaskBinaryLink{link, staged_bin});
-            placed_anything = true;
-            std::cout << "==> Linked " << link_name << "\n";
-        } else if (art.kind == CaskArtifactKind::Pkg) {
-            fs::path pkg_file = stage / art.source;
-            if (!fs::exists(pkg_file)) {
-                // Search by basename (nested containers).
-                pkg_file = find_app_in_stage(stage, art.source);
-            }
-            if (!fs::exists(pkg_file)) {
-                // Content-addressed downloads keep the sha256 as the filename
-                // (e.g. <hash>.pkg). Accept any single .pkg under stage.
-                std::error_code pec;
-                std::vector<fs::path> pkgs;
-                for (const auto& e : fs::directory_iterator(stage, pec)) {
-                    if (e.is_regular_file() && e.path().extension() == ".pkg") {
-                        pkgs.push_back(e.path());
-                    }
+                planned_links.push_back({link, staged_bin});
+                receipt.binaries.push_back(CaskBinaryLink{link, staged_bin});
+                placed_anything = true;
+            } else if (art.kind == CaskArtifactKind::Pkg) {
+                fs::path pkg_file = stage / art.source;
+                if (!fs::exists(pkg_file)) {
+                    pkg_file = find_app_in_stage(stage, art.source);
                 }
-                if (pkgs.size() == 1) {
-                    pkg_file = pkgs.front();
-                } else if (!pkgs.empty()) {
-                    // Prefer a name that matches the artifact source basename.
-                    const auto want = fs::path(art.source).filename().string();
-                    for (const auto& p : pkgs) {
-                        if (p.filename().string() == want) {
-                            pkg_file = p;
-                            break;
+                if (!fs::exists(pkg_file)) {
+                    // Content-addressed downloads keep the sha256 as the
+                    // filename (e.g. <hash>.pkg). Accept any single .pkg.
+                    std::error_code pec;
+                    std::vector<fs::path> pkgs;
+                    for (const auto& e : fs::directory_iterator(stage, pec)) {
+                        if (e.is_regular_file() && e.path().extension() == ".pkg") {
+                            pkgs.push_back(e.path());
                         }
                     }
-                    if (!fs::exists(pkg_file)) {
+                    if (pkgs.size() == 1) {
                         pkg_file = pkgs.front();
+                    } else if (!pkgs.empty()) {
+                        const auto want = fs::path(art.source).filename().string();
+                        for (const auto& p : pkgs) {
+                            if (p.filename().string() == want) {
+                                pkg_file = p;
+                                break;
+                            }
+                        }
+                        if (!fs::exists(pkg_file)) {
+                            pkg_file = pkgs.front();
+                        }
                     }
                 }
+                if (!fs::exists(pkg_file)) {
+                    throw UserError("cask '" + token + "': pkg not found: " + art.source);
+                }
+                // NOTE: the system installer cannot be staged or rolled back;
+                // a pkg failure aborts before the app swap, leaving apps intact.
+                if (!install_pkg_file(pkg_file)) {
+                    throw UserError(
+                        "cask '" + token +
+                        "': pkg install failed (is admin authorisation available?). "
+                        "PKG casks may require an interactive sudo via /usr/bin/installer.");
+                }
+                receipt.pkgs.push_back(art.source);
+                placed_anything = true;
             }
-            if (!fs::exists(pkg_file)) {
-                throw UserError("cask '" + token + "': pkg not found: " + art.source);
-            }
-            if (!install_pkg_file(pkg_file)) {
-                fs::remove_all(version_dir, ec);
-                throw UserError(
-                    "cask '" + token +
-                    "': pkg install failed (is admin authorisation available?). "
-                    "PKG casks may require an interactive sudo via /usr/bin/installer.");
-            }
-            // Record any pkgutil id from uninstall stanzas if present in source name.
-            receipt.pkgs.push_back(art.source);
-            placed_anything = true;
         }
+
+        if (!placed_anything) {
+            throw UserError("cask '" + token +
+                            "' has no supported artifacts (need app, binary, or pkg). "
+                            "Complex casks (installer scripts, preflight) are not supported yet.");
+        }
+    } catch (...) {
+        discard_new();
+        throw;
     }
 
-    if (!placed_anything) {
-        fs::remove_all(version_dir, ec);
-        throw UserError(
-            "cask '" + token +
-            "' has no supported artifacts (need app, binary, or pkg). "
-            "Complex casks (installer scripts, preflight) are not supported yet.");
+    // ---- Swap phase: the only part that touches live state. ----
+    struct MovedApp {
+        fs::path dest;
+        fs::path backup; // empty if nothing existed at dest
+        bool placed = false;
+    };
+    struct ReplacedLink {
+        fs::path link;
+        fs::path old_target; // empty if no link existed
+        bool replaced = false;
+    };
+    std::vector<MovedApp> moved;
+    std::vector<ReplacedLink> relinked;
+    const fs::path backup_dir = appdir / (".den-backup-" + token + "-" + pkg.version);
+
+    auto rollback = [&]() {
+        std::error_code rec;
+        for (auto it = relinked.rbegin(); it != relinked.rend(); ++it) {
+            if (!it->replaced) {
+                continue;
+            }
+            fs::remove(it->link, rec);
+            if (!it->old_target.empty()) {
+                fs::create_symlink(it->old_target, it->link, rec);
+            }
+        }
+        for (auto it = moved.rbegin(); it != moved.rend(); ++it) {
+            if (it->placed) {
+                fs::remove_all(it->dest, rec);
+            }
+            if (!it->backup.empty()) {
+                fs::rename(it->backup, it->dest, rec);
+                if (rec) {
+                    std::cerr << "error: could not restore " << it->dest.string() << " from "
+                              << it->backup.string() << ": " << rec.message() << "\n";
+                }
+            }
+        }
+        fs::remove_all(backup_dir, rec);
+        discard_new();
+    };
+
+    try {
+        std::cout << "==> Installing " << token << " " << pkg.version << "\n";
+        for (const auto& sa : staged_apps) {
+            MovedApp m{sa.dest, {}, false};
+            if (fs::exists(sa.dest) || fs::is_symlink(sa.dest)) {
+                fs::create_directories(backup_dir);
+                m.backup = backup_dir / sa.dest.filename();
+                fs::rename(sa.dest, m.backup);
+            }
+            moved.push_back(m);
+            maybe_inject_fault("swap");
+            fs::rename(sa.staged, sa.dest);
+            moved.back().placed = true;
+        }
+        for (const auto& pl : planned_links) {
+            fs::create_directories(pl.link.parent_path());
+            ReplacedLink r{pl.link, {}, false};
+            if (fs::is_symlink(pl.link)) {
+                r.old_target = fs::read_symlink(pl.link);
+                fs::remove(pl.link);
+            }
+            relinked.push_back(r);
+            fs::create_symlink(pl.target, pl.link);
+            relinked.back().replaced = true;
+            std::cout << "==> Linked " << pl.link.filename().string() << "\n";
+        }
+        receipt.quarantine_cleared = true;
+        maybe_inject_fault("receipt");
+        write_receipt(version_dir, receipt);
+        record_settings_cask(config, token, pkg.version);
+    } catch (...) {
+        rollback();
+        throw;
     }
 
-    receipt.quarantine_cleared = true;
-    write_receipt(version_dir, receipt);
-    record_settings_cask(config, token, pkg.version);
+    // ---- Commit: new version is live; retire the old one. ----
+    fs::remove_all(backup_dir, ec);
+    fs::remove_all(app_staging, ec);
+    if (old_receipt) {
+        for (const auto& app : old_receipt->apps) {
+            const bool still_used =
+                std::find(receipt.apps.begin(), receipt.apps.end(), app) != receipt.apps.end();
+            if (!still_used && fs::exists(app) && app_owned_by_den(config, app)) {
+                fs::remove_all(app, ec);
+            }
+        }
+        for (const auto& b : old_receipt->binaries) {
+            const bool still_used =
+                std::any_of(receipt.binaries.begin(), receipt.binaries.end(),
+                            [&](const CaskBinaryLink& n) { return n.link == b.link; });
+            if (!still_used && fs::is_symlink(b.link, ec)) {
+                fs::remove(b.link, ec);
+            }
+        }
+        fs::remove_all(cask_version_path(config, token, old_version), ec);
+    }
 
     InstallResult result;
     result.resolved_version = pkg.version;
@@ -845,8 +952,7 @@ void uninstall_cask(const Config& config, std::string_view token_sv) {
                 }
             } else {
                 // Refuse to delete a regular file at the link path.
-                std::cerr << "warning: leaving '" << b.link.string()
-                          << "' (not a den symlink)\n";
+                std::cerr << "warning: leaving '" << b.link.string() << "' (not a den symlink)\n";
             }
         }
     }

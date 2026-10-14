@@ -35,6 +35,10 @@ struct Manifest {
 /// "/" -> "ROOT", "/ml" -> "ml", "/work/legacy" -> "work%2Dlegacy"
 std::string env_slug(const std::string& env_path);
 
+/// Path parent of an environment for inheritance: "/ml/exp" -> "/ml",
+/// "/ml" -> "/", "/" -> "" (root has no parent).
+std::string env_parent(const std::string& env_path);
+
 /// Decode a slug back to an environment path.
 std::string slug_to_path(const std::string& slug);
 
@@ -51,7 +55,8 @@ template <typename F>
 auto with_manifest(const fs::path& den_home, const std::string& env_path, F&& fn)
     -> decltype(fn(std::declval<Manifest&>()));
 
-/// Resolve the effective package set by walking the parent chain.
+/// Resolve the effective package set by walking the parent chain (explicit
+/// `origin`, else the path parent; see env_parent).
 /// Child entries override parent entries. The result is flattened across
 /// providers (name → version); for provider-aware iteration, use
 /// `resolve_per_provider` instead.

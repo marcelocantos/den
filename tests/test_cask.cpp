@@ -38,12 +38,12 @@ namespace {
 struct TmpDir {
     fs::path path;
     TmpDir() {
-        path = fs::temp_directory_path() /
-               ("den_test_cask_" +
-                std::to_string(
-                    std::hash<std::string>{}(std::to_string(reinterpret_cast<uintptr_t>(this))) ^
-                    static_cast<size_t>(
-                        std::chrono::steady_clock::now().time_since_epoch().count())));
+        path =
+            fs::temp_directory_path() /
+            ("den_test_cask_" +
+             std::to_string(
+                 std::hash<std::string>{}(std::to_string(reinterpret_cast<uintptr_t>(this))) ^
+                 static_cast<size_t>(std::chrono::steady_clock::now().time_since_epoch().count())));
         fs::create_directories(path);
     }
     ~TmpDir() {
@@ -304,6 +304,141 @@ TEST_SUITE("cask::install_zip") {
 
         unsetenv("DEN_APPDIR");
         unsetenv("DEN_HOME");
+    }
+}
+
+namespace {
+
+/// Build a zip whose Demo.app (plus a democtl binary) carries a version marker.
+fs::path make_versioned_zip(const fs::path& dir, const std::string& marker) {
+    const fs::path pre = dir / "content" / "Demo.app" / "Contents";
+    write_file(pre / "VERSION", marker + "\n");
+    return make_app_zip(dir, "Demo.app", "democtl");
+}
+
+std::string read_marker(const fs::path& app) {
+    std::ifstream in(app / "Contents" / "VERSION");
+    std::string s;
+    std::getline(in, s);
+    return s;
+}
+
+struct UpgradeEnv {
+    TmpDir tmp;
+    Config cfg;
+    UpgradeEnv() : cfg(make_cfg(tmp.path)) {
+        setenv("DEN_APPDIR", cfg.appdir.c_str(), 1);
+        setenv("DEN_HOME", cfg.den_home.c_str(), 1);
+        unsetenv("DEN_CASK_FAULT");
+        auto z1 = make_versioned_zip(tmp.path / "v1", "v1");
+        install_cask(cfg, make_zip_cask("demo", "1.0", z1, "Demo.app", "democtl"));
+    }
+    ~UpgradeEnv() {
+        unsetenv("DEN_APPDIR");
+        unsetenv("DEN_HOME");
+        unsetenv("DEN_CASK_FAULT");
+    }
+    UpgradeEnv(const UpgradeEnv&) = delete;
+    UpgradeEnv& operator=(const UpgradeEnv&) = delete;
+
+    fs::path app() const { return cfg.appdir / "Demo.app"; }
+    fs::path link() const { return cfg.den_home / "envs" / "ROOT" / "bin" / "democtl"; }
+
+    /// v1 must be fully intact: app content, receipt, settings, binary link,
+    /// and no leftover v2 state or staging debris in the appdir.
+    void check_v1_intact() const {
+        CHECK(fs::exists(app() / "Contents" / "MacOS" / "AppBin"));
+        CHECK(read_marker(app()) == "v1");
+        CHECK(installed_cask_version(cfg, "demo") == "1.0");
+        CHECK(read_cask_receipt(cask_version_path(cfg, "demo", "1.0")));
+        CHECK(app_owned_by_den(cfg, app()));
+        CHECK_FALSE(fs::exists(cask_version_path(cfg, "demo", "2.0")));
+        auto settings = read_settings(cfg.den_home);
+        CHECK(settings.casks.count("demo") == 1);
+        if (settings.casks.count("demo") == 1) {
+            CHECK(settings.casks.at("demo") == "1.0");
+        }
+        CHECK(fs::is_symlink(link()));
+        CHECK(fs::exists(link())); // still resolves into the v1 stage
+        std::error_code ec;
+        for (const auto& e : fs::directory_iterator(cfg.appdir, ec)) {
+            CHECK_MESSAGE(e.path().filename() == "Demo.app",
+                          "unexpected appdir entry: " << e.path().string());
+        }
+        CHECK(fs::is_empty(cfg.homebrew_caskroom));
+    }
+};
+
+} // namespace
+
+TEST_SUITE("cask::upgrade_safety") {
+
+    TEST_CASE("upgrade succeeds and replaces the den-owned app") {
+        UpgradeEnv env;
+        auto z2 = make_versioned_zip(env.tmp.path / "v2", "v2");
+        install_cask(env.cfg, make_zip_cask("demo", "2.0", z2, "Demo.app", "democtl"));
+        CHECK(read_marker(env.app()) == "v2");
+        CHECK(installed_cask_version(env.cfg, "demo") == "2.0");
+        CHECK_FALSE(fs::exists(cask_version_path(env.cfg, "demo", "1.0")));
+        CHECK(app_owned_by_den(env.cfg, env.app()));
+        CHECK(fs::exists(env.link()));
+        CHECK(fs::read_symlink(env.link()).string().find("/2.0/") != std::string::npos);
+        std::error_code ec;
+        for (const auto& e : fs::directory_iterator(env.cfg.appdir, ec)) {
+            CHECK(e.path().filename() == "Demo.app");
+        }
+    }
+
+    TEST_CASE("upgrade with a missing download leaves the old app intact") {
+        UpgradeEnv env;
+        auto pkg = make_zip_cask("demo", "2.0", env.tmp.path / "nope.zip", "Demo.app", "democtl");
+        CHECK_THROWS(install_cask(env.cfg, pkg));
+        env.check_v1_intact();
+    }
+
+    TEST_CASE("upgrade with a corrupt archive leaves the old app intact") {
+        UpgradeEnv env;
+        const auto bad = env.tmp.path / "bad.zip";
+        write_file(bad, "this is not a zip archive");
+        CHECK_THROWS(
+            install_cask(env.cfg, make_zip_cask("demo", "2.0", bad, "Demo.app", "democtl")));
+        env.check_v1_intact();
+    }
+
+    TEST_CASE("upgrade fault at each stage leaves the old app intact") {
+        for (std::string stage : {"download", "extract", "copy", "quarantine", "swap", "receipt"}) {
+            CAPTURE(stage);
+            UpgradeEnv env;
+            auto z2 = make_versioned_zip(env.tmp.path / "v2", "v2");
+            setenv("DEN_CASK_FAULT", stage.c_str(), 1);
+            CHECK_THROWS(
+                install_cask(env.cfg, make_zip_cask("demo", "2.0", z2, "Demo.app", "democtl")));
+            unsetenv("DEN_CASK_FAULT");
+            env.check_v1_intact();
+            // A clean retry after the failure still upgrades.
+            install_cask(env.cfg, make_zip_cask("demo", "2.0", z2, "Demo.app", "democtl"));
+            CHECK(read_marker(env.app()) == "v2");
+            CHECK(installed_cask_version(env.cfg, "demo") == "2.0");
+        }
+    }
+
+    TEST_CASE("upgrade refused by a foreign app leaves everything intact") {
+        UpgradeEnv env;
+        // v2 adds a second app whose name collides with a foreign app.
+        const fs::path foreign = env.cfg.appdir / "Other.app";
+        fs::create_directories(foreign / "Contents");
+        write_file(foreign / "Contents" / "marker", "not-den\n");
+        auto z2 = make_versioned_zip(env.tmp.path / "v2", "v2");
+        auto pkg = make_zip_cask("demo", "2.0", z2, "Demo.app", "democtl");
+        CaskArtifact other;
+        other.kind = CaskArtifactKind::App;
+        other.source = "Demo.app";
+        other.target = "Other.app";
+        pkg.cask_artifacts.push_back(other);
+        CHECK_THROWS_AS(install_cask(env.cfg, pkg), UserError);
+        CHECK(fs::exists(foreign / "Contents" / "marker"));
+        fs::remove_all(foreign);
+        env.check_v1_intact();
     }
 }
 
