@@ -14,9 +14,10 @@ den is a package and environment manager that:
 - **Provides named environments** — like virtualenv but for all
   packages. Create isolated, composable, reproducible environments
   that layer via PATH.
-- **Upgrades in the background** — a daemon downloads and installs
-  new versions alongside existing ones. Nothing changes until you
-  switch. Rollback is instant.
+- **Upgrades side by side** — new versions install alongside existing
+  ones. Nothing changes until you switch. Rollback is instant. A
+  background daemon is meant to do this unattended; its maintenance
+  cycle is still being completed (🎯T13).
 
 ## Delivery
 
@@ -44,9 +45,16 @@ rendered Markdown copy.
 ### Key Design Decisions
 
 - **Shared Cellar at /opt/homebrew**: Den uses the same Cellar as
-  Homebrew (`/opt/homebrew/Cellar/`). Bottles pour at their expected
-  prefix, so macOS bottles need no relocation. On Linux, den rewrites
-  ELF interpreter/RPATH entries with patchelf when pouring bottles.
+  Homebrew (`/opt/homebrew/Cellar/`). Bottles keep `@@HOMEBREW_*@@`
+  placeholders, which den rewrites on pour. On macOS it rewrites Mach-O
+  ids, load commands and rpaths via `otool`/`install_name_tool`
+  (falling back to `/Library/Developer/CommandLineTools/usr/bin` when
+  the xcode-select shim is broken), pins `opt/<dep>` references to the
+  exact dependency keg, and fails and rolls back the pour if any
+  placeholder survives. Den never creates or repoints Homebrew's shared
+  `<prefix>/opt` links on macOS (#64). On Linux, den rewrites ELF
+  interpreter/RPATH entries with patchelf and creates a prefix `opt`
+  link only if it is missing or dangling.
   Den and Homebrew coexist on the same Cellar. Den tracks what it
   manages via its own manifest in `~/.den/`.
 - **Environments are symlink sets**: Each environment is a directory
@@ -55,8 +63,10 @@ rendered Markdown copy.
 - **Multi-version by default**: Installing a new version never removes
   the old one. `den use` atomically switches which version is linked
   in the active environment.
-- **Background daemon**: Downloads and stages upgrades without user
-  intervention. The user's active environment is never modified
+- **Background daemon**: Intended to download and stage upgrades
+  without user intervention. Lifecycle and settings exist; the
+  maintenance cycle is still TODO stubs in `src/daemon/daemon.cpp`
+  (🎯T13). The user's active environment is never modified
   without explicit action.
 
 ### Source Layout
