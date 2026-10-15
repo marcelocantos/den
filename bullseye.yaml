@@ -71,19 +71,20 @@ targets:
     discovered: 2026-04-09
   T13:
     name: Background maintenance daemon
-    status: identified
+    status: achieved
     value: 1.0
     cost: 1.0
     actual_cost: 1.0
     acceptance:
     - '`den daemon run/stop/status/install/uninstall` work, state persists in `~/.den/daemon_state.json`, and `daemon.auto_download`, `daemon.auto_upgrade` and `daemon.upgrade_window` are honoured. **Done (scaffolding).**'
-    - The daemon cycle refreshes the package index. **Remaining:** `src/daemon/daemon.cpp` has `// TODO: Refresh package index`.
-    - The daemon detects outdated packages and fills `state.pending`. **Remaining:** marked TODO, so `pending` is never populated and the download/upgrade passes never run.
-    - With auto_download on, bottles for pending upgrades are pre-downloaded. **Remaining:** marked TODO.
-    - With auto_upgrade on and inside the window, the upgrade pass applies pending upgrades and defers in-use kegs (T51/T72). **Implemented**, but unreachable until pending is populated.
-    context: 'Downgraded from achieved on 2026-10-14. The process lifecycle, settings and upgrade-pass machinery exist, but the maintenance cycle is a stub. Index refresh, outdated detection and pre-download are TODOs in `src/daemon/daemon.cpp`, so in practice the daemon never downloads or upgrades anything.'
+    - The daemon cycle refreshes the package index. **Done (#66).**
+    - The daemon detects outdated den-managed formulae (casks excluded) and fills `state.pending`. **Done (#66).**
+    - With auto_download on, bottles for pending upgrades are pre-downloaded and hash-verified. **Done (#66).**
+    - With auto_upgrade on and inside the window, the upgrade pass really pours pending upgrades, updates the manifest and defers in-use kegs (T51/T72). **Done (#66).**
+    context: 'Downgraded from achieved on 2026-10-14 because the maintenance cycle was a stub; re-achieved on 2026-10-15 by #66, which implements index refresh, outdated detection, prefetch and a real upgrade pass behind injectable hooks, plus `den daemon run --once`. Proven on den-test-mac with an empty /opt/homebrew/opt diff.'
     origin: manual
     discovered: 2026-04-09
+    achieved: 2026-10-15
   T14:
     name: Info, search, and query commands
     status: achieved

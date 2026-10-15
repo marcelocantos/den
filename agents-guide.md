@@ -57,7 +57,8 @@ den update                   # fetch latest package index
 den cleanup [--dry-run]      # remove unused versions den itself installed, and the archive cache; never touches kegs den did not install (Homebrew, or installs from before ownership receipts)
 den autoremove               # remove unneeded dependencies
 den migrate                  # adopt Homebrew packages into the root environment
-den daemon status            # background maintenance status (cycle WIP, 🎯T13)
+den daemon status            # background maintenance status
+den daemon run --once        # run one maintenance cycle now
 den config                   # show den configuration
 den set <key> <value>        # configure settings
 den settings                 # show all settings

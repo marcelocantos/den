@@ -21,11 +21,12 @@ everything — not just Python, but every package on your system.
   `python@3.12` side by side. Switch instantly with `den use`.
 - **Named environments** — create isolated, composable environments
   that inherit from each other. Like virtualenv, but for all packages.
-- **Side-by-side upgrades** — new versions install alongside existing
-  ones; nothing changes until you switch, and rollback is instant.
-  `den upgrade` does this today. The background daemon's lifecycle and
-  settings exist, but its maintenance cycle (index refresh, outdated
-  detection, pre-download) is still being completed (🎯T13).
+- **Background upgrades** — new versions install alongside existing
+  ones; nothing changes until you switch, and rollback is instant. The
+  daemon refreshes the index, detects outdated formulae and pre-downloads
+  their bottles; with `daemon.auto_upgrade` on it applies them inside
+  `daemon.upgrade_window`, deferring kegs that are in use. Cask upgrades
+  stay a manual `den upgrade`.
 - **Source-first architecture** — embedded Ruby VM for evaluating
   Homebrew formula build recipes. Pre-built archives as an optimisation,
   not a requirement.
@@ -74,12 +75,13 @@ den env use /ml             # switch to it
 den install numpy           # only in /ml, root unchanged
 den env use /               # back to root
 
-# Background maintenance (cycle still in progress, see 🎯T13):
+# Background maintenance:
 den daemon install          # auto-start at login
 den set daemon.auto_download false  # disable background downloads
 den set daemon.auto_upgrade true
 den set daemon.upgrade_window "3:00-5:00"
 den daemon status           # check for pending upgrades
+den daemon run --once       # run one maintenance cycle now
 
 # Query:
 den search sqlite           # search 15,000+ packages instantly

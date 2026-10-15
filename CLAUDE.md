@@ -14,10 +14,9 @@ den is a package and environment manager that:
 - **Provides named environments** — like virtualenv but for all
   packages. Create isolated, composable, reproducible environments
   that layer via PATH.
-- **Upgrades side by side** — new versions install alongside existing
-  ones. Nothing changes until you switch. Rollback is instant. A
-  background daemon is meant to do this unattended; its maintenance
-  cycle is still being completed (🎯T13).
+- **Upgrades in the background** — a daemon refreshes the index,
+  pre-downloads new versions and (when `daemon.auto_upgrade` is on)
+  installs them alongside existing ones. Rollback is instant.
 
 ## Delivery
 
@@ -63,10 +62,11 @@ rendered Markdown copy.
 - **Multi-version by default**: Installing a new version never removes
   the old one. `den use` atomically switches which version is linked
   in the active environment.
-- **Background daemon**: Intended to download and stage upgrades
-  without user intervention. Lifecycle and settings exist; the
-  maintenance cycle is still TODO stubs in `src/daemon/daemon.cpp`
-  (🎯T13). The user's active environment is never modified
+- **Background daemon**: Each cycle (`run_maintenance_cycle` in
+  `src/daemon/daemon.cpp`) refreshes the index, computes pending
+  upgrades for den-managed formulae, pre-downloads bottles, and — only
+  with `daemon.auto_upgrade` inside `daemon.upgrade_window` — applies
+  them via the in-use-aware upgrade pass. Casks are never auto-upgraded. The user's active environment is never modified
   without explicit action.
 
 ### Source Layout
