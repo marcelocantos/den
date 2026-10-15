@@ -4,8 +4,12 @@
 #pragma once
 
 #include "../core/config.h"
+#include "../index/package.h"
 
+#include <cstddef>
 #include <filesystem>
+#include <functional>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -49,13 +53,59 @@ struct DaemonState {
 ///   sleep(interval), refresh index, check outdated, pre-download if
 ///   auto_download is set, upgrade if auto_upgrade is set and in window.
 /// Blocks until SIGTERM is received.
-void run_daemon(const Config& config);
+/// With `once`, runs a single maintenance cycle immediately (no initial
+/// sleep) and returns; useful for testing and for cron-style invocation.
+void run_daemon(const Config& config, bool once = false);
 
 /// Send SIGTERM to the running daemon (reads PID from den_home/daemon.pid).
 void stop_daemon(const Config& config);
 
 /// Return true if the daemon is running (tries exclusive flock on PID file).
 bool is_daemon_running(const Config& config);
+
+// ---- Maintenance cycle (🎯T13) ---------------------------------------------
+
+/// Outdated detection: for each den-managed package (`installed`: name →
+/// version, from the active env's resolved homebrew bucket) whose index
+/// version differs, produce a PendingUpgrade. Casks/apps, disabled formulae
+/// and names missing from the index are skipped: cask upgrades swap live
+/// .app bundles and stay a manual `den upgrade`. Sorted by name.
+std::vector<PendingUpgrade> compute_pending(const std::map<std::string, std::string>& installed,
+                                            const PackageIndex& idx);
+
+struct MaintenanceSettings {
+    bool auto_download = true;
+    bool auto_upgrade = false;
+    std::string upgrade_window; // "HH:MM-HH:MM" or empty (no restriction)
+};
+
+/// Side-effecting steps of a cycle, injected so the cycle logic is testable
+/// without network or Cellar writes. Any hook may throw; failures are
+/// recorded in DaemonState::errors and never abort the daemon.
+struct MaintenanceHooks {
+    std::function<PackageIndex()> refresh_index;                   // required
+    std::function<std::map<std::string, std::string>()> installed; // required
+    std::function<void(const PendingUpgrade&)> prefetch;           // optional
+    std::function<void(const PendingUpgrade&)> apply;              // optional
+    std::function<bool(const std::string&)> in_window;             // default: in_maintenance_window
+};
+
+struct MaintenanceReport {
+    bool index_refreshed = false;
+    std::size_t pending = 0;
+    std::size_t downloaded = 0;
+    std::size_t applied = 0;
+    std::size_t deferred = 0;
+};
+
+/// One maintenance cycle: refresh the index, recompute `state.pending`
+/// (dropping deferrals for packages that are no longer pending), prefetch
+/// archives when auto_download is on, and run the in-use-aware upgrade pass
+/// when auto_upgrade is on and the window allows. Mutates `state` (including
+/// last_check and errors); the caller persists it.
+MaintenanceReport run_maintenance_cycle(const fs::path& cellar, const fs::path& den_home,
+                                        const MaintenanceSettings& settings, DaemonState& state,
+                                        const MaintenanceHooks& hooks);
 
 // ---- State I/O -------------------------------------------------------------
 

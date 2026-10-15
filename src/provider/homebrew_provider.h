@@ -43,4 +43,10 @@ class HomebrewProvider : public PackageProvider {
     const PackageIndex* idx_;
 };
 
+/// Download (and hash-verify) the bottle for `pkg` into the archive cache
+/// without extracting or pouring it. Returns the cached path, or nothing for
+/// casks or packages with no archive for this platform. The trust
+/// cross-check still runs at install time, before extraction.
+std::optional<fs::path> prefetch_bottle(const Config& config, const Package& pkg);
+
 } // namespace den

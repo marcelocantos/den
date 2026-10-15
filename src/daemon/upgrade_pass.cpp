@@ -36,7 +36,8 @@ void record_deferral(DaemonState& state, const DeferredUpgrade& du) {
 } // namespace
 
 UpgradePassResult run_upgrade_pass(const fs::path& cellar, const fs::path& den_home,
-                                   DaemonState& state) {
+                                   DaemonState& state,
+                                   const std::function<void(const PendingUpgrade&)>& apply) {
     UpgradePassResult result;
 
     // Work on a snapshot of the pending list; we rebuild state.pending from
@@ -72,6 +73,17 @@ UpgradePassResult run_upgrade_pass(const fs::path& cellar, const fs::path& den_h
         // pipeline; here we settle daemon bookkeeping: clear the pending and
         // deferred records and log the activity.
         SPDLOG_INFO("upgrade_pass: applying {} {} -> {}", pu.name, pu.installed, pu.available);
+        if (apply) {
+            try {
+                apply(pu);
+            } catch (const std::exception& e) {
+                SPDLOG_WARN("upgrade_pass: {} {} -> {} failed: {}", pu.name, pu.installed,
+                            pu.available, e.what());
+                state.errors.push_back("upgrade " + pu.name + ": " + e.what());
+                still_pending.push_back(pu);
+                continue;
+            }
+        }
         clear_deferral(state, pu.name);
         result.applied.push_back(pu);
         activity.push_back({now_secs(), pu.name, pu.installed, pu.available, "daemon"});

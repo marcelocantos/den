@@ -369,4 +369,21 @@ std::vector<fs::path> HomebrewProvider::binary_paths(const Config& /*config*/,
     return paths;
 }
 
+std::optional<fs::path> prefetch_bottle(const Config& config, const Package& pkg) {
+    if (pkg.artifact_type == ArtifactType::App || !pkg.cask_artifacts.empty())
+        return std::nullopt;
+    std::vector<std::string> tags;
+    for (const auto& [tag, _] : pkg.archives)
+        tags.push_back(tag);
+    auto best = best_archive_tag(config.arch, config.macos_version, tags);
+    if (!best)
+        return std::nullopt;
+    const auto& archive = pkg.archives.at(*best);
+    auto cache_dir = config.cache / "archives";
+    fs::create_directories(cache_dir);
+    if (archive.url.find("ghcr.io") != std::string::npos || archive.url.empty())
+        return fetch_ghcr_blob(ghcr_repo_path(pkg.name), archive.sha256, cache_dir);
+    return fetch_archive(archive.url, archive.sha256, cache_dir);
+}
+
 } // namespace den
