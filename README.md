@@ -6,17 +6,27 @@ everything — not just Python, but every package on your system.
 ## What den does
 
 - **Shared Cellar** — den uses `/opt/homebrew/Cellar` directly, so
-  bottles pour at their expected prefix (no relocation on macOS; Linux
-  bottles get their ELF paths patched with patchelf). Den and
-  Homebrew coexist on the same Cellar.
+  Homebrew and den kegs coexist. Bottles still carry Homebrew
+  placeholders, which den rewrites on pour: on macOS it rewrites Mach-O
+  install names with `otool`/`install_name_tool` and pins `opt/<dep>`
+  references to the exact dependency keg; on Linux it patches ELF paths
+  with patchelf. On macOS den never creates or repoints Homebrew's
+  shared `/opt/homebrew/opt` links.
 - **Unified package model** — no formula/cask distinction. Just
-  `den install firefox` or `den install ffmpeg`.
+  `den install firefox` or `den install ffmpeg`. Cask apps go to
+  `DEN_APPDIR` (default `/Applications`), staged under
+  `~/.den/caskroom/`, never Homebrew's Caskroom; den only replaces or
+  removes apps that its own receipt names. `.pkg` casks still need admin.
 - **Multi-version coinstallation** — install `python@3.11` and
   `python@3.12` side by side. Switch instantly with `den use`.
 - **Named environments** — create isolated, composable environments
   that inherit from each other. Like virtualenv, but for all packages.
-- **Background upgrades** — a daemon downloads new versions alongside
-  existing ones. Nothing changes until you switch. Rollback is instant.
+- **Background upgrades** — new versions install alongside existing
+  ones; nothing changes until you switch, and rollback is instant. The
+  daemon refreshes the index, detects outdated formulae and pre-downloads
+  their bottles; with `daemon.auto_upgrade` on it applies them inside
+  `daemon.upgrade_window`, deferring kegs that are in use. Cask upgrades
+  stay a manual `den upgrade`.
 - **Source-first architecture** — embedded Ruby VM for evaluating
   Homebrew formula build recipes. Pre-built archives as an optimisation,
   not a requirement.
@@ -71,6 +81,7 @@ den set daemon.auto_download false  # disable background downloads
 den set daemon.auto_upgrade true
 den set daemon.upgrade_window "3:00-5:00"
 den daemon status           # check for pending upgrades
+den daemon run --once       # run one maintenance cycle now
 
 # Query:
 den search sqlite           # search 15,000+ packages instantly
@@ -90,8 +101,10 @@ are available via `--provider <name>` without changes to the CLI,
 manifest, or environment-composition layers.
 
 - **Shared Cellar** (`/opt/homebrew/Cellar/`) holds Homebrew-installed
-  package versions — shared with Homebrew, so macOS bottles work without
-  relocation (Linux bottles are patched with patchelf on pour). Other providers keep their own storage areas.
+  package versions, shared with Homebrew. Den rewrites bottle
+  placeholders on pour (Mach-O deps pinned to exact kegs on macOS,
+  patchelf on Linux) and does not touch Homebrew's shared `opt/` links
+  on macOS. Other providers keep their own storage areas.
 - **Manifests** declare what each environment contains, grouped per
   provider. Child environments inherit from parents and override
   specific packages.
@@ -125,6 +138,7 @@ manifest, or environment-composition layers.
 │   └── ml/
 │       └── ...
 ├── cache/                   # content-addressed archive cache
+├── caskroom/                # den's cask staging (<token>/<version>/)
 └── daemon.log               # background maintenance log
 ```
 

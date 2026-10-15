@@ -7,8 +7,10 @@ binary.
 ## Key concepts
 
 - **Cellar**: Shared package storage at `/opt/homebrew/Cellar/<name>/<version>/`.
-  Den uses the same Cellar as Homebrew — bottles pour at their expected
-  prefix (no relocation on macOS; Linux bottles are patchelf'd on pour).
+  Den uses the same Cellar as Homebrew. Den rewrites bottle
+  placeholders on pour: Mach-O deps are pinned to exact kegs on macOS
+  (den never writes Homebrew's shared `/opt/homebrew/opt`), and Linux
+  bottles are patchelf'd.
 - **Environment**: A named set of symlinks into the Cellar.
   Environments use path-based naming (`/` is root, `/ml`,
   `/work/legacy`) with manifest-level inheritance.
@@ -24,7 +26,9 @@ binary.
   env — Homebrew kegs and packages from other providers flow through
   the same pipeline.
 - **Unified package model**: No formula/cask distinction. All
-  packages are installed with `den install <name>`.
+  packages are installed with `den install <name>`. Casks stage under
+  `~/.den/caskroom/` and install apps into `DEN_APPDIR`; den only
+  replaces or removes apps named by its own `DEN_CASK_RECEIPT.json`.
 - **Providers**: Pluggable backends behind a `PackageProvider`
   interface. Homebrew is the default; auxiliary providers (pip, npm,
   cargo, go, …) plug in without touching CLI, manifest, or env
@@ -54,6 +58,7 @@ den cleanup [--dry-run]      # remove unused versions den itself installed, and 
 den autoremove               # remove unneeded dependencies
 den migrate                  # adopt Homebrew packages into the root environment
 den daemon status            # background maintenance status
+den daemon run --once        # run one maintenance cycle now
 den config                   # show den configuration
 den set <key> <value>        # configure settings
 den settings                 # show all settings
@@ -65,6 +70,9 @@ den smoke                    # run smoke tests
 
 - `DEN_HOME`: den's home directory (default: `~/.den`)
 - `DEN_ENV`: currently active environment path
+- `DEN_APPDIR`: where cask apps go (default `/Applications` on macOS)
+- `HOMEBREW_PREFIX` / `HOMEBREW_CELLAR` / `HOMEBREW_CASKROOM`: override
+  the shared Homebrew locations (useful for sandboxed tests)
 
 ## File layout
 
@@ -79,6 +87,7 @@ den smoke                    # run smoke tests
 ├── manifests/           # environment manifests
 ├── envs/                # materialised environments
 ├── cache/archives/      # content-addressed archive cache
+├── caskroom/            # den's cask staging
 ├── activity.json        # upgrade activity log
 ├── daemon.pid           # daemon process ID
 ├── daemon.log           # daemon log
