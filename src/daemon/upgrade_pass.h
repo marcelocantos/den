@@ -6,6 +6,7 @@
 #include "daemon.h"
 
 #include <filesystem>
+#include <functional>
 #include <vector>
 
 namespace den {
@@ -31,7 +32,12 @@ struct UpgradePassResult {
 //
 // `state` is mutated in place so a subsequent pass re-attempts deferrals once
 // the holding process has exited. Returns the per-pass tally.
+//
+// `apply`, when set, performs the physical upgrade (pour + manifest) for a
+// not-in-use package. If it throws, the package stays pending, the error is
+// appended to state.errors, and nothing is logged as applied.
 UpgradePassResult run_upgrade_pass(const fs::path& cellar, const fs::path& den_home,
-                                   DaemonState& state);
+                                   DaemonState& state,
+                                   const std::function<void(const PendingUpgrade&)>& apply = {});
 
 } // namespace den

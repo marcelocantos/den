@@ -923,8 +923,7 @@ void Cli::M::setup() {
         Manifest m;
         m.origin = env_parent(name);
         write_manifest(cfg.den_home, name, m);
-        std::cout << "Created environment '" << name << "' (inherits from " << *m.origin
-                  << ").\n";
+        std::cout << "Created environment '" << name << "' (inherits from " << *m.origin << ").\n";
     });
 
     auto* env_list = env->add_subcommand("list", "List environments");
@@ -1187,9 +1186,11 @@ void Cli::M::setup() {
     daemon->require_subcommand(1);
 
     auto* daemon_run = daemon->add_subcommand("run", "Run daemon foreground");
+    static bool daemon_once = false;
+    daemon_run->add_flag("--once", daemon_once, "Run one maintenance cycle now and exit");
     daemon_run->callback([] {
         auto cfg = Config::detect();
-        run_daemon(cfg);
+        run_daemon(cfg, daemon_once);
     });
 
     auto* daemon_stop = daemon->add_subcommand("stop", "Stop the daemon");

@@ -4,7 +4,14 @@
 #include "daemon.h"
 #include "../activity/activity.h"
 #include "../core/error.h"
+#include "../env/environment.h"
+#include "../env/manifest.h"
+#include "../index/index.h"
+#include "../provider/homebrew_provider.h"
+#include "../provider/registry.h"
 #include "upgrade_pass.h"
+
+#include <algorithm>
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -345,7 +352,126 @@ void write_daemon_state(const fs::path& den_home, const DaemonState& state) {
 
 // ---- Lifecycle -------------------------------------------------------------
 
-void run_daemon(const Config& config) {
+// ---- Maintenance cycle (🎯T13) ---------------------------------------------
+
+std::vector<PendingUpgrade> compute_pending(const std::map<std::string, std::string>& installed,
+                                            const PackageIndex& idx) {
+    std::vector<PendingUpgrade> out;
+    for (const auto& [name, version] : installed) {
+        const Package* pkg = idx.find(name);
+        if (!pkg || pkg->version.empty() || pkg->version == version)
+            continue;
+        if (pkg->artifact_type == ArtifactType::App || !pkg->cask_artifacts.empty())
+            continue; // cask upgrades stay manual
+        if (pkg->disabled)
+            continue;
+        out.push_back({name, version, pkg->version});
+    }
+    return out; // std::map iteration → already sorted by name
+}
+
+MaintenanceReport run_maintenance_cycle(const fs::path& cellar, const fs::path& den_home,
+                                        const MaintenanceSettings& settings, DaemonState& state,
+                                        const MaintenanceHooks& hooks) {
+    MaintenanceReport report;
+    state.errors.clear();
+    state.last_check = now_secs();
+
+    PackageIndex idx;
+    try {
+        idx = hooks.refresh_index();
+        report.index_refreshed = true;
+    } catch (const std::exception& e) {
+        state.errors.push_back(std::string("index refresh: ") + e.what());
+        log_daemon(den_home, std::string("index refresh failed: ") + e.what());
+        report.pending = state.pending.size();
+        return report; // keep the previous pending list; retry next cycle
+    }
+
+    try {
+        state.pending = compute_pending(hooks.installed(), idx);
+    } catch (const std::exception& e) {
+        state.errors.push_back(std::string("outdated check: ") + e.what());
+        report.pending = state.pending.size();
+        return report;
+    }
+    // A deferral only makes sense while its package is still pending.
+    std::erase_if(state.deferred, [&](const DeferredUpgrade& d) {
+        return std::none_of(state.pending.begin(), state.pending.end(),
+                            [&](const PendingUpgrade& p) { return p.name == d.name; });
+    });
+    report.pending = state.pending.size();
+    log_daemon(den_home, std::to_string(report.pending) + " package(s) outdated");
+
+    if (settings.auto_download && hooks.prefetch) {
+        for (const auto& pu : state.pending) {
+            try {
+                hooks.prefetch(pu);
+                ++report.downloaded;
+            } catch (const std::exception& e) {
+                state.errors.push_back("download " + pu.name + ": " + e.what());
+            }
+        }
+        if (!state.pending.empty())
+            log_daemon(den_home, "pre-downloaded " + std::to_string(report.downloaded) + "/" +
+                                     std::to_string(state.pending.size()) + " upgrade(s)");
+    }
+
+    if (settings.auto_upgrade && !state.pending.empty()) {
+        bool in_window = settings.upgrade_window.empty() ||
+                         (hooks.in_window ? hooks.in_window(settings.upgrade_window)
+                                          : in_maintenance_window(settings.upgrade_window));
+        if (in_window) {
+            UpgradePassResult res = run_upgrade_pass(cellar, den_home, state, hooks.apply);
+            report.applied = res.applied.size();
+            report.deferred = res.deferred.size();
+            log_daemon(den_home, "upgrade pass: applied " + std::to_string(report.applied) +
+                                     ", deferred " + std::to_string(report.deferred));
+        } else {
+            log_daemon(den_home,
+                       "outside upgrade window '" + settings.upgrade_window + "', not upgrading");
+        }
+    }
+    return report;
+}
+
+namespace {
+
+// Real hooks for the running daemon. Only den-managed homebrew packages in
+// the active env are considered — Homebrew's own kegs and shared opt links
+// are never touched (pours bind to exact kegs, see relocate.cpp / #64).
+MaintenanceHooks make_live_hooks(const Config& config, PackageIndex& idx, bool& applied_any) {
+    MaintenanceHooks h;
+    h.refresh_index = [&config, &idx] {
+        idx = fetch_and_transform(config);
+        save_index(idx, config.cache / "index.json");
+        return idx;
+    };
+    h.installed = [&config] {
+        auto per = resolve_per_provider(config.den_home, active_env_path(config.den_home));
+        auto it = per.find("homebrew");
+        return it == per.end() ? std::map<std::string, std::string>{} : it->second;
+    };
+    h.prefetch = [&config, &idx](const PendingUpgrade& pu) {
+        if (const Package* pkg = idx.find(pu.name))
+            prefetch_bottle(config, *pkg);
+    };
+    h.apply = [&config, &idx, &applied_any](const PendingUpgrade& pu) {
+        auto registry = make_default_registry(&idx);
+        auto* provider = registry.find("homebrew");
+        if (!provider)
+            throw UserError("homebrew provider not registered");
+        provider->install(config, pu.name, pu.available);
+        with_manifest(config.den_home, active_env_path(config.den_home),
+                      [&](Manifest& m) { m.packages["homebrew"][pu.name] = pu.available; });
+        applied_any = true;
+    };
+    return h;
+}
+
+} // namespace
+
+void run_daemon(const Config& config, bool once) {
     const fs::path& den_home = config.den_home;
     fs::create_directories(den_home);
 
@@ -384,7 +510,7 @@ void run_daemon(const Config& config) {
         SPDLOG_DEBUG("daemon: sleeping {}s", interval);
 
         // Sleep in 1-second ticks so we wake quickly on SIGTERM.
-        for (uint64_t i = 0; i < interval && !g_terminate; ++i) {
+        for (uint64_t i = 0; !once && i < interval && !g_terminate; ++i) {
             ::sleep(1);
         }
         if (g_terminate)
@@ -397,59 +523,26 @@ void run_daemon(const Config& config) {
         log_daemon(den_home, "maintenance cycle start");
 
         DaemonState state = read_daemon_state(den_home);
-        state.errors.clear();
-        state.last_check = now_secs();
-
-        // TODO: Refresh package index (requires index module).
-        SPDLOG_DEBUG("daemon: would refresh index here");
-
-        // TODO: Check for outdated packages (requires keg + index modules).
-        // Populate state.pending with discovered upgrades.
-        SPDLOG_DEBUG("daemon: would check outdated packages here");
-
-        // Pre-download bottles for pending upgrades.
-        if (settings.auto_download && !state.pending.empty()) {
-            SPDLOG_INFO("daemon: pre-downloading {} pending upgrade(s)", state.pending.size());
-            log_daemon(den_home,
-                       "pre-downloading " + std::to_string(state.pending.size()) + " upgrade(s)");
-            // TODO: trigger bottle download for each pending upgrade.
-        }
-
-        // Apply upgrades if auto_upgrade is enabled and we are in the window.
-        // run_upgrade_pass defers any package whose installed keg has files in
-        // use by a live process and re-attempts previously deferred items once
-        // their holding process has exited (🎯T51 / 🎯T72). It also records the
-        // activity log and bumps last_upgrade for any upgrades it applies.
-        if (settings.auto_upgrade && !state.pending.empty()) {
-            bool in_window = settings.upgrade_window.empty()
-                                 ? true
-                                 : in_maintenance_window(settings.upgrade_window);
-            if (in_window) {
-                SPDLOG_INFO("daemon: running upgrade pass over {} pending package(s)",
-                            state.pending.size());
-                log_daemon(den_home, "upgrade pass over " + std::to_string(state.pending.size()) +
-                                         " package(s)");
-
-                UpgradePassResult res = run_upgrade_pass(config.store, den_home, state);
-
-                if (!res.applied.empty()) {
-                    log_daemon(den_home,
-                               "applied " + std::to_string(res.applied.size()) + " upgrade(s)");
-                }
-                if (!res.deferred.empty()) {
-                    SPDLOG_INFO("daemon: deferred {} upgrade(s) (managed binary in use)",
-                                res.deferred.size());
-                    log_daemon(den_home, "deferred " + std::to_string(res.deferred.size()) +
-                                             " upgrade(s) (managed binary in use)");
-                }
-            } else {
-                SPDLOG_DEBUG("daemon: outside maintenance window '{}', skipping upgrade",
-                             settings.upgrade_window);
+        MaintenanceSettings ms{settings.auto_download, settings.auto_upgrade,
+                               settings.upgrade_window};
+        PackageIndex idx;
+        bool applied_any = false;
+        MaintenanceReport rep = run_maintenance_cycle(config.store, den_home, ms, state,
+                                                      make_live_hooks(config, idx, applied_any));
+        if (applied_any) {
+            try {
+                materialise(den_home, config.store, active_env_path(den_home), &idx);
+            } catch (const std::exception& e) {
+                state.errors.push_back(std::string("materialise: ") + e.what());
             }
         }
+        SPDLOG_INFO("daemon: cycle done (pending {}, downloaded {}, applied {}, deferred {})",
+                    rep.pending, rep.downloaded, rep.applied, rep.deferred);
 
         write_daemon_state(den_home, state);
         log_daemon(den_home, "maintenance cycle complete");
+        if (once)
+            break;
     }
 
     SPDLOG_INFO("daemon: shutting down");
