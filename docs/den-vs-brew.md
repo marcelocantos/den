@@ -10,18 +10,21 @@ states what Homebrew does, what den does, and a status:
 
 den consumes the Homebrew ecosystem directly — same Cellar
 (`/opt/homebrew/Cellar`), same formulae, casks, taps, and bottles — so
-"parity" usually means *literally the same artifacts*, poured or built
-without relocation. Where den is marked ⭐, the win comes from its
+"parity" usually means *literally the same artifacts*. Den rewrites the
+bottles' Homebrew placeholders on pour: on macOS, Mach-O references are
+pinned to exact dependency kegs and Homebrew's shared `opt/` links are
+never written; on Linux, ELF paths are patched with patchelf and a prefix
+`opt/` link is created only when missing or dangling. Where den is marked ⭐, the win comes from its
 independent store, environment model, multi-provider seam, or SAT solver.
 
 ## Matrix
 
 | Capability | Homebrew | den | Status |
 |---|---|---|---|
-| **Install (bottle)** | `brew install jq` pours a prebuilt bottle into the Cellar and links into the prefix. | `den install jq` pours the same bottle at its expected prefix (zero relocation, shared Cellar) and links it into the active environment. | ⭐ better — ~23× faster install on M4 Max (🎯T68); per-environment linking instead of one global prefix. |
+| **Install (bottle)** | `brew install jq` pours a prebuilt bottle into the Cellar and links into the prefix. | `den install jq` pours the same bottle into the shared Cellar (placeholders rewritten on pour; macOS deps pinned to exact kegs, `opt/` never written — #64) and links it into the active environment. | ⭐ better — ~23× faster install on M4 Max (🎯T68); per-environment linking instead of one global prefix. |
 | **Source build** | `brew install --build-from-source` evaluates the Ruby formula and compiles. | `den install -s/--build-from-source` builds via the bundled Ruby (complex formulae) or the native C++ fast-path parser (simple ones), with a shim-free macOS toolchain (`SDKROOT`/`-isysroot`, `/usr/bin/ld`, no `xcrun`). | ✅ parity — works today. Native-parser coverage is still narrower than Ruby (dependency extraction 🎯T58, no-Ruby SIMPLE installs 🎯T59); Ruby remains the complex-formula path, so no functional gap. |
 | **Third-party taps** | `brew tap user/repo`; tapped formulae resolve and install. | `den tap add user/repo [source]`, `den tap --list`, `den tap --remove`; tapped formulae merge into the index and install via the source-build path (🎯T67). | ✅ parity |
-| **Casks** | `brew install --cask` installs macOS apps. | den records installed casks in settings during `den migrate` and recognises app-type artifacts; cask installs ride the Homebrew provider. | ⏳ partial — migration records casks; native cask install lifecycle is not yet on par. Tracked under the content-addressed store work (🎯T69) and trust layering (🎯T44) for app verification. |
+| **Casks** | `brew install --cask` installs macOS apps (DMG/ZIP/PKG, scripts, uninstall/zap stanzas). | `den install <cask>` (no `--cask` flag) installs DMG, ZIP/tarball, `.app` and binary-only casks on macOS: the archive is staged under `~/.den/caskroom/<token>/<version>/` (never Homebrew's Caskroom), the new app is staged beside the target in `DEN_APPDIR` (default `/Applications`) and swapped in only once fully staged, with rollback to the old version on any failure (#61, #62). Den writes `DEN_CASK_RECEIPT.json` and only overwrites or removes apps its own receipt names. `.pkg` casks run `installer`. Casks are excluded from daemon auto-upgrade (#66) and are unsupported on Linux. | ⏳ partial (🎯T12) — not yet handled: `.pkg` installs need admin (den runs `installer` without elevation) and uninstall does not run `pkgutil --forget`; `preflight`/`postflight` and installer scripts; `uninstall` stanzas (launchctl, quit, signal, delete…); `zap`; and quitting a running app before uninstall/upgrade. |
 | **Multi-version coinstall** | Versioned formulae (`python@3.11`, `python@3.12`) coexist; switching is manual relinking. | Installing a new version never removes the old one; `den use <name> <version>` atomically switches which version the active environment links. | ⭐ better — multi-version is the default, switch is one atomic command per environment, rollback is instant. |
 | **Dependency resolution** | Greedy dependency walk; conflicts surface as install failures. | CDCL/DPLL SAT solver with stability-biased preferences and multi-version awareness; `den deps --explain` prints the clauses, preferences, and conflicts behind an assignment. | ⭐ better — complete solver with explainable UNSAT, replaces the prior greedy DFS. |
 | **Environments / isolation** | One global prefix; no first-class isolated environments. | Named environments are symlink sets under `~/.den/envs/`; they compose via PATH precedence (a project env overrides the default). `den env create/list/use/remove/show/freeze`. | ⭐ better — virtualenv-style isolation for *every* package, not just Python; `env freeze` exports a lockfile. |
