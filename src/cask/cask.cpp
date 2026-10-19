@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "cask.h"
+#include "uninstall_stanza.h"
 
 #include "../core/error.h"
 #include "../download/archive.h"
@@ -9,6 +10,7 @@
 #include "../download/sha256.h"
 #include "../env/environment.h"
 #include "../env/manifest.h"
+#include "../index/cask_uninstall_json.h"
 #include "../platform/platform.h"
 #include "../settings/settings.h"
 
@@ -18,6 +20,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <ctime>
 #include <fstream>
 #include <iostream>
 #include <optional>
@@ -124,6 +127,9 @@ void write_receipt(const fs::path& version_dir, const CaskReceipt& receipt) {
         });
     }
     j["pkgs"] = receipt.pkgs;
+    if (!receipt.uninstall.empty()) {
+        j["uninstall"] = uninstall_to_json(receipt.uninstall);
+    }
 
     const auto dest = version_dir / kDenCaskReceiptFilename;
     const auto tmp = version_dir / (std::string(kDenCaskReceiptFilename) + ".tmp");
@@ -355,6 +361,33 @@ bool install_pkg_file(const fs::path& pkg_file) {
 /// names `stage` (download, extract, copy, quarantine, swap, receipt), throw
 /// as if that step failed. Used by regression tests and the den-test-mac
 /// proof to show a failed upgrade never damages the installed version.
+/// Print a stanza report (actions → stdout, warnings/admin → stderr) and
+/// append it to <den_home>/cask.log.
+void emit_stanza_report(const Config& config, const std::string& token, const char* phase,
+                        const StanzaReport& r) {
+    for (const auto& a : r.actions)
+        std::cout << "==> " << a << "\n";
+    for (const auto& w : r.warnings)
+        std::cerr << "warning: " << token << ": " << w << "\n";
+    for (const auto& c : r.needs_admin)
+        std::cerr << "warning: " << token << ": needs admin (den does not escalate): run `" << c
+                  << "`\n";
+    if (r.actions.empty() && r.warnings.empty() && r.needs_admin.empty())
+        return;
+    std::error_code ec;
+    fs::create_directories(config.den_home, ec);
+    std::ofstream log(config.den_home / "cask.log", std::ios::app);
+    const auto now = std::time(nullptr);
+    char ts[32];
+    std::strftime(ts, sizeof ts, "%Y-%m-%dT%H:%M:%S", std::localtime(&now));
+    for (const auto& a : r.actions)
+        log << ts << " " << token << " " << phase << " " << a << "\n";
+    for (const auto& w : r.warnings)
+        log << ts << " " << token << " " << phase << " WARNING " << w << "\n";
+    for (const auto& c : r.needs_admin)
+        log << ts << " " << token << " " << phase << " NEEDS-ADMIN " << c << "\n";
+}
+
 void maybe_inject_fault(std::string_view stage) {
     if (const char* f = std::getenv("DEN_CASK_FAULT")) {
         if (stage == f) {
@@ -432,6 +465,9 @@ std::optional<CaskReceipt> read_cask_receipt(const fs::path& version_dir) {
                     r.pkgs.push_back(p.get<std::string>());
                 }
             }
+        }
+        if (j.contains("uninstall")) {
+            merge_uninstall_directives(j["uninstall"], r.uninstall);
         }
         if (r.token.empty() || r.version.empty()) {
             return std::nullopt;
@@ -620,6 +656,15 @@ InstallResult install_cask(const Config& config, const Package& pkg) {
     CaskReceipt receipt;
     receipt.token = token;
     receipt.version = pkg.version;
+    receipt.uninstall = pkg.cask_uninstall;
+    if (!pkg.cask_uninstall.unsupported.empty()) {
+        std::string names;
+        for (const auto& n : pkg.cask_uninstall.unsupported)
+            names += (names.empty() ? "" : ", ") + n;
+        std::cerr << "warning: " << token
+                  << ": uninstall directive(s) den does not run yet: " << names
+                  << " (recorded in the receipt; uninstall will remind you)\n";
+    }
 
     try {
         fs::remove_all(version_dir, ec);
@@ -793,6 +838,21 @@ InstallResult install_cask(const Config& config, const Package& pkg) {
         throw;
     }
 
+    // ---- Stop phase (upgrade only): quit/signal/launchctl from the old
+    // version's stanza, right before the swap, once the new version is
+    // fully staged. Falls back to the new cask's stanza for receipts that
+    // predate stanza recording. Destructive directives are not run here.
+    if (old_receipt) {
+        const CaskUninstall& stop =
+            old_receipt->uninstall.empty() ? pkg.cask_uninstall : old_receipt->uninstall;
+        if (!stop.empty()) {
+            std::cout << "==> Stopping " << token << " " << old_version << " before upgrade\n";
+            emit_stanza_report(config, token, "upgrade-stop",
+                               run_uninstall_stanza(stop, StanzaPhase::Stop, cask_system(),
+                                                    default_stanza_options(appdir)));
+        }
+    }
+
     // ---- Swap phase: the only part that touches live state. ----
     struct MovedApp {
         fs::path dest;
@@ -920,6 +980,13 @@ void uninstall_cask(const Config& config, std::string_view token_sv) {
                         "(not installed by den, or receipt missing)");
     }
 
+    const StanzaOptions sopts = default_stanza_options(cask_appdir(config));
+    if (!receipt->uninstall.empty()) {
+        emit_stanza_report(
+            config, token, "uninstall",
+            run_uninstall_stanza(receipt->uninstall, StanzaPhase::PreRemove, cask_system(), sopts));
+    }
+
     std::error_code ec;
     for (const auto& app : receipt->apps) {
         if (!fs::exists(app)) {
@@ -957,12 +1024,18 @@ void uninstall_cask(const Config& config, std::string_view token_sv) {
         }
     }
 
-    for (const auto& pkg_id : receipt->pkgs) {
-        // Best-effort note: full pkgutil --forget needs sudo and is a follow-up.
-        std::cerr << "note: pkg artifact '" << pkg_id
-                  << "' was installed via installer; "
-                     "system files may remain (pkgutil --forget not run)\n";
-        (void)pkg_id;
+    if (!receipt->uninstall.empty()) {
+        emit_stanza_report(config, token, "uninstall",
+                           run_uninstall_stanza(receipt->uninstall, StanzaPhase::PostRemove,
+                                                cask_system(), sopts));
+    }
+
+    if (receipt->uninstall.pkgutil.empty()) {
+        for (const auto& pkg_id : receipt->pkgs) {
+            std::cerr << "note: pkg artifact '" << pkg_id
+                      << "' was installed via installer and the cask declares no "
+                         "`uninstall pkgutil:`; system files may remain\n";
+        }
     }
 
     fs::remove_all(version_dir, ec);
