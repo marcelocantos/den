@@ -1,0 +1,112 @@
+[
+  {
+    "timestamp": "20261012T134454Z",
+    "host": "gha-macos14-ARM64",
+    "op": "list",
+    "tool": "den-list",
+    "mean_s": 0.01038651132,
+    "stddev_s": 0.01129785865579793,
+    "min_s": 0.0033295304699999984,
+    "max_s": 0.03797771847,
+    "status": "ok"
+  },
+  {
+    "timestamp": "20261012T134454Z",
+    "host": "gha-macos14-ARM64",
+    "op": "list",
+    "tool": "brew-list",
+    "mean_s": 0.02162616168,
+    "stddev_s": 0.011446370311858805,
+    "min_s": 0.01345693698,
+    "max_s": 0.04932435398,
+    "status": "ok"
+  },
+  {
+    "timestamp": "20261012T134454Z",
+    "host": "gha-macos14-ARM64",
+    "op": "info",
+    "tool": "den-info",
+    "mean_s": 0.35737464369000005,
+    "stddev_s": 0.036441042599231345,
+    "min_s": 0.30818741199000005,
+    "max_s": 0.40929053799000004,
+    "status": "ok"
+  },
+  {
+    "timestamp": "20261012T134454Z",
+    "host": "gha-macos14-ARM64",
+    "op": "info",
+    "tool": "brew-info",
+    "mean_s": 0.5074129915600001,
+    "stddev_s": 0.04484924591892214,
+    "min_s": 0.45619927466000004,
+    "max_s": 0.61136764966,
+    "status": "ok"
+  },
+  {
+    "timestamp": "20261012T134454Z",
+    "host": "gha-macos14-ARM64",
+    "op": "search",
+    "tool": "den-search",
+    "mean_s": 0.35511499749,
+    "stddev_s": 0.03396560625243464,
+    "min_s": 0.31717956624,
+    "max_s": 0.42531781674,
+    "status": "ok"
+  },
+  {
+    "timestamp": "20261012T134454Z",
+    "host": "gha-macos14-ARM64",
+    "op": "search",
+    "tool": "brew-search",
+    "mean_s": 0.4983584066600001,
+    "stddev_s": 0.03387285845016816,
+    "min_s": 0.44172458616000004,
+    "max_s": 0.5455223771600001,
+    "status": "ok"
+  },
+  {
+    "timestamp": "20261012T134454Z",
+    "host": "gha-macos14-ARM64",
+    "op": "install",
+    "tool": "den-install",
+    "mean_s": 0.37240150863,
+    "stddev_s": 0.031995981183520296,
+    "min_s": 0.34625083473,
+    "max_s": 0.42607370823,
+    "status": "ok"
+  },
+  {
+    "timestamp": "20261012T134454Z",
+    "host": "gha-macos14-ARM64",
+    "op": "install",
+    "tool": "brew-install",
+    "mean_s": 0.9569470725,
+    "stddev_s": 0.09786281066393201,
+    "min_s": 0.9024424811,
+    "max_s": 1.1311448141,
+    "status": "ok"
+  },
+  {
+    "timestamp": "20261012T134454Z",
+    "host": "gha-macos14-ARM64",
+    "op": "upgrade",
+    "tool": "den-upgrade",
+    "mean_s": 0.35279981397000004,
+    "stddev_s": 0.03139926082824612,
+    "min_s": 0.31743237627000004,
+    "max_s": 0.3979135007700001,
+    "status": "ok"
+  },
+  {
+    "timestamp": "20261012T134454Z",
+    "host": "gha-macos14-ARM64",
+    "op": "upgrade",
+    "tool": "brew-upgrade",
+    "mean_s": 0.43954079990000006,
+    "stddev_s": 0.04630766651562125,
+    "min_s": 0.325815725,
+    "max_s": 0.47295964100000004,
+    "status": "ok"
+  }
+]
