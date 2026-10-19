@@ -6,8 +6,8 @@
 // These checks assert the suite's *contract* exists — driver script, results
 // directory, regression checker, a committed baseline snapshot, and the CI
 // workflow — and that compare-results.sh is host-aware (cross-host
-// regression must not fail T68) and ignores sub-floor hyperfine `list`
-// noise. The live hyperfine run itself is not executed here (needs brew
+// regression must not fail T68), gates on den/brew ratios rather than raw
+// den ms, and ignores sub-floor hyperfine `list` noise. The live hyperfine run itself is not executed here (needs brew
 // + a network).
 
 #include <doctest.h>
@@ -76,6 +76,34 @@ void write_file(const fs::path& p, const std::string& body) {
     std::ofstream out(p);
     out << body;
 }
+
+bool have_jq() {
+    return ::system("jq --version >/dev/null 2>&1") == 0;
+}
+
+// Run compare-results.sh on `snap` against `base`, capturing stdout+stderr.
+CmdResult run_compare(const fs::path& script, const fs::path& snap, const fs::path& base) {
+    return run_cmd(script.string() + " \"" + snap.string() + "\" --baseline \"" +
+                   base.string() + "\" 2>&1");
+}
+
+// Scratch directory removed on scope exit.
+struct TempDir {
+    fs::path path;
+    TempDir() {
+        std::string tmpl = (fs::temp_directory_path() / "den_bench_XXXXXX").string();
+        char* dir = ::mkdtemp(tmpl.data());
+        if (dir == nullptr)
+            throw std::runtime_error("mkdtemp failed");
+        path = dir;
+    }
+    ~TempDir() {
+        std::error_code ec;
+        fs::remove_all(path, ec);
+    }
+    TempDir(const TempDir&) = delete;
+    TempDir& operator=(const TempDir&) = delete;
+};
 
 } // namespace
 
@@ -313,6 +341,106 @@ TEST_SUITE("bench_suite_present") {
                       r.output);
         CHECK_MESSAGE(r.output.find("REGRESSED") == std::string::npos,
                       "hyperfine list noise must not be reported as REGRESSED:\n", r.output);
+    }
+
+    // ---------------------------------------------------------------------
+    // den/brew ratio gate. Fixtures in tests/fixtures/bench/ are the real
+    // gha-macos14 snapshots from run 38257565888 (12 Oct, 71b4564) and run
+    // 39244425261 (19 Oct, 137984d), plus synthetic edits of the baseline.
+    // ---------------------------------------------------------------------
+
+    TEST_CASE("compare-results.sh passes run 39244425261 vs the 12 Oct baseline") {
+        // Raw den ms rose 38–51% on every op, but brew slowed on the same
+        // runner too (search +49%, install +53%, upgrade +51%): den's ratio to
+        // brew barely moved (geomean +4.1%). The raw-ms gate failed this run.
+        if (!have_jq()) {
+            WARN("jq not available — skipping compare-results.sh ratio tests");
+            return;
+        }
+        const auto script = repo_root() / "scripts" / "bench" / "compare-results.sh";
+        const auto fx = repo_root() / "tests" / "fixtures" / "bench";
+        const auto r = run_compare(script, fx / "gha-20261019-137984d-run39244425261.json",
+                                   fx / "gha-20261012-71b4564-baseline.json");
+        CHECK_MESSAGE(r.exit_code == 0, "runner-wide slowdown must not fail T68:\n", r.output);
+        CHECK_MESSAGE(r.output.find("REGRESSED") == std::string::npos,
+                      "no op may be REGRESSED when den/brew ratios held:\n", r.output);
+        CHECK_MESSAGE(r.output.find("den/brew ratio") != std::string::npos,
+                      "regression section must compare den/brew ratios:\n", r.output);
+    }
+
+    TEST_CASE("compare-results.sh fails a synthetic den-only 1.5x slowdown") {
+        // Every den op 1.5x slower, brew unchanged: a uniform fixed cost like
+        // the one suspected in run 39244425261. No single op passes the
+        // per-op limit; the aggregate (geomean) gate must catch it.
+        if (!have_jq()) {
+            WARN("jq not available — skipping compare-results.sh ratio tests");
+            return;
+        }
+        const auto script = repo_root() / "scripts" / "bench" / "compare-results.sh";
+        const auto fx = repo_root() / "tests" / "fixtures" / "bench";
+        const auto r = run_compare(script, fx / "synthetic-den-only-1.5x.json",
+                                   fx / "gha-20261012-71b4564-baseline.json");
+        CHECK_MESSAGE(r.exit_code != 0, "den-only slowdown must fail T68:\n", r.output);
+        CHECK_MESSAGE(r.output.find("aggregate:") != std::string::npos,
+                      "expected an aggregate line:\n", r.output);
+        CHECK_MESSAGE(r.output.find("+50.0%  REGRESSED") != std::string::npos,
+                      "expected the aggregate to be REGRESSED at +50%:\n", r.output);
+    }
+
+    TEST_CASE("compare-results.sh fails one op that doubles relative to brew") {
+        if (!have_jq()) {
+            WARN("jq not available — skipping compare-results.sh ratio tests");
+            return;
+        }
+        const auto script = repo_root() / "scripts" / "bench" / "compare-results.sh";
+        const auto fx = repo_root() / "tests" / "fixtures" / "bench";
+        const auto r = run_compare(script, fx / "synthetic-den-install-2x.json",
+                                   fx / "gha-20261012-71b4564-baseline.json");
+        CHECK_MESSAGE(r.exit_code != 0, "a 2x den install slowdown must fail T68:\n", r.output);
+        const auto section = r.output.find("--- regression vs baseline");
+        REQUIRE_MESSAGE(section != std::string::npos, "no regression section:\n", r.output);
+        const auto line = r.output.find("\ninstall ", section);
+        REQUIRE_MESSAGE(line != std::string::npos, "no install row:\n", r.output);
+        const auto eol = r.output.find('\n', line + 1);
+        CHECK_MESSAGE(r.output.substr(line, eol - line).find("REGRESSED") != std::string::npos,
+                      "install must be REGRESSED:\n", r.output);
+    }
+
+    TEST_CASE("compare-results.sh skips tiny ops in the ratio gate") {
+        // `list` under 20 ms in both runs: a 2 ms/44 ms -> 15 ms/30 ms swing is
+        // a +1000% ratio change, yet pure hyperfine noise (den stays 2x faster
+        // than brew, so contracts 1–2 hold).
+        if (!have_jq()) {
+            WARN("jq not available — skipping compare-results.sh ratio tests");
+            return;
+        }
+        const auto script = repo_root() / "scripts" / "bench" / "compare-results.sh";
+        TempDir tmp;
+        write_file(tmp.path / "snap.json", bench_pair_json("gha-macos14-ARM64", 0.015, 0.030));
+        write_file(tmp.path / "base.json", bench_pair_json("gha-macos14-ARM64", 0.002, 0.044));
+        const auto r = run_compare(script, tmp.path / "snap.json", tmp.path / "base.json");
+        CHECK_MESSAGE(r.exit_code == 0, "sub-20ms list noise must not fail T68:\n", r.output);
+        CHECK_MESSAGE(r.output.find("skip (tiny") != std::string::npos,
+                      "expected list to be reported as a tiny skip:\n", r.output);
+        CHECK_MESSAGE(r.output.find("REGRESSED") == std::string::npos,
+                      "tiny op must not be REGRESSED:\n", r.output);
+    }
+
+    TEST_CASE("compare-results.sh still checks a tiny op that grows past the floor") {
+        // list 5 ms/30 ms -> 60 ms/200 ms: den is still 3x faster than brew,
+        // but its ratio grew 80% and den itself got 55 ms slower.
+        if (!have_jq()) {
+            WARN("jq not available — skipping compare-results.sh ratio tests");
+            return;
+        }
+        const auto script = repo_root() / "scripts" / "bench" / "compare-results.sh";
+        TempDir tmp;
+        write_file(tmp.path / "snap.json", bench_pair_json("gha-macos14-ARM64", 0.060, 0.200));
+        write_file(tmp.path / "base.json", bench_pair_json("gha-macos14-ARM64", 0.005, 0.030));
+        const auto r = run_compare(script, tmp.path / "snap.json", tmp.path / "base.json");
+        CHECK_MESSAGE(r.exit_code != 0, "list growing past 20 ms must be checked:\n", r.output);
+        CHECK_MESSAGE(r.output.find("REGRESSED") != std::string::npos,
+                      "expected REGRESSED:\n", r.output);
     }
 
 } // TEST_SUITE
