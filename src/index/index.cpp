@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "index.h"
+#include "cask_uninstall_json.h"
 
 #include "../download/http.h"
 
@@ -293,8 +294,8 @@ Package transform_cask(const json& c) {
             if (!it.value().is_object()) {
                 continue;
             }
-            Package::Archive ar = pkg.archives.count("default") ? pkg.archives["default"]
-                                                                : Package::Archive{};
+            Package::Archive ar =
+                pkg.archives.count("default") ? pkg.archives["default"] : Package::Archive{};
             take_url(it.value(), ar);
             if (!ar.url.empty()) {
                 pkg.archives[it.key()] = std::move(ar);
@@ -304,6 +305,7 @@ Package transform_cask(const json& c) {
 
     if (c.contains("artifacts")) {
         parse_cask_artifacts(c["artifacts"], pkg.cask_artifacts);
+        parse_cask_uninstall(c["artifacts"], pkg.cask_uninstall);
     }
 
     // Binary-only casks are still ArtifactType::App at the type level today
@@ -368,6 +370,9 @@ json package_to_json(const Package& pkg) {
             arts.push_back(std::move(aj));
         }
         j["cask_artifacts"] = std::move(arts);
+    }
+    if (!pkg.cask_uninstall.empty()) {
+        j["cask_uninstall"] = uninstall_to_json(pkg.cask_uninstall);
     }
 
     return j;
@@ -440,6 +445,9 @@ Package package_from_json(const json& j) {
                 pkg.cask_artifacts.push_back(std::move(a));
             }
         }
+    }
+    if (j.contains("cask_uninstall")) {
+        merge_uninstall_directives(j["cask_uninstall"], pkg.cask_uninstall);
     }
 
     return pkg;

@@ -36,6 +36,10 @@ struct CaskReceipt {
     std::vector<CaskBinaryLink> binaries;
     std::vector<std::string> pkgs; // pkgutil package IDs den installed, if any.
     bool quarantine_cleared = false;
+    /// The cask's `uninstall` stanza at install time, so uninstall/upgrade
+    /// do not depend on the current index. Includes unsupported directive
+    /// names (recorded, never silently dropped).
+    CaskUninstall uninstall;
 };
 
 /// den-managed cask staging root: <den_home>/caskroom
@@ -67,8 +71,11 @@ std::optional<CaskReceipt> read_cask_receipt(const fs::path& version_dir);
 /// On non-Apple platforms throws UserError ("casks are not supported on …").
 InstallResult install_cask(const Config& config, const Package& pkg);
 
-/// Uninstall a den-installed cask: remove only apps/binaries named in the
-/// receipt, then drop the stage directory. Refuses to delete apps not owned
+/// Uninstall a den-installed cask: run the receipt's `uninstall` stanza
+/// (launchctl, quit, signal, pkgutil; then delete, trash, rmdir after the
+/// app is gone), remove only apps/binaries named in the receipt, then drop
+/// the stage directory. An upgrade runs the stop directives (launchctl,
+/// quit, signal) right before the swap. Refuses to delete apps not owned
 /// by den. No-op (with a message path via exception) if nothing is installed.
 void uninstall_cask(const Config& config, std::string_view token);
 
