@@ -7,6 +7,8 @@
 #include "sat_solver.h"
 
 #include <map>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -78,13 +80,70 @@ struct Package {
     bool is_github_package() const { return name.find('/') != std::string::npos; }
 };
 
+/// Read-only, lazily-decoded backing store for a PackageIndex (see
+/// index_cache.h). Lets index-backed commands look up a handful of packages
+/// without parsing the whole index.json.
+class IndexBacking {
+  public:
+    virtual ~IndexBacking() = default;
+
+    /// Decode one package by exact name, or nullopt if absent.
+    virtual std::optional<Package> lookup(const std::string& name) const = 0;
+
+    /// Number of packages in the backing store.
+    virtual size_t size() const = 0;
+
+    /// Decode every package into `out` (existing keys are left untouched).
+    virtual void load_all(std::map<std::string, Package>& out) const = 0;
+};
+
 // The full package index.
+//
+// `packages` holds every package that has been materialised so far. When the
+// index was opened from the binary lookup cache, `backing` serves the rest on
+// demand: find() decodes a single entry and memoises it into `packages`.
+// Entries already in `packages` (e.g. merged taps) take precedence over the
+// backing store. Code that needs to *iterate* every package must call
+// materialise_all() first.
 struct PackageIndex {
-    std::map<std::string, Package> packages;
+    mutable std::map<std::string, Package> packages;
+    std::shared_ptr<const IndexBacking> backing;
 
     const Package* find(const std::string& name) const {
+        if (!backing) {
+            auto it = packages.find(name);
+            return it != packages.end() ? &it->second : nullptr;
+        }
+        // Backed indexes memoise into `packages` from a const method, so
+        // serialise lookups. Pointers into std::map stay valid across inserts.
+        std::lock_guard lock(memo_mutex());
         auto it = packages.find(name);
-        return it != packages.end() ? &it->second : nullptr;
+        if (it != packages.end()) {
+            return &it->second;
+        }
+        auto pkg = backing->lookup(name);
+        if (!pkg) {
+            return nullptr;
+        }
+        return &packages.emplace(name, std::move(*pkg)).first->second;
+    }
+
+    /// True when the index holds no packages at all (materialised or backed).
+    bool empty() const { return packages.empty() && (!backing || backing->size() == 0); }
+
+    /// Decode every backed package into `packages` and drop the backing, so
+    /// that iterating `packages` sees the complete index.
+    void materialise_all() {
+        if (backing) {
+            backing->load_all(packages);
+            backing.reset();
+        }
+    }
+
+  private:
+    static std::mutex& memo_mutex() {
+        static std::mutex m;
+        return m;
     }
 };
 

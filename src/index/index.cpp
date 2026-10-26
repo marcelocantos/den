@@ -3,6 +3,8 @@
 
 #include "index.h"
 
+#include "index_cache.h"
+
 #include "../download/http.h"
 
 #include "../core/error.h"
@@ -293,8 +295,8 @@ Package transform_cask(const json& c) {
             if (!it.value().is_object()) {
                 continue;
             }
-            Package::Archive ar = pkg.archives.count("default") ? pkg.archives["default"]
-                                                                : Package::Archive{};
+            Package::Archive ar =
+                pkg.archives.count("default") ? pkg.archives["default"] : Package::Archive{};
             take_url(it.value(), ar);
             if (!ar.url.empty()) {
                 pkg.archives[it.key()] = std::move(ar);
@@ -448,6 +450,27 @@ Package package_from_json(const json& j) {
 } // namespace
 
 PackageIndex load_index(const fs::path& cache_path) {
+    if (!fs::exists(cache_path)) {
+        SPDLOG_INFO("no cached index at {}", cache_path.string());
+        return PackageIndex{};
+    }
+    const bool use_cache = !index_cache::disabled_by_env();
+    if (use_cache) {
+        if (auto backing = index_cache::open(cache_path)) {
+            PackageIndex idx;
+            idx.backing = std::move(backing);
+            SPDLOG_INFO("opened index lookup cache ({} packages)", idx.backing->size());
+            return idx;
+        }
+    }
+    auto idx = load_index_json(cache_path);
+    if (use_cache && !idx.packages.empty()) {
+        index_cache::write(idx, cache_path);
+    }
+    return idx;
+}
+
+PackageIndex load_index_json(const fs::path& cache_path) {
     PackageIndex idx;
 
     if (!fs::exists(cache_path)) {
@@ -487,6 +510,17 @@ void save_index(const PackageIndex& idx, const fs::path& cache_path) {
     for (const auto& [name, pkg] : idx.packages) {
         packages_array.push_back(package_to_json(pkg));
     }
+
+    // The lookup cache must reproduce exactly what parsing index.json yields,
+    // so build it from the JSON round-trip rather than from `idx` (the JSON
+    // form does not carry every in-memory field).
+    PackageIndex persisted;
+    for (const auto& pj : packages_array) {
+        Package pkg = package_from_json(pj);
+        std::string name = pkg.name;
+        persisted.packages.emplace(std::move(name), std::move(pkg));
+    }
+
     j["packages"] = std::move(packages_array);
 
     // Atomic write: write to .tmp, then rename.
@@ -506,6 +540,13 @@ void save_index(const PackageIndex& idx, const fs::path& cache_path) {
 
     fs::rename(tmp, cache_path);
     SPDLOG_INFO("saved {} packages to cache", idx.packages.size());
+
+    if (!index_cache::disabled_by_env()) {
+        index_cache::write(persisted, cache_path);
+    } else {
+        std::error_code ec;
+        fs::remove(index_cache::cache_path_for(cache_path), ec);
+    }
 }
 
 PackageIndex fetch_and_transform(const Config& /*config*/) {

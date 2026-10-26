@@ -15,9 +15,19 @@ namespace fs = std::filesystem;
 
 /// Load a PackageIndex from a local JSON cache file.
 /// Returns an empty index if the file does not exist.
+///
+/// When a valid binary lookup cache (index_cache.h) sits next to the file,
+/// the returned index is lazily backed by it: find() decodes only the
+/// packages actually asked for. Otherwise index.json is parsed in full and
+/// the lookup cache is (re)built for next time. Callers that iterate
+/// `packages` must call PackageIndex::materialise_all() first.
 PackageIndex load_index(const fs::path& cache_path);
 
-/// Save a PackageIndex to a local JSON cache file (atomic write).
+/// Parse index.json in full, ignoring any lookup cache.
+PackageIndex load_index_json(const fs::path& cache_path);
+
+/// Save a PackageIndex to a local JSON cache file (atomic write), and
+/// refresh its binary lookup cache (best effort).
 void save_index(const PackageIndex& idx, const fs::path& cache_path);
 
 /// Fetch Homebrew's formula.json and cask.json from the API,

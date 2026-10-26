@@ -146,7 +146,7 @@ std::vector<SmokeResult> run_smoke_tests(const fs::path& test_defs_json, const C
 
     // Load the package index.
     auto idx = load_index(config.cache / "index.json");
-    if (idx.packages.empty()) {
+    if (idx.empty()) {
         SPDLOG_ERROR("package index is empty — run `den update` first");
         return {};
     }
