@@ -82,6 +82,14 @@ Package cask(const std::string& name) {
     p.cask_artifacts.push_back({CaskArtifactKind::App, "Foo.app", ""});
     p.cask_artifacts.push_back({CaskArtifactKind::Binary, "Foo.app/bin/foo", "foo"});
     p.cask_artifacts.push_back({CaskArtifactKind::Pkg, "Foo.pkg", ""});
+    p.cask_uninstall.quit = {"com.example.foo"};
+    p.cask_uninstall.signal = {{"TERM", "com.example.foo"}, {"KILL", "com.example.helper"}};
+    p.cask_uninstall.launchctl = {"com.example.foo.agent"};
+    p.cask_uninstall.pkgutil = {"com.example.foo.*"};
+    p.cask_uninstall.delete_paths = {"/Library/Foo"};
+    p.cask_uninstall.trash = {"~/Library/Preferences/com.example.foo.plist"};
+    p.cask_uninstall.rmdir = {"~/Library/Foo"};
+    p.cask_uninstall.unsupported = {"script"};
     return p;
 }
 
@@ -116,6 +124,17 @@ void check_same(const Package& a, const Package& b) {
     CHECK(a.source_url == b.source_url);
     CHECK(a.source_sha256 == b.source_sha256);
     CHECK(a.ruby_source_path == b.ruby_source_path);
+    CHECK(a.keg_only == b.keg_only);
+    CHECK(a.keg_only_reason == b.keg_only_reason);
+    CHECK(a.conflicts_with == b.conflicts_with);
+    CHECK(a.cask_uninstall.quit == b.cask_uninstall.quit);
+    CHECK(a.cask_uninstall.signal == b.cask_uninstall.signal);
+    CHECK(a.cask_uninstall.launchctl == b.cask_uninstall.launchctl);
+    CHECK(a.cask_uninstall.pkgutil == b.cask_uninstall.pkgutil);
+    CHECK(a.cask_uninstall.delete_paths == b.cask_uninstall.delete_paths);
+    CHECK(a.cask_uninstall.trash == b.cask_uninstall.trash);
+    CHECK(a.cask_uninstall.rmdir == b.cask_uninstall.rmdir);
+    CHECK(a.cask_uninstall.unsupported == b.cask_uninstall.unsupported);
     REQUIRE(a.archives.size() == b.archives.size());
     for (const auto& [tag, ar] : a.archives) {
         REQUIRE(b.archives.count(tag) == 1);
@@ -193,6 +212,11 @@ TEST_SUITE("index_cache") {
         REQUIRE(d->cask_artifacts.size() == 3);
         CHECK(d->cask_artifacts[1].kind == CaskArtifactKind::Binary);
         CHECK(d->cask_artifacts[1].target == "foo");
+        // 🎯T12 uninstall stanzas survive the binary cache.
+        REQUIRE(d->cask_uninstall.signal.size() == 2);
+        CHECK(d->cask_uninstall.signal[1].first == "KILL");
+        CHECK(d->cask_uninstall.pkgutil == std::vector<std::string>{"com.example.foo.*"});
+        CHECK(d->cask_uninstall.unsupported == std::vector<std::string>{"script"});
         CHECK(idx.find("docker")->artifact_type == ArtifactType::Binary);
 
         const auto* ff = idx.find("firefox");

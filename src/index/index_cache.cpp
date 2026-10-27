@@ -26,7 +26,8 @@ namespace den::index_cache {
 namespace {
 
 constexpr std::array<char, 8> kMagic = {'D', 'E', 'N', 'I', 'D', 'X', '\0', '\0'};
-constexpr uint32_t kFormatVersion = 1;
+// v2: records carry Package::cask_uninstall (🎯T12 uninstall stanzas).
+constexpr uint32_t kFormatVersion = 2;
 constexpr uint32_t kEndianTag = 0x01020304;
 constexpr size_t kHeaderSize = 80;
 constexpr size_t kEntrySize = 24;
@@ -382,6 +383,19 @@ std::string encode_package(const Package& pkg) {
         put_str(b, a.source);
         put_str(b, a.target);
     }
+    const auto& u = pkg.cask_uninstall;
+    put_strs(b, u.quit);
+    append<uint32_t>(b, static_cast<uint32_t>(u.signal.size()));
+    for (const auto& [sig, bundle] : u.signal) {
+        put_str(b, sig);
+        put_str(b, bundle);
+    }
+    put_strs(b, u.launchctl);
+    put_strs(b, u.pkgutil);
+    put_strs(b, u.delete_paths);
+    put_strs(b, u.trash);
+    put_strs(b, u.rmdir);
+    put_strs(b, u.unsupported);
     put_opt(b, pkg.source_url);
     put_opt(b, pkg.source_sha256);
     put_opt(b, pkg.ruby_source_path);
@@ -422,6 +436,20 @@ Package decode_package(const char* data, size_t len) {
         a.target = r.str();
         pkg.cask_artifacts.push_back(std::move(a));
     }
+    auto& u = pkg.cask_uninstall;
+    u.quit = r.strs();
+    auto n_signal = r.num<uint32_t>();
+    for (uint32_t i = 0; i < n_signal; ++i) {
+        std::string sig = r.str();
+        std::string bundle = r.str();
+        u.signal.emplace_back(std::move(sig), std::move(bundle));
+    }
+    u.launchctl = r.strs();
+    u.pkgutil = r.strs();
+    u.delete_paths = r.strs();
+    u.trash = r.strs();
+    u.rmdir = r.strs();
+    u.unsupported = r.strs();
     pkg.source_url = r.opt();
     pkg.source_sha256 = r.opt();
     pkg.ruby_source_path = r.opt();
