@@ -7,6 +7,7 @@
 #include "../src/env/manifest.h"
 #include "../src/index/index.h"
 #include "../src/index/package.h"
+#include "../src/store/prefix_link.h"
 
 #include <doctest.h>
 
@@ -122,6 +123,22 @@ struct Env {
     }
 
     Manifest manifest() const { return read_manifest(home, "/"); }
+
+    PrefixLinkContext link_ctx() const { return make_prefix_link_context(home, prefix / "Cellar"); }
+
+    // The root env links a keg into the prefix and records it under its bare
+    // keg name, never the qualified manifest name.
+    void check_prefix_linked(const std::string& name, const std::string& version) const {
+        auto link = prefix / "bin" / name;
+        CHECK(fs::is_symlink(link));
+        CHECK(slurp(link) == "#!/bin/sh\necho " + name + " " + version + "\n");
+        auto ctx = link_ctx();
+        auto recorded = prefix_linked_version(ctx, name);
+        REQUIRE(recorded.has_value());
+        CHECK(*recorded == version);
+        for (const auto& n : prefix_linked_names(ctx))
+            CHECK(n.find('/') == std::string::npos);
+    }
 };
 
 TEST_SUITE("tap::qualified_manifest") {
@@ -139,6 +156,7 @@ TEST_SUITE("tap::qualified_manifest") {
         CHECK(slurp(env.prefix / "Cellar/tool/1.0/bin/tool") == "#!/bin/sh\necho tool 1.0\n");
         CHECK(fs::is_symlink(env.prefix / "opt/tool"));
         CHECK_FALSE(fs::exists(env.prefix / "Cellar/test"));
+        env.check_prefix_linked("tool", "1.0");
         // Restore on a fresh store: reinstall every manifest entry by name.
         fs::remove_all(env.prefix);
         for (const auto& [name, _] : m.packages["homebrew"]) {
@@ -156,6 +174,15 @@ TEST_SUITE("tap::qualified_manifest") {
         CHECK(slurp(env.prefix / "Cellar/tool/1.1/bin/tool") == "#!/bin/sh\necho tool 1.1\n");
         CHECK_FALSE(fs::exists(env.prefix / "Cellar/tool/9.9"));
         CHECK(env.manifest().packages["homebrew"]["test/urltap/tool"] == "1.1");
+        env.check_prefix_linked("tool", "1.1");
+
+        // Uninstalling by the qualified name removes the bare-named links.
+        auto rm = env.den("uninstall test/urltap/tool");
+        INFO(rm);
+        CHECK(env.manifest().packages["homebrew"].count("test/urltap/tool") == 0);
+        CHECK_FALSE(fs::exists(env.prefix / "bin/tool"));
+        auto ctx = env.link_ctx();
+        CHECK_FALSE(prefix_linked_version(ctx, "tool").has_value());
     }
 
     TEST_CASE("bare-name manifest entries from before still materialise") {
@@ -184,6 +211,8 @@ TEST_SUITE("tap::qualified_manifest") {
         auto m = env.manifest();
         CHECK(m.auto_deps["homebrew"].count("test/urltap/helper") == 1);
         CHECK(m.packages["homebrew"]["test/urltap/helper"] == "2.0");
+        env.check_prefix_linked("tool", "1.0");
+        env.check_prefix_linked("helper", "2.0");
     }
 }
 
