@@ -10,6 +10,12 @@
 # Trigger: Actions → Release Candidate → Run workflow
 #   version:   GA version this RC targets, e.g. 0.12.0 (no v, no -rc.N)
 #   rc_number: leave blank to auto-bump; set explicitly to retry a failed RC
+#   dry_run:   default true. Build, test and run the harness as usual, then
+#              upload the would-be release assets as a workflow artifact
+#              (release-dry-run-<version>) instead of pushing the RC tag or
+#              creating the prerelease. Set false to actually publish.
+#              The publish steps are guarded with `!inputs.dry_run`, so a run
+#              that lacks the input (null) is treated as NOT dry.
 
 name: Release Candidate
 
@@ -23,6 +29,11 @@ on:
         description: 'RC number (blank = auto-bump; explicit = retry that N after fixes)'
         required: false
         default: ''
+      dry_run:
+        description: 'Dry run: build + test + harness, upload tarballs as a workflow artifact; push no tag, create no prerelease'
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: write
@@ -228,7 +239,7 @@ jobs:
   # Only runs after the harness passes.
   # -------------------------------------------------------------------------
   publish:
-    name: Publish prerelease
+    name: ${{ inputs.dry_run && 'Publish prerelease (dry run)' || 'Publish prerelease' }}
     needs: [preflight, build, harness]
     runs-on: ubuntu-latest
 
@@ -313,12 +324,39 @@ jobs:
             echo '```'
           } > release-notes.md
 
+      - name: Upload dry-run release assets
+        if: ${{ inputs.dry_run }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-dry-run-${{ github.event.inputs.version }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+            ${{ env.CHECKSUMS_FILE }}
+            release-notes.md
+            harness-linux-logs-${{ needs.preflight.outputs.rc_tag }}.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Dry-run summary
+        if: ${{ inputs.dry_run }}
+        run: |
+          echo "============================================================"
+          echo "  DRY RUN: would have published ${{ needs.preflight.outputs.rc_tag }}"
+          echo "  at ${{ github.sha }}. No tag pushed, no prerelease created."
+          echo "  Assets: artifact release-dry-run-${{ github.event.inputs.version }}"
+          echo "============================================================"
+          ls -l dist/ "${{ env.CHECKSUMS_FILE }}"
+          for a in dist/*.tar.gz; do echo "== $a"; tar tzf "$a"; done
+
       - name: Create RC tag
+        if: ${{ !inputs.dry_run }}
         run: |
           git tag "${{ needs.preflight.outputs.rc_tag }}" "${{ github.sha }}"
           git push origin "${{ needs.preflight.outputs.rc_tag }}"
 
       - name: Create GitHub prerelease
+        if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -336,6 +374,7 @@ jobs:
             "harness-linux-logs-${RC_TAG}.tar.gz"
 
       - name: Print summary
+        if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
