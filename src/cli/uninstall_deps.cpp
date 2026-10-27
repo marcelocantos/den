@@ -125,7 +125,10 @@ find_runtime_dependents(const Config& config, const PackageIndex& idx,
         if (bit == m.packages.end()) {
             continue;
         }
-        for (const auto& [pkg, version] : bit->second) {
+        for (const auto& entry : bit->second) {
+            // Named copies: C++17 lambdas can't capture structured bindings.
+            const std::string& pkg = entry.first;
+            const std::string& version = entry.second;
             const bool removed_with_target =
                 env == active_env && std::any_of(names.begin(), names.end(), [&](const auto& n) {
                     return same_package(n, pkg);
