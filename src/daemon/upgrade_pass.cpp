@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "upgrade_pass.h"
+
 #include "../activity/activity.h"
+#include "../store/pins.h"
 #include "inuse.h"
 
 #include <spdlog/spdlog.h>
@@ -47,7 +49,25 @@ UpgradePassResult run_upgrade_pass(const fs::path& cellar, const fs::path& den_h
 
     std::vector<ActivityEntry> activity;
 
+    PinMap pins;
+    bool pins_ok = true;
+    try {
+        pins = read_pins(den_home);
+    } catch (const std::exception& e) {
+        // Fail closed: never let an unreadable pin file release pins.
+        SPDLOG_WARN("upgrade_pass: {}; holding all upgrades", e.what());
+        state.errors.push_back(std::string("pins: ") + e.what());
+        pins_ok = false;
+    }
+
     for (const auto& pu : state.pending) {
+        if (!pins_ok || pins.count(pu.name)) {
+            SPDLOG_INFO("upgrade_pass: {} is pinned; not upgrading {} -> {}", pu.name, pu.installed,
+                        pu.available);
+            result.pinned.push_back(pu);
+            still_pending.push_back(pu);
+            continue;
+        }
         // Validate: never let an empty/relative name escape into a path that
         // could resolve outside the Cellar.
         if (pu.name.empty() || pu.installed.empty()) {
