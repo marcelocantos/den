@@ -4,6 +4,7 @@
 #include "install.h"
 
 #include "../activity/activity.h"
+#include "../cask/cask.h"
 #include "../core/error.h"
 #include "../daemon/daemon.h"
 #include "../env/environment.h"
@@ -15,6 +16,23 @@
 #include <vector>
 
 namespace den {
+
+bool cask_only(const Config& config, const std::vector<std::string>& names) {
+    if (names.empty())
+        return false;
+    for (const auto& name : names) {
+        std::string_view token = name;
+        if (token.starts_with("cask/"))
+            token.remove_prefix(5);
+        if (!is_cask_installed(config, token))
+            return false;
+    }
+    return true;
+}
+
+bool report_link_count(uint32_t links, bool casks_only) {
+    return links != 0 || !casks_only;
+}
 
 void install_packages(const Config& config, PackageProvider& provider, const PackageIndex& idx,
                       const std::vector<std::string>& names, const MaterialiseOptions& link_opts) {
@@ -43,7 +61,8 @@ void install_packages(const Config& config, PackageProvider& provider, const Pac
 
     std::cout << "==> Materialising environment...\n";
     auto links = materialise(config.den_home, config.store, active, &idx, link_opts);
-    std::cout << "  " << links << " symlinks\n";
+    if (report_link_count(links, cask_only(config, names)))
+        std::cout << "  " << links << " symlinks\n";
 }
 
 void uninstall_packages(const Config& config, PackageProvider& provider,
@@ -51,6 +70,8 @@ void uninstall_packages(const Config& config, PackageProvider& provider,
     auto active = active_env_path(config.den_home);
     auto pname = std::string(provider.provider_name());
 
+    // Decide before uninstalling: afterwards the casks' stages are gone.
+    const bool casks_only = cask_only(config, names);
     std::vector<std::string> removed;
     with_manifest(config.den_home, active, [&](Manifest& m) {
         auto& bucket = m.packages[pname];
@@ -74,7 +95,8 @@ void uninstall_packages(const Config& config, PackageProvider& provider,
     });
 
     auto links = materialise(config.den_home, config.store, active);
-    std::cout << "Materialised: " << links << " symlinks.\n";
+    if (report_link_count(links, casks_only))
+        std::cout << "Materialised: " << links << " symlinks.\n";
 
     // The keg stays until `den cleanup`, but <prefix>/opt/<name> should not
     // keep advertising a version no environment uses any more.
@@ -162,8 +184,10 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
         std::cout << "  " << u.name << " " << u.installed << " -> " << u.available << "\n";
     }
 
+    std::vector<std::string> upgraded_names;
     for (const auto& u : upgrades) {
         provider.install(config, u.name, u.available);
+        upgraded_names.push_back(u.name);
     }
 
     auto pname = std::string(provider.provider_name());
@@ -186,7 +210,8 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
 
     std::cout << "==> Materialising environment...\n";
     auto links = materialise(config.den_home, config.store, active, &idx);
-    std::cout << "  " << links << " symlinks\n";
+    if (report_link_count(links, cask_only(config, upgraded_names)))
+        std::cout << "  " << links << " symlinks\n";
     std::cout << "==> " << upgrades.size() << " package(s) upgraded.\n";
     if (!explicitly_pinned.empty()) {
         throw UserError(std::to_string(explicitly_pinned.size()) +
