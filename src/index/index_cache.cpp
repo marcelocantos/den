@@ -405,6 +405,7 @@ std::string encode_package(const Package& pkg) {
     put_opt(b, pkg.source_url);
     put_opt(b, pkg.source_sha256);
     put_opt(b, pkg.ruby_source_path);
+    put_strs(b, pkg.old_names);
     return b;
 }
 
@@ -461,6 +462,7 @@ Package decode_package(const char* data, size_t len) {
     pkg.source_url = r.opt();
     pkg.source_sha256 = r.opt();
     pkg.ruby_source_path = r.opt();
+    pkg.old_names = r.strs();
     if (!r.done()) {
         throw CorruptCache("trailing bytes in record");
     }

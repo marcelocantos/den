@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace den {
 
@@ -24,10 +25,12 @@ std::string fetch_url(const std::string& url);
 
 /// Stream a URL to `dest` without buffering it in memory. Fails if the body
 /// exceeds `max_bytes`, or if the transfer stalls (no total time limit, so
-/// multi-gigabyte downloads are not cut off). On failure `dest` is removed.
-/// Throws DownloadError.
+/// multi-gigabyte downloads are not cut off). `headers` are extra request
+/// headers ("Name: value"), e.g. a registry bearer token. On failure `dest`
+/// is removed. Throws DownloadError.
 void download_to_file(const std::string& url, const fs::path& dest,
-                      std::uint64_t max_bytes = kMaxArchiveDownloadBytes);
+                      std::uint64_t max_bytes = kMaxArchiveDownloadBytes,
+                      const std::vector<std::string>& headers = {});
 
 /// The message den reports for a failed transfer. libcurl's generic
 /// curl_easy_strerror() text hides the real cause in some cases (a size cap

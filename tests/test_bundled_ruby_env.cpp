@@ -376,6 +376,14 @@ TEST_SUITE("build::bundled_ruby_env") {
         CHECK(out.find("actual:   " + hash_file(tarball)) != std::string::npos);
         CHECK(out.find("==> Built rbtool") == std::string::npos);
         CHECK(out.find("==> Building\n") == std::string::npos);
+        // Reported once: the mismatch is final, so no parser fallback
+        // re-downloads the tarball and fails the same check again.
+        const std::string needle = "SHA256 mismatch for rbtool";
+        size_t hits = 0;
+        for (auto p = out.find(needle); p != std::string::npos; p = out.find(needle, p + 1))
+            ++hits;
+        CHECK(hits == 1);
+        CHECK(out.find("bundled ruby build failed") == std::string::npos);
         // ...and nothing was built, installed or kept in the source cache.
         CHECK_FALSE(fs::exists(s.prefix() / "Cellar/rbtool"));
         CHECK_FALSE(fs::exists(s.prefix() / "bin/rbtool"));

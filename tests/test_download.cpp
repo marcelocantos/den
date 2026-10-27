@@ -138,3 +138,45 @@ TEST_SUITE("download::fetch_archive") {
         CHECK(fs::is_empty(cache));
     }
 }
+
+// GHCR bottle blobs go through fetch_verified_to (with a bearer header), so
+// they stream to disk under the archive cap instead of being buffered in
+// memory under the 500 MiB fetch_url cap.
+TEST_SUITE("download::fetch_verified_to") {
+    TEST_CASE("a blob larger than the old in-memory cap streams to the cache") {
+        TempDir tmp;
+        fs::path src = tmp.path / "blob";
+        write_pattern(src, kMaxInMemoryFetchBytes + 1024 * 1024);
+        const std::string sha = hash_file(src);
+        fs::path cached = tmp.path / (sha + ".tar.gz");
+        fetch_verified_to(file_url(src), sha, cached, {"Authorization: Bearer test-token"});
+        CHECK(fs::file_size(cached) == fs::file_size(src));
+        CHECK(hash_file(cached) == sha);
+        CHECK_FALSE(fs::exists(tmp.path / (sha + ".tar.gz.download")));
+    }
+
+    TEST_CASE("a mismatched blob is refused once and leaves nothing behind") {
+        TempDir tmp;
+        fs::path src = tmp.path / "blob";
+        write_pattern(src, 4096);
+        const std::string wrong(64, 'b');
+        fs::path cached = tmp.path / "cache" / (wrong + ".tar.gz");
+        fs::create_directories(cached.parent_path());
+        std::string err = error_of(
+            [&] { fetch_verified_to(file_url(src), wrong, cached, {"Authorization: Bearer x"}); });
+        CHECK(err.find("SHA256 mismatch for " + file_url(src)) == 0);
+        CHECK(err.find("SHA256 mismatch", 1) == std::string::npos);
+        CHECK(err.find("expected " + wrong) != std::string::npos);
+        CHECK(err.find("got " + hash_file(src)) != std::string::npos);
+        CHECK(fs::is_empty(cached.parent_path()));
+    }
+
+    TEST_CASE("no_check skips verification") {
+        TempDir tmp;
+        fs::path src = tmp.path / "blob";
+        write_pattern(src, 4096);
+        fs::path cached = tmp.path / "out";
+        fetch_verified_to(file_url(src), "no_check", cached);
+        CHECK(hash_file(cached) == hash_file(src));
+    }
+}

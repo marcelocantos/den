@@ -71,6 +71,19 @@ std::string json_string(const json& j, const char* key, const std::string& fallb
     return fallback;
 }
 
+/// Extract an array of strings, skipping non-string entries.
+std::vector<std::string> json_string_array(const json& j, const char* key) {
+    std::vector<std::string> out;
+    if (j.contains(key) && j[key].is_array()) {
+        for (const auto& v : j[key]) {
+            if (v.is_string()) {
+                out.push_back(v.get<std::string>());
+            }
+        }
+    }
+    return out;
+}
+
 /// Transform a single Homebrew formula JSON object into a Package.
 Package transform_formula(const json& f) {
     Package pkg;
@@ -172,6 +185,8 @@ Package transform_formula(const json& f) {
             pkg.archives[it.key()] = std::move(ar);
         }
     }
+
+    pkg.old_names = json_string_array(f, "oldnames");
 
     // Ruby source path (for fetching formula without brew cat).
     if (f.contains("ruby_source_path") && f["ruby_source_path"].is_string()) {
@@ -289,6 +304,7 @@ Package transform_cask(const json& c) {
         c.contains("deprecated") && c["deprecated"].is_boolean() && c["deprecated"].get<bool>();
     pkg.disabled =
         c.contains("disabled") && c["disabled"].is_boolean() && c["disabled"].get<bool>();
+    pkg.old_names = json_string_array(c, "old_tokens");
 
     if (c.contains("version") && c["version"].is_string()) {
         pkg.version = c["version"].get<std::string>();
@@ -387,6 +403,8 @@ json package_to_json(const Package& pkg) {
         j["source_sha256"] = *pkg.source_sha256;
     if (pkg.ruby_source_path)
         j["ruby_source_path"] = *pkg.ruby_source_path;
+    if (!pkg.old_names.empty())
+        j["old_names"] = pkg.old_names;
 
     if (!pkg.cask_artifacts.empty()) {
         json arts = json::array();
@@ -471,6 +489,7 @@ Package package_from_json(const json& j) {
     if (j.contains("ruby_source_path") && j["ruby_source_path"].is_string()) {
         pkg.ruby_source_path = j["ruby_source_path"].get<std::string>();
     }
+    pkg.old_names = json_string_array(j, "old_names");
 
     if (j.contains("cask_artifacts") && j["cask_artifacts"].is_array()) {
         for (const auto& aj : j["cask_artifacts"]) {

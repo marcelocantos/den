@@ -12,41 +12,27 @@
 
 #include <nlohmann/json.hpp>
 
-#include <curl/curl.h>
-
-#include <fstream>
-
 namespace den {
 
-namespace {
+void fetch_verified_to(const std::string& url, const std::string& sha256, const fs::path& cached,
+                       const std::vector<std::string>& headers) {
+    // Stream to a temporary file next to the cache entry, so large archives
+    // are never held in memory, and only publish it once verified.
+    fs::path tmp = cached;
+    tmp += ".download";
+    download_to_file(url, tmp, kMaxArchiveDownloadBytes, headers);
 
-size_t write_callback(char* ptr, size_t size, size_t nmemb, void* userdata) {
-    auto* buf = static_cast<std::string*>(userdata);
-    size_t total = size * nmemb;
-    buf->append(ptr, total);
-    return total;
-}
-
-/// Write raw data to a file atomically (write to .tmp, then rename).
-void write_file_atomic(const fs::path& path, const std::string& data) {
-    fs::path tmp = path;
-    tmp += ".tmp";
-
-    {
-        std::ofstream out(tmp, std::ios::binary);
-        if (!out) {
-            throw DownloadError("cannot create cache file: " + tmp.string());
-        }
-        out.write(data.data(), static_cast<std::streamsize>(data.size()));
-        if (!out) {
-            throw DownloadError("write failed for: " + tmp.string());
+    if (!sha256.empty() && sha256 != "no_check") {
+        std::string actual = hash_file(tmp);
+        if (actual != sha256) {
+            std::error_code rec;
+            fs::remove(tmp, rec);
+            throw DownloadError("SHA256 mismatch for " + url + ": expected " + sha256 + ", got " +
+                                actual);
         }
     }
-
-    fs::rename(tmp, path);
+    fs::rename(tmp, cached);
 }
-
-} // namespace
 
 fs::path fetch_archive(const std::string& url, const std::string& sha256,
                        const fs::path& cache_dir) {
@@ -91,23 +77,7 @@ fs::path fetch_archive(const std::string& url, const std::string& sha256,
     }
 
     SPDLOG_INFO("downloading {}", url);
-    // Stream to a temporary file next to the cache entry, so large casks are
-    // never held in memory, and only publish it once verified.
-    fs::path tmp = cached;
-    tmp += ".download";
-    download_to_file(url, tmp);
-
-    // Verify hash before publishing to the cache (unless cask declared no_check).
-    if (!skip_verify) {
-        std::string actual = hash_file(tmp);
-        if (actual != sha256) {
-            std::error_code rec;
-            fs::remove(tmp, rec);
-            throw DownloadError("SHA256 mismatch for " + url + ": expected " + sha256 + ", got " +
-                                actual);
-        }
-    }
-    fs::rename(tmp, cached);
+    fetch_verified_to(url, skip_verify ? std::string{} : sha256, cached);
 
     SPDLOG_INFO("cached {} ({} bytes)", cache_key, fs::file_size(cached));
     return cached;
@@ -147,65 +117,12 @@ fs::path fetch_ghcr_blob(const std::string& repo_path, const std::string& sha256
     std::string blob_url = "https://ghcr.io/v2/" + repo_path + "/blobs/sha256:" + sha256;
 
     SPDLOG_INFO("fetching GHCR blob sha256:{}", sha256);
+    // The registry answers with a redirect to a CDN URL; the bearer token is
+    // only needed on the first hop. Streamed to disk like other archives, so
+    // large bottles are not buffered in memory or capped at 500 MiB.
+    fetch_verified_to(blob_url, sha256, cached, {"Authorization: Bearer " + token});
 
-    // We need to pass the Authorization header. Since fetch_url
-    // doesn't support custom headers, we use libcurl directly here.
-    // For now, we construct a curl request inline. A future refactor
-    // could add header support to fetch_url.
-
-    // Use the existing fetch_url for the blob — GHCR redirects to a
-    // CDN URL that doesn't need auth. But we need the initial
-    // redirect with the token. Build a minimal curl call.
-    CURL* curl = curl_easy_init();
-    if (!curl) {
-        throw DownloadError("failed to initialise libcurl for GHCR");
-    }
-
-    std::string response;
-
-    curl_easy_setopt(curl, CURLOPT_URL, blob_url.c_str());
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "den/" DEN_VERSION);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 120L);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
-    curl_easy_setopt(curl, CURLOPT_MAXFILESIZE_LARGE, static_cast<curl_off_t>(500 * 1024 * 1024));
-
-    // Set the Authorization header.
-    struct curl_slist* headers = nullptr;
-    std::string auth_header = "Authorization: Bearer " + token;
-    headers = curl_slist_append(headers, auth_header.c_str());
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-
-    CURLcode res = curl_easy_perform(curl);
-    curl_slist_free_all(headers);
-
-    if (res != CURLE_OK) {
-        std::string err = curl_easy_strerror(res);
-        curl_easy_cleanup(curl);
-        throw DownloadError("GHCR blob fetch failed: " + err);
-    }
-
-    long http_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-    curl_easy_cleanup(curl);
-
-    if (http_code < 200 || http_code >= 300) {
-        throw DownloadError("HTTP " + std::to_string(http_code) +
-                            " fetching GHCR blob sha256:" + sha256);
-    }
-
-    // Verify hash.
-    std::string actual = hash_string(response);
-    if (actual != sha256) {
-        throw DownloadError("SHA256 mismatch for GHCR blob: expected " + sha256 + ", got " +
-                            actual);
-    }
-
-    write_file_atomic(cached, response);
-
-    SPDLOG_INFO("cached GHCR blob {} ({} bytes)", sha256, response.size());
+    SPDLOG_INFO("cached GHCR blob {} ({} bytes)", sha256, fs::file_size(cached));
     return cached;
 }
 
