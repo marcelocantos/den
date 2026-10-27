@@ -47,11 +47,28 @@ std::string pin_opt_reference(const std::string& name, const fs::path& cellar,
 /// because a stale Xcode.app selection makes the /usr/bin shims fail.
 std::string macho_tool(const std::string& tool);
 
+/// Path Homebrew substitutes for @@HOMEBREW_PERL@@ when pouring `name`
+/// with direct dependencies `deps` (Keg#prepare_relocation_to_locations).
+/// Brewed perl (a declared `perl` dependency, or perl itself) maps to
+/// <prefix>/opt/perl/bin/perl. On macOS anything else gets the system perl
+/// (/usr/bin/perl5.34 on Sonoma+, /usr/bin/perl5.30 earlier, /usr/bin/perl
+/// as a last resort); on Linux brew always uses <prefix>/opt/perl/bin/perl.
+std::string homebrew_perl_path(const std::string& prefix, const std::string& name,
+                               const std::vector<std::string>& deps);
+
+/// Path Homebrew substitutes for @@HOMEBREW_JAVA@@: the openjdk(@N)
+/// dependency's libexec (macOS: libexec/openjdk.jdk/Contents/Home) under
+/// <prefix>/opt. Brew leaves the token unexpanded when no openjdk dep exists;
+/// den falls back to plain `openjdk` so the keg still points at a JDK.
+std::string homebrew_java_path(const std::string& prefix, const std::vector<std::string>& deps);
+
 /// Replace @@HOMEBREW_PREFIX@@, @@HOMEBREW_CELLAR@@, and similar
-/// placeholders in all text files under a directory tree.
+/// placeholders in all text files under a directory tree. @@HOMEBREW_JAVA@@
+/// and @@HOMEBREW_PERL@@ are replaced with `java` / `perl` when non-empty.
 /// Returns the number of files modified.
 uint32_t relocate_text_placeholders(const fs::path& dir, const std::string& prefix,
-                                    const std::string& cellar);
+                                    const std::string& cellar, const std::string& java = {},
+                                    const std::string& perl = {});
 
 /// Replace a hardcoded path string in binary files. The replacement
 /// must be <= the original length; the remainder is null-padded.
@@ -68,11 +85,23 @@ uint32_t fix_dylib_paths(const fs::path& dir, const fs::path& prefix);
 /// UserError (the caller removes the partly relocated keg).
 bool install_name_tool_out_of_header_space(const std::string& output);
 
+/// Per-pour context for relocate_bottle.
+struct RelocationOptions {
+    /// The package's direct runtime dependencies. Resolves @@HOMEBREW_JAVA@@
+    /// (openjdk dep) and @@HOMEBREW_PERL@@ (brewed perl) like Homebrew does.
+    std::vector<std::string> dependencies;
+    /// Portable (:any_skip_relocation) bottles: Homebrew still replaces text
+    /// placeholders on pour but skips dynamic-linkage (Mach-O/ELF) rewriting.
+    bool skip_linkage = false;
+};
+
 /// Full relocation pass for a poured bottle.
 /// Text placeholders + Mach-O install-name/rpath expansion + ad-hoc re-sign
-/// (Apple) + ELF interpreter/RPATH expansion via patchelf (Linux).
+/// (Apple) + ELF interpreter/RPATH expansion via patchelf (Linux). With
+/// `options.skip_linkage` only the text pass runs.
 void relocate_bottle(const fs::path& package_dir, const std::string& name,
-                     const std::string& version, const fs::path& store);
+                     const std::string& version, const fs::path& store,
+                     const RelocationOptions& options = {});
 
 /// Relocate the bundled Portable Ruby binary to work from a new prefix.
 void relocate_ruby(const fs::path& ruby_dir, const std::string& original_prefix);

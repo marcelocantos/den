@@ -218,10 +218,18 @@ bool install_one(const Config& config, const Package& pkg) {
                         "': " + e.code().message());
     }
 
-    if (archive.relocation != RelocationType::Portable) {
-        std::cout << "==> Relocating " << pkg.name << "\n";
+    // Every bottle gets the text pass: Homebrew expands @@HOMEBREW_*@@ in
+    // scripts even for :any_skip_relocation (Portable) bottles and only skips
+    // dynamic-linkage rewriting for them (automake, gradle, yarn, ...).
+    {
+        RelocationOptions reloc;
+        reloc.dependencies = pkg.dependencies;
+        reloc.skip_linkage = archive.relocation == RelocationType::Portable;
+        if (!reloc.skip_linkage) {
+            std::cout << "==> Relocating " << pkg.name << "\n";
+        }
         try {
-            relocate_bottle(dest, pkg.name, pkg.version, config.store);
+            relocate_bottle(dest, pkg.name, pkg.version, config.store, reloc);
         } catch (...) {
             // Never leave a keg that can't load: a later install would see it
             // as present and skip re-pouring.
