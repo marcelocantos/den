@@ -21,6 +21,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -538,25 +539,70 @@ std::string slurp_file(const fs::path& p) {
     return {std::istreambuf_iterator<char>(in), {}};
 }
 
+/// True if p is tmp itself or lies beneath it (lexically, after normalising).
+bool is_under(const fs::path& p, const fs::path& tmp) {
+    const auto rel =
+        fs::absolute(p).lexically_normal().lexically_relative(fs::absolute(tmp).lexically_normal());
+    return !rel.empty() && *rel.begin() != "..";
+}
+
+/// Font tests must never touch the real ~/Library/Fonts: DEN_FONTDIR points
+/// into the scratch dir and HOME is scratch too, so even the fallback
+/// ($HOME/Library/Fonts) stays inside it. The constructor asserts both.
 struct FontEnv {
     TmpDir tmp;
     Config cfg = make_cfg(tmp.path);
     fs::path fontdir = tmp.path / "Fonts";
+    fs::path home = tmp.path / "home";
+    std::optional<std::string> saved_home;
     FontEnv() {
+        if (const char* h = std::getenv("HOME")) {
+            saved_home = h;
+        }
+        fs::create_directories(home);
+        setenv("HOME", home.c_str(), 1);
         setenv("DEN_APPDIR", cfg.appdir.c_str(), 1);
         setenv("DEN_HOME", cfg.den_home.c_str(), 1);
         setenv("DEN_FONTDIR", fontdir.c_str(), 1);
+        REQUIRE(cask_fontdir(cfg) == fontdir);
+        REQUIRE(is_under(cask_fontdir(cfg), tmp.path));
     }
     ~FontEnv() {
         unsetenv("DEN_APPDIR");
         unsetenv("DEN_HOME");
         unsetenv("DEN_FONTDIR");
+        if (saved_home) {
+            setenv("HOME", saved_home->c_str(), 1);
+        } else {
+            unsetenv("HOME");
+        }
+    }
+    /// Every font a receipt records must be inside the scratch dir.
+    void check_receipt_fonts_scratch(const std::string& version) const {
+        auto receipt = read_cask_receipt(cask_version_path(cfg, "font-test", version));
+        REQUIRE(receipt);
+        for (const auto& f : receipt->fonts) {
+            CHECK_MESSAGE(is_under(f, tmp.path), f.string());
+        }
     }
 };
 
 } // namespace
 
 TEST_SUITE("cask::fonts") {
+
+    TEST_CASE("without DEN_FONTDIR fonts go to $HOME/Library/Fonts (scratch HOME here)") {
+        FontEnv env;
+        unsetenv("DEN_FONTDIR");
+        const fs::path expected = env.home / "Library" / "Fonts";
+        REQUIRE(cask_fontdir(env.cfg) == expected);
+        REQUIRE(is_under(cask_fontdir(env.cfg), env.tmp.path));
+        install_cask(env.cfg, make_font_cask(env.tmp.path / "v1", "1.0", {{"A-Regular.ttf", "r"}}));
+        CHECK(slurp_file(expected / "A-Regular.ttf") == "r");
+        env.check_receipt_fonts_scratch("1.0");
+        uninstall_cask(env.cfg, "font-test");
+        CHECK_FALSE(fs::exists(expected / "A-Regular.ttf"));
+    }
 
     TEST_CASE("a font-only cask installs its fonts and uninstall removes them") {
         FontEnv env;
@@ -571,6 +617,7 @@ TEST_SUITE("cask::fonts") {
         auto receipt = read_cask_receipt(cask_version_path(env.cfg, "font-test", "1.0"));
         REQUIRE(receipt);
         CHECK(receipt->fonts.size() == 2);
+        env.check_receipt_fonts_scratch("1.0");
         CHECK(receipt->apps.empty());
         CHECK(fs::is_empty(env.cfg.appdir));
         // No staging/backup leftovers beside the fonts.
@@ -606,6 +653,7 @@ TEST_SUITE("cask::fonts") {
         CHECK(slurp_file(env.fontdir / "A-New.ttf") == "new");
         CHECK_FALSE(fs::exists(env.fontdir / "A-Old.ttf"));
         CHECK(installed_cask_version(env.cfg, "font-test") == "2.0");
+        env.check_receipt_fonts_scratch("2.0");
         size_t entries = 0;
         for ([[maybe_unused]] const auto& e : fs::directory_iterator(env.fontdir))
             ++entries;
