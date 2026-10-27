@@ -343,4 +343,97 @@ CleanupReport cleanup_kegs(const fs::path& store, const fs::path& den_home, cons
     return report;
 }
 
+OptReleaseAction release_prefix_opt_link(const fs::path& store, const fs::path& den_home,
+                                         const std::string& name, std::string* handed_to) {
+    if (!is_valid_package_name(name) || name.find('/') != std::string::npos) {
+        return OptReleaseAction::NotOwned;
+    }
+    const auto prefix = store.parent_path();
+    if (store.empty() || prefix.empty()) {
+        return OptReleaseAction::NotOwned;
+    }
+    const auto opt_dir = prefix / "opt";
+    const auto link = opt_dir / name;
+
+    std::error_code ec;
+    if (!fs::is_symlink(link, ec) || ec) {
+        // Missing, or a real file or directory: not a link den wrote.
+        return OptReleaseAction::NotOwned;
+    }
+    // Only a link resolving to a keg of this formula, in this store, that den
+    // poured is den's to move. Dangling links are left for ensure_prefix_opt_link
+    // and cleanup, which already handle them.
+    const auto current = fs::canonical(link, ec);
+    if (ec) {
+        return OptReleaseAction::NotOwned;
+    }
+    const auto store_canon = fs::weakly_canonical(store, ec);
+    if (ec || current.parent_path() != store_canon / name || !keg_owned_by_den(current)) {
+        return OptReleaseAction::NotOwned;
+    }
+
+    // Versions of this formula any environment still resolves to.
+    std::set<std::string> referenced;
+    for (const auto& env_path : list_all(den_home)) {
+        const auto resolved = resolve(den_home, env_path);
+        if (auto it = resolved.find(name); it != resolved.end()) {
+            referenced.insert(it->second);
+        }
+    }
+    if (referenced.count(current.filename().string())) {
+        return OptReleaseAction::Kept;
+    }
+
+    // Highest other version that den owns and an environment still uses.
+    fs::path next;
+    std::string next_ver;
+    for (const auto& entry : fs::directory_iterator(store / name, ec)) {
+        std::error_code dec;
+        if (!entry.is_directory(dec) || dec) {
+            continue;
+        }
+        const auto ver = entry.path().filename().string();
+        if (ver == current.filename().string() || !referenced.count(ver) ||
+            !keg_owned_by_den(entry.path())) {
+            continue;
+        }
+        if (next.empty() || compare_keg_versions(ver, next_ver) > 0) {
+            next = entry.path();
+            next_ver = ver;
+        }
+    }
+
+    if (next.empty()) {
+        fs::remove(link, ec);
+        if (ec) {
+            SPDLOG_WARN("failed to remove prefix opt symlink {}: {}", link.string(), ec.message());
+            return OptReleaseAction::Failed;
+        }
+        return OptReleaseAction::Removed;
+    }
+
+    // Relative, as Homebrew writes it; swapped atomically so the link never
+    // disappears under a running process.
+    auto target = next.lexically_normal().lexically_relative(opt_dir.lexically_normal());
+    if (target.empty()) {
+        target = next;
+    }
+    const auto tmp = opt_dir / ("." + name + ".den-tmp");
+    fs::remove(tmp, ec);
+    std::error_code cec;
+    fs::create_symlink(target, tmp, cec);
+    if (!cec) {
+        fs::rename(tmp, link, cec);
+    }
+    if (cec) {
+        fs::remove(tmp, ec);
+        SPDLOG_WARN("failed to repoint prefix opt symlink {}: {}", link.string(), cec.message());
+        return OptReleaseAction::Failed;
+    }
+    if (handed_to) {
+        *handed_to = next_ver;
+    }
+    return OptReleaseAction::HandedOff;
+}
+
 } // namespace den

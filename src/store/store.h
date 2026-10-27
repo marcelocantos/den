@@ -99,4 +99,24 @@ struct CleanupReport {
 CleanupReport cleanup_kegs(const fs::path& store, const fs::path& den_home, const fs::path& cache,
                            bool dry_run);
 
+/// Outcome of release_prefix_opt_link.
+enum class OptReleaseAction {
+    NotOwned,  // no link, a dangling link, or a link to a keg den does not own: left alone
+    Kept,      // an environment still references the keg the link points at
+    HandedOff, // repointed at another installed, den-owned, still-referenced version
+    Removed,   // no other such version: the link was removed
+    Failed,    // filesystem error (logged)
+};
+
+/// Called after `den uninstall` drops `name` from an environment. If
+/// `<store.parent>/opt/<name>` points at a keg den poured (keg_owned_by_den)
+/// whose version no environment under `den_home` still references, hand the
+/// link to the highest other version of `name` in `store` that den owns and an
+/// environment still references, or remove it when there is none. The keg
+/// itself stays until `den cleanup`. A link den does not own (Homebrew's, a
+/// real file, or a dangling link) is never touched. `handed_to` receives the
+/// new version on HandedOff.
+OptReleaseAction release_prefix_opt_link(const fs::path& store, const fs::path& den_home,
+                                         const std::string& name, std::string* handed_to = nullptr);
+
 } // namespace den
