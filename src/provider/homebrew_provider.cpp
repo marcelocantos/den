@@ -154,7 +154,12 @@ bool install_one(const Config& config, const Package& pkg) {
     fs::create_directories(tmp_dir);
 
     std::cout << "==> Extracting " << pkg.name << " " << pkg.version << "\n";
-    auto result = extract_archive(archive_path, tmp_dir);
+    // tmp_dir stands in for the Cellar (the keg unpacks as
+    // <name>/<version>/ and is renamed into $HOMEBREW_CELLAR), so bottle
+    // symlinks into $HOMEBREW_PREFIX/etc, /opt, ... are legitimate.
+    ExtractOptions xopts;
+    xopts.symlink_scope = SymlinkScope::BottlePrefix;
+    auto result = extract_archive(archive_path, tmp_dir, xopts);
     SPDLOG_INFO("extracted {} files", result.files.size());
 
     auto inner = tmp_dir / pkg.name / pkg.version;

@@ -235,7 +235,7 @@ uint32_t fix_macho_placeholders(const fs::path& dir, const std::string& prefix,
     uint32_t count = 0;
     std::error_code ec;
     for (const auto& entry : fs::recursive_directory_iterator(dir, ec)) {
-        if (!entry.is_regular_file()) {
+        if (entry.is_symlink() || !entry.is_regular_file()) {
             continue;
         }
         // Skip obvious non-binaries quickly; still verify Mach-O magic.
@@ -328,7 +328,7 @@ std::vector<std::string> unresolved_macho_placeholders(const fs::path& dir) {
     std::vector<std::string> bad;
     std::error_code ec;
     for (const auto& entry : fs::recursive_directory_iterator(dir, ec)) {
-        if (!entry.is_regular_file() || !is_macho_file(entry.path())) {
+        if (entry.is_symlink() || !entry.is_regular_file() || !is_macho_file(entry.path())) {
             continue;
         }
         auto r = run_tool({macho_tool("otool"), "-L", entry.path().string()});
@@ -404,7 +404,7 @@ uint32_t fix_elf_placeholders(const fs::path& dir, const std::string& prefix,
     bool patchelf_ok = false;
     std::error_code ec;
     for (const auto& entry : fs::recursive_directory_iterator(dir, ec)) {
-        if (!entry.is_regular_file()) {
+        if (entry.is_symlink() || !entry.is_regular_file()) {
             continue;
         }
         auto ext = entry.path().extension().string();
@@ -571,7 +571,7 @@ uint32_t relocate_text_placeholders(const fs::path& dir, const std::string& pref
     uint32_t count = 0;
     std::error_code ec;
     for (const auto& entry : fs::recursive_directory_iterator(dir, ec)) {
-        if (!entry.is_regular_file())
+        if (entry.is_symlink() || !entry.is_regular_file())
             continue;
 
         // Skip binary files.
@@ -610,7 +610,7 @@ uint32_t relocate_binary_paths(const fs::path& dir, const std::string& old_path,
     uint32_t count = 0;
     std::error_code ec;
     for (const auto& entry : fs::recursive_directory_iterator(dir, ec)) {
-        if (!entry.is_regular_file())
+        if (entry.is_symlink() || !entry.is_regular_file())
             continue;
 
         auto ext = entry.path().extension().string();
