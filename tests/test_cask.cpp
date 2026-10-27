@@ -21,6 +21,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -373,6 +374,97 @@ struct UpgradeEnv {
 
 } // namespace
 
+namespace {
+
+/// A binary-only cask shaped like android-platform-tools: the zip unpacks a
+/// platform-tools/ directory and the binaries are declared by their Homebrew
+/// staged path, "$HOMEBREW_PREFIX/Caskroom/<token>/<version>/...".
+Package make_caskroom_binary_cask(const fs::path& dir, const std::string& token,
+                                  const std::string& version,
+                                  const std::vector<std::string>& sources) {
+    const fs::path tools = dir / "content" / "platform-tools";
+    write_file(tools / "adb", "#!/bin/sh\necho adb " + version + "\n");
+    write_file(tools / "fastboot", "#!/bin/sh\necho fastboot\n");
+    write_file(tools / "lib64" / "libc++.dylib", "sibling\n");
+    // make_app_zip always adds an app bundle; this cask declares no app, so
+    // it is never installed.
+    auto zip = make_app_zip(dir, "Unused.app");
+    Package pkg = make_zip_cask(token, version, zip, "Unused.app");
+    pkg.cask_artifacts.clear();
+    for (const auto& src : sources) {
+        CaskArtifact bin;
+        bin.kind = CaskArtifactKind::Binary;
+        bin.source = src;
+        pkg.cask_artifacts.push_back(bin);
+    }
+    return pkg;
+}
+
+} // namespace
+
+TEST_SUITE("cask::caskroom_binary") {
+
+    TEST_CASE("binaries under the cask's own Caskroom path link into the stage") {
+        TmpDir tmp;
+        auto cfg = make_cfg(tmp.path);
+        setenv("DEN_APPDIR", cfg.appdir.c_str(), 1);
+        setenv("DEN_HOME", cfg.den_home.c_str(), 1);
+        const std::string root = "$HOMEBREW_PREFIX/Caskroom/demo-tools/37.0.1/platform-tools/";
+        auto pkg = make_caskroom_binary_cask(tmp.path / "z", "demo-tools", "37.0.1",
+                                             {root + "adb", root + "fastboot"});
+        auto result = install_cask(cfg, pkg);
+        CHECK(result.resolved_version == "37.0.1");
+
+        const auto bin = cfg.den_home / "envs" / "ROOT" / "bin";
+        const auto stage = cask_version_path(cfg, "demo-tools", "37.0.1") / "stage";
+        for (const char* name : {"adb", "fastboot"}) {
+            INFO(name);
+            const auto link = bin / name;
+            REQUIRE(fs::is_symlink(link));
+            // Linked in place inside the unpacked tree, so siblings resolve.
+            CHECK(fs::equivalent(link, stage / "platform-tools" / name));
+            CHECK_FALSE(fs::exists(stage / name)); // no copy out of the tree
+        }
+        CHECK(fs::exists(fs::path(fs::read_symlink(bin / "adb")).parent_path() / "lib64" /
+                         "libc++.dylib"));
+        CHECK(fs::is_empty(cfg.homebrew_caskroom));
+        CHECK(fs::is_empty(cfg.appdir)); // the stray app is not an artifact
+
+        uninstall_cask(cfg, "demo-tools");
+        CHECK_FALSE(fs::exists(bin / "adb"));
+        CHECK_FALSE(fs::exists(bin / "fastboot"));
+        CHECK_FALSE(is_cask_installed(cfg, "demo-tools"));
+        unsetenv("DEN_APPDIR");
+        unsetenv("DEN_HOME");
+    }
+
+    TEST_CASE("another cask's or version's Caskroom path is refused") {
+        TmpDir tmp;
+        auto cfg = make_cfg(tmp.path);
+        setenv("DEN_APPDIR", cfg.appdir.c_str(), 1);
+        setenv("DEN_HOME", cfg.den_home.c_str(), 1);
+        int n = 0;
+        for (const std::string src :
+             {"$HOMEBREW_PREFIX/Caskroom/other/37.0.1/platform-tools/adb",
+              "$HOMEBREW_PREFIX/Caskroom/demo-tools/36.0.0/platform-tools/adb",
+              "$HOMEBREW_PREFIX/Caskroom/demo-tools/37.0.1/../../other/37.0.1/platform-tools/adb",
+              "$HOMEBREW_PREFIX/Caskroom/demo-tools/37.0.1/"}) {
+            INFO(src);
+            auto pkg = make_caskroom_binary_cask(tmp.path / ("z" + std::to_string(n++)),
+                                                 "demo-tools", "37.0.1", {src});
+            // A bare Caskroom directory has no file name to link, so it is
+            // rejected by the name check before resolution.
+            const char* why = src.ends_with("/") ? "unsafe binary name" : "binary not found";
+            CHECK_THROWS_WITH_AS(install_cask(cfg, pkg), doctest::Contains(why), UserError);
+            CHECK_FALSE(is_cask_installed(cfg, "demo-tools"));
+            CHECK(fs::is_empty(cfg.den_home / "envs" / "ROOT" / "bin"));
+        }
+        CHECK(fs::is_empty(cfg.homebrew_caskroom));
+        unsetenv("DEN_APPDIR");
+        unsetenv("DEN_HOME");
+    }
+}
+
 TEST_SUITE("cask::appdir_binary") {
 
     // Regression: casks such as libreoffice, macdown and openscad declare
@@ -543,6 +635,269 @@ TEST_SUITE("cask::linux") {
         ar.url = "https://example.com/demo.zip";
         pkg.archives["default"] = ar;
         CHECK_THROWS_AS(install_cask(cfg, pkg), UserError);
+    }
+}
+
+#endif
+
+// Font casks (font-hack, the nerd fonts, …) declare `font` artifacts, which
+// den used to drop, failing with "has no supported artifacts".
+TEST_SUITE("cask::fonts") {
+
+    TEST_CASE("index keeps font artifacts through json and the lookup cache") {
+        json casks = json::array({{
+            {"token", "font-hack"},
+            {"name", json::array({"Hack"})},
+            {"version", "3.003"},
+            {"url", "https://example.com/Hack-v3.003-ttf.zip"},
+            {"sha256", std::string(64, 'a')},
+            {"artifacts", json::array({
+                              {{"font", json::array({"ttf/Hack-Bold.ttf"})},
+                               {"target", "/$HOME/Library/Fonts/Hack-Bold.ttf"}},
+                              {{"font", json::array({"ttf/Hack-Regular.ttf"})},
+                               {"target", "/$HOME/Library/Fonts/Hack-Regular.ttf"}},
+                              {{"zap", json::array()}},
+                          })},
+        }});
+        auto idx = transform_homebrew("[]", casks.dump());
+        const auto* p = idx.find("font-hack");
+        REQUIRE(p != nullptr);
+        REQUIRE(p->cask_artifacts.size() == 2);
+        CHECK(p->cask_artifacts[0].kind == CaskArtifactKind::Font);
+        CHECK(p->cask_artifacts[0].source == "ttf/Hack-Bold.ttf");
+        CHECK(p->cask_artifacts[0].target == "/$HOME/Library/Fonts/Hack-Bold.ttf");
+
+        TmpDir tmp;
+        const auto path = tmp.path / "index.json";
+        save_index(idx, path);
+        for (auto loaded : {load_index(path), load_index_json(path)}) {
+            const auto* q = loaded.find("font-hack");
+            REQUIRE(q != nullptr);
+            REQUIRE(q->cask_artifacts.size() == 2);
+            CHECK(q->cask_artifacts[1].kind == CaskArtifactKind::Font);
+            CHECK(q->cask_artifacts[1].source == "ttf/Hack-Regular.ttf");
+        }
+        auto enc = index_cache::encode_package(*p);
+        auto dec = index_cache::decode_package(enc.data(), enc.size());
+        REQUIRE(dec.cask_artifacts.size() == 2);
+        CHECK(dec.cask_artifacts[0].kind == CaskArtifactKind::Font);
+    }
+}
+
+#ifdef __APPLE__
+
+namespace {
+
+/// A font-only cask whose zip holds ttf/<name> for each font.
+Package make_font_cask(const fs::path& dir, const std::string& version,
+                       const std::vector<std::pair<std::string, std::string>>& fonts) {
+    const fs::path content = dir / "content";
+    fs::create_directories(content);
+    for (const auto& [name, body] : fonts) {
+        write_file(content / "ttf" / name, body);
+    }
+    auto zip = make_app_zip(dir, "Unused.app");
+    auto pkg = make_zip_cask("font-test", version, zip, "Unused.app");
+    pkg.cask_artifacts.clear();
+    for (const auto& [name, body] : fonts) {
+        (void)body;
+        CaskArtifact a;
+        a.kind = CaskArtifactKind::Font;
+        a.source = "ttf/" + name;
+        a.target = "/$HOME/Library/Fonts/" + name;
+        pkg.cask_artifacts.push_back(a);
+    }
+    return pkg;
+}
+
+std::string slurp_file(const fs::path& p) {
+    std::ifstream in(p, std::ios::binary);
+    return {std::istreambuf_iterator<char>(in), {}};
+}
+
+/// True if p is tmp itself or lies beneath it (lexically, after normalising).
+bool is_under(const fs::path& p, const fs::path& tmp) {
+    const auto rel =
+        fs::absolute(p).lexically_normal().lexically_relative(fs::absolute(tmp).lexically_normal());
+    return !rel.empty() && *rel.begin() != "..";
+}
+
+/// Font tests must never touch the real ~/Library/Fonts: DEN_FONTDIR points
+/// into the scratch dir and HOME is scratch too, so even the fallback
+/// ($HOME/Library/Fonts) stays inside it. The constructor asserts both.
+struct FontEnv {
+    TmpDir tmp;
+    Config cfg = make_cfg(tmp.path);
+    fs::path fontdir = tmp.path / "Fonts";
+    fs::path home = tmp.path / "home";
+    std::optional<std::string> saved_home;
+    FontEnv() {
+        if (const char* h = std::getenv("HOME")) {
+            saved_home = h;
+        }
+        fs::create_directories(home);
+        setenv("HOME", home.c_str(), 1);
+        setenv("DEN_APPDIR", cfg.appdir.c_str(), 1);
+        setenv("DEN_HOME", cfg.den_home.c_str(), 1);
+        setenv("DEN_FONTDIR", fontdir.c_str(), 1);
+        REQUIRE(cask_fontdir(cfg) == fontdir);
+        REQUIRE(is_under(cask_fontdir(cfg), tmp.path));
+    }
+    ~FontEnv() {
+        unsetenv("DEN_APPDIR");
+        unsetenv("DEN_HOME");
+        unsetenv("DEN_FONTDIR");
+        if (saved_home) {
+            setenv("HOME", saved_home->c_str(), 1);
+        } else {
+            unsetenv("HOME");
+        }
+    }
+    /// Every font a receipt records must be inside the scratch dir.
+    void check_receipt_fonts_scratch(const std::string& version) const {
+        auto receipt = read_cask_receipt(cask_version_path(cfg, "font-test", version));
+        REQUIRE(receipt);
+        for (const auto& f : receipt->fonts) {
+            CHECK_MESSAGE(is_under(f, tmp.path), f.string());
+        }
+    }
+};
+
+} // namespace
+
+TEST_SUITE("cask::fonts") {
+
+    TEST_CASE("without DEN_FONTDIR fonts go to $HOME/Library/Fonts (scratch HOME here)") {
+        FontEnv env;
+        unsetenv("DEN_FONTDIR");
+        const fs::path expected = env.home / "Library" / "Fonts";
+        REQUIRE(cask_fontdir(env.cfg) == expected);
+        REQUIRE(is_under(cask_fontdir(env.cfg), env.tmp.path));
+        install_cask(env.cfg, make_font_cask(env.tmp.path / "v1", "1.0", {{"A-Regular.ttf", "r"}}));
+        CHECK(slurp_file(expected / "A-Regular.ttf") == "r");
+        env.check_receipt_fonts_scratch("1.0");
+        uninstall_cask(env.cfg, "font-test");
+        CHECK_FALSE(fs::exists(expected / "A-Regular.ttf"));
+    }
+
+    TEST_CASE("a font-only cask installs its fonts and uninstall removes them") {
+        FontEnv env;
+        auto pkg = make_font_cask(env.tmp.path / "v1", "1.0",
+                                  {{"A-Regular.ttf", "regular"}, {"A-Bold.ttf", "bold"}});
+        install_cask(env.cfg, pkg);
+
+        CHECK(cask_fontdir(env.cfg) == env.fontdir);
+        CHECK(slurp_file(env.fontdir / "A-Regular.ttf") == "regular");
+        CHECK(slurp_file(env.fontdir / "A-Bold.ttf") == "bold");
+        CHECK(font_owned_by_den(env.cfg, env.fontdir / "A-Bold.ttf"));
+        auto receipt = read_cask_receipt(cask_version_path(env.cfg, "font-test", "1.0"));
+        REQUIRE(receipt);
+        CHECK(receipt->fonts.size() == 2);
+        env.check_receipt_fonts_scratch("1.0");
+        CHECK(receipt->apps.empty());
+        CHECK(fs::is_empty(env.cfg.appdir));
+        // No staging/backup leftovers beside the fonts.
+        size_t entries = 0;
+        for ([[maybe_unused]] const auto& e : fs::directory_iterator(env.fontdir))
+            ++entries;
+        CHECK(entries == 2);
+
+        uninstall_cask(env.cfg, "font-test");
+        CHECK_FALSE(fs::exists(env.fontdir / "A-Regular.ttf"));
+        CHECK_FALSE(fs::exists(env.fontdir / "A-Bold.ttf"));
+        CHECK_FALSE(is_cask_installed(env.cfg, "font-test"));
+    }
+
+    TEST_CASE("refuses to overwrite a font den did not install") {
+        FontEnv env;
+        write_file(env.fontdir / "A-Bold.ttf", "user's own");
+        auto pkg = make_font_cask(env.tmp.path / "v1", "1.0",
+                                  {{"A-Regular.ttf", "regular"}, {"A-Bold.ttf", "bold"}});
+        CHECK_THROWS_AS(install_cask(env.cfg, pkg), UserError);
+        CHECK(slurp_file(env.fontdir / "A-Bold.ttf") == "user's own");
+        CHECK_FALSE(fs::exists(env.fontdir / "A-Regular.ttf"));
+        CHECK_FALSE(is_cask_installed(env.cfg, "font-test"));
+    }
+
+    TEST_CASE("upgrade replaces den's fonts and drops ones the new version lacks") {
+        FontEnv env;
+        install_cask(env.cfg, make_font_cask(env.tmp.path / "v1", "1.0",
+                                             {{"A-Regular.ttf", "r1"}, {"A-Old.ttf", "old"}}));
+        install_cask(env.cfg, make_font_cask(env.tmp.path / "v2", "2.0",
+                                             {{"A-Regular.ttf", "r2"}, {"A-New.ttf", "new"}}));
+        CHECK(slurp_file(env.fontdir / "A-Regular.ttf") == "r2");
+        CHECK(slurp_file(env.fontdir / "A-New.ttf") == "new");
+        CHECK_FALSE(fs::exists(env.fontdir / "A-Old.ttf"));
+        CHECK(installed_cask_version(env.cfg, "font-test") == "2.0");
+        env.check_receipt_fonts_scratch("2.0");
+        size_t entries = 0;
+        for ([[maybe_unused]] const auto& e : fs::directory_iterator(env.fontdir))
+            ++entries;
+        CHECK(entries == 2);
+        uninstall_cask(env.cfg, "font-test");
+        CHECK(fs::is_empty(env.fontdir));
+    }
+}
+
+#endif
+
+#ifdef __APPLE__
+
+TEST_SUITE("cask::binary_dir_collision") {
+
+    // flutter ships "flutter/bin/flutter" and links it as "flutter", which is
+    // also the name of the archive's top-level directory. den used to point
+    // the link at stage/flutter (the directory) instead of the binary.
+    TEST_CASE("a binary named like a top-level stage directory links to the binary") {
+        TmpDir tmp;
+        auto cfg = make_cfg(tmp.path);
+        setenv("DEN_APPDIR", cfg.appdir.c_str(), 1);
+        setenv("DEN_HOME", cfg.den_home.c_str(), 1);
+
+        auto zip = make_app_zip(tmp.path / "zip", "Tool.app", "tool/bin/tool");
+        auto pkg = make_zip_cask("tool", "1.0", zip, "Tool.app", "tool/bin/tool");
+        pkg.cask_artifacts.back().target = "$HOMEBREW_PREFIX/bin/tool";
+        install_cask(cfg, pkg);
+
+        const auto link = cfg.den_home / "envs" / "ROOT" / "bin" / "tool";
+        REQUIRE(fs::is_symlink(link));
+        CHECK(fs::is_regular_file(link));
+        CHECK(fs::path(fs::read_symlink(link)).filename() == "tool");
+        CHECK(fs::read_symlink(link).parent_path().filename() == "bin");
+        std::ifstream in(link);
+        std::string body((std::istreambuf_iterator<char>(in)), {});
+        CHECK(body.find("echo bin") != std::string::npos);
+
+        uninstall_cask(cfg, "tool");
+        CHECK_FALSE(fs::exists(link));
+        unsetenv("DEN_APPDIR");
+        unsetenv("DEN_HOME");
+    }
+
+    TEST_CASE("a copied out-of-stage binary never lands on a same-named stage directory") {
+        TmpDir tmp;
+        auto cfg = make_cfg(tmp.path);
+        setenv("DEN_APPDIR", cfg.appdir.c_str(), 1);
+        setenv("DEN_HOME", cfg.den_home.c_str(), 1);
+
+        const fs::path outside = tmp.path / "outside" / "tool";
+        write_file(outside, "#!/bin/sh\necho outside\n");
+        // The archive has a top-level "tool/" directory.
+        auto zip = make_app_zip(tmp.path / "zip", "Tool.app", "tool/README");
+        auto pkg = make_zip_cask("tool", "1.0", zip, "Tool.app", outside.string());
+        pkg.cask_artifacts.back().target = "$HOMEBREW_PREFIX/bin/tool";
+        install_cask(cfg, pkg);
+
+        const auto link = cfg.den_home / "envs" / "ROOT" / "bin" / "tool";
+        REQUIRE(fs::is_symlink(link));
+        REQUIRE(fs::is_regular_file(link));
+        std::ifstream in(link);
+        std::string body((std::istreambuf_iterator<char>(in)), {});
+        CHECK(body.find("echo outside") != std::string::npos);
+
+        uninstall_cask(cfg, "tool");
+        unsetenv("DEN_APPDIR");
+        unsetenv("DEN_HOME");
     }
 }
 

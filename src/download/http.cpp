@@ -94,7 +94,8 @@ std::string fetch_url(const std::string& url) {
     return response;
 }
 
-void download_to_file(const std::string& url, const fs::path& dest, std::uint64_t max_bytes) {
+void download_to_file(const std::string& url, const fs::path& dest, std::uint64_t max_bytes,
+                      const std::vector<std::string>& headers) {
     std::error_code ec;
     if (dest.has_parent_path())
         fs::create_directories(dest.parent_path(), ec);
@@ -125,8 +126,14 @@ void download_to_file(const std::string& url, const fs::path& dest, std::uint64_
     curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1024L);
     curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 60L);
     curl_easy_setopt(curl, CURLOPT_MAXFILESIZE_LARGE, static_cast<curl_off_t>(max_bytes));
+    struct curl_slist* header_list = nullptr;
+    for (const auto& h : headers)
+        header_list = curl_slist_append(header_list, h.c_str());
+    if (header_list)
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, header_list);
 
     CURLcode res = curl_easy_perform(curl);
+    curl_slist_free_all(header_list);
     long http_code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
     curl_off_t received = 0;

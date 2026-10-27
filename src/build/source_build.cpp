@@ -23,6 +23,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <regex>
 #include <sstream>
 #include <unistd.h>
@@ -41,6 +42,21 @@ std::pair<int, std::string> run(const std::string& cmd) {
         output += buf.data();
     int status = pclose(pipe);
     return {WIFEXITED(status) ? WEXITSTATUS(status) : -1, output};
+}
+
+// den_build.rb aborts with "error: SHA256 mismatch for <name> source
+// tarball" plus both digests. That is a verdict, not a failed build:
+// falling back would fetch the same tarball, fail the same check and report
+// the mismatch a second time. Returns the message (from "SHA256 mismatch")
+// when the Ruby output carries one.
+std::optional<std::string> ruby_sha_mismatch(const std::string& output) {
+    auto pos = output.find("SHA256 mismatch for ");
+    if (pos == std::string::npos)
+        return std::nullopt;
+    auto msg = output.substr(pos);
+    while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r' || msg.back() == ' '))
+        msg.pop_back();
+    return msg;
 }
 
 // Single-quote a string for safe use as one shell word. Wraps in '...' and
@@ -318,6 +334,11 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
                 std::cout << "==> Built " << name << " " << version << "\n";
                 return claim();
             }
+            if (auto mismatch = ruby_sha_mismatch(ruby_output)) {
+                std::error_code ec;
+                fs::remove_all(dest, ec);
+                throw UserError(*mismatch);
+            }
             SPDLOG_WARN("bundled ruby build failed (rc={}{}), falling back", ruby_rc,
                         built ? "" : ", no keg at " + dest.string());
             SPDLOG_WARN("bundled ruby output (tail): {}",
@@ -364,6 +385,11 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
             if (ruby_rc == 0 && ruby_output.find("status=ok") != std::string::npos) {
                 std::cout << "==> Built " << name << " " << version << " (via formula)\n";
                 return claim();
+            }
+            if (auto mismatch = ruby_sha_mismatch(ruby_output)) {
+                std::error_code ec;
+                fs::remove_all(dest, ec);
+                throw UserError(*mismatch);
             }
             SPDLOG_WARN("ruby build failed (rc={}), falling back to parser", ruby_rc);
             std::error_code ec;

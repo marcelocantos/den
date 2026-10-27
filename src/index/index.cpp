@@ -71,6 +71,19 @@ std::string json_string(const json& j, const char* key, const std::string& fallb
     return fallback;
 }
 
+/// Extract an array of strings, skipping non-string entries.
+std::vector<std::string> json_string_array(const json& j, const char* key) {
+    std::vector<std::string> out;
+    if (j.contains(key) && j[key].is_array()) {
+        for (const auto& v : j[key]) {
+            if (v.is_string()) {
+                out.push_back(v.get<std::string>());
+            }
+        }
+    }
+    return out;
+}
+
 /// Transform a single Homebrew formula JSON object into a Package.
 Package transform_formula(const json& f) {
     Package pkg;
@@ -173,6 +186,8 @@ Package transform_formula(const json& f) {
         }
     }
 
+    pkg.old_names = json_string_array(f, "oldnames");
+
     // Ruby source path (for fetching formula without brew cat).
     if (f.contains("ruby_source_path") && f["ruby_source_path"].is_string()) {
         pkg.ruby_source_path = f["ruby_source_path"].get<std::string>();
@@ -233,7 +248,7 @@ std::string command_wrapper_script(const json& opts) {
 }
 
 /// Parse cask artifacts of kinds den can install (app, binary, command_wrapper,
-/// pkg).
+/// pkg, font).
 /// Unsupported kinds (installer scripts, preflight, zap-only, …) are ignored;
 /// install_cask will error if nothing supported remains.
 void parse_cask_artifacts(const json& arts, std::vector<CaskArtifact>& out) {
@@ -286,6 +301,23 @@ void parse_cask_artifacts(const json& arts, std::vector<CaskArtifact>& out) {
                 out.push_back(std::move(art));
             }
         }
+        if (a.contains("font")) {
+            // {"font": ["ttf/Hack-Bold.ttf"], "target": "/$HOME/Library/Fonts/Hack-Bold.ttf"}
+            CaskArtifact art;
+            art.kind = CaskArtifactKind::Font;
+            const auto& font = a["font"];
+            if (font.is_array() && !font.empty() && font[0].is_string()) {
+                art.source = font[0].get<std::string>();
+            } else if (font.is_string()) {
+                art.source = font.get<std::string>();
+            }
+            if (a.contains("target") && a["target"].is_string()) {
+                art.target = a["target"].get<std::string>();
+            }
+            if (!art.source.empty()) {
+                out.push_back(std::move(art));
+            }
+        }
         if (a.contains("command_wrapper")) {
             // ["name", {"executable": ..., "args": [...]}] or
             // ["name", {"content": "#!/bin/sh..."}], target "$HOMEBREW_PREFIX/bin/name".
@@ -329,6 +361,7 @@ Package transform_cask(const json& c) {
         c.contains("deprecated") && c["deprecated"].is_boolean() && c["deprecated"].get<bool>();
     pkg.disabled =
         c.contains("disabled") && c["disabled"].is_boolean() && c["disabled"].get<bool>();
+    pkg.old_names = json_string_array(c, "old_tokens");
 
     if (c.contains("version") && c["version"].is_string()) {
         pkg.version = c["version"].get<std::string>();
@@ -427,6 +460,8 @@ json package_to_json(const Package& pkg) {
         j["source_sha256"] = *pkg.source_sha256;
     if (pkg.ruby_source_path)
         j["ruby_source_path"] = *pkg.ruby_source_path;
+    if (!pkg.old_names.empty())
+        j["old_names"] = pkg.old_names;
 
     if (!pkg.cask_artifacts.empty()) {
         json arts = json::array();
@@ -441,6 +476,9 @@ json package_to_json(const Package& pkg) {
                 break;
             case CaskArtifactKind::Pkg:
                 aj["kind"] = "pkg";
+                break;
+            case CaskArtifactKind::Font:
+                aj["kind"] = "font";
                 break;
             case CaskArtifactKind::Wrapper:
                 aj["kind"] = "command_wrapper";
@@ -511,6 +549,7 @@ Package package_from_json(const json& j) {
     if (j.contains("ruby_source_path") && j["ruby_source_path"].is_string()) {
         pkg.ruby_source_path = j["ruby_source_path"].get<std::string>();
     }
+    pkg.old_names = json_string_array(j, "old_names");
 
     if (j.contains("cask_artifacts") && j["cask_artifacts"].is_array()) {
         for (const auto& aj : j["cask_artifacts"]) {
@@ -523,6 +562,8 @@ Package package_from_json(const json& j) {
                 a.kind = CaskArtifactKind::Binary;
             } else if (kind == "pkg") {
                 a.kind = CaskArtifactKind::Pkg;
+            } else if (kind == "font") {
+                a.kind = CaskArtifactKind::Font;
             } else if (kind == "command_wrapper") {
                 a.kind = CaskArtifactKind::Wrapper;
             } else {

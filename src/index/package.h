@@ -25,6 +25,7 @@ enum class CaskArtifactKind {
     App,    // .app bundle → appdir (/Applications or DEN_APPDIR)
     Binary, // bare executable → env bin symlink
     Pkg,    // macOS installer package
+    Font,   // font file → user font dir (~/Library/Fonts or DEN_FONTDIR)
     // command_wrapper: den writes a small shell script and links it like a
     // binary. `source` holds the script template (placeholders such as
     // $APPDIR and $HOMEBREW_PREFIX are substituted at install time) and
@@ -122,6 +123,11 @@ struct Package {
     std::optional<std::string> source_sha256;
     std::optional<std::string> ruby_source_path; // e.g. "Formula/t/tree.rb"
 
+    // Names this package was previously published under (Homebrew cask
+    // "old_tokens", formula "oldnames"), so `den install <old>` follows the
+    // rename the way brew does.
+    std::vector<std::string> old_names;
+
     // Linking control.
     bool keg_only = false;
     std::string keg_only_reason; // e.g. ":versioned_formula", ":provided_by_macos", or custom
@@ -195,6 +201,36 @@ struct PackageIndex {
             return nullptr;
         }
         return &packages.emplace(name, std::move(*pkg)).first->second;
+    }
+
+    /// The current package that lists `old_name` among its old names, or
+    /// nullptr. Only meaningful after an exact find() miss (a live package
+    /// always wins, as in brew); it scans the whole index, so keep it off hot
+    /// paths.
+    const Package* find_renamed(const std::string& old_name) const {
+        if (find(old_name)) {
+            return nullptr;
+        }
+        auto scan = [&](const std::map<std::string, Package>& m) -> std::string {
+            for (const auto& [key, pkg] : m) {
+                for (const auto& o : pkg.old_names) {
+                    if (o == old_name) {
+                        return key;
+                    }
+                }
+            }
+            return {};
+        };
+        std::string target;
+        if (backing) {
+            std::map<std::string, Package> all;
+            backing->load_all(all);
+            target = scan(all);
+        }
+        if (target.empty()) {
+            target = scan(packages);
+        }
+        return target.empty() ? nullptr : find(target);
     }
 
     /// True when the index holds no packages at all (materialised or backed).
