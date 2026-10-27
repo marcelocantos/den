@@ -63,6 +63,11 @@ uint32_t relocate_binary_paths(const fs::path& dir, const std::string& old_path,
 /// Bottle relocation uses install_name_tool placeholder expansion instead.
 uint32_t fix_dylib_paths(const fs::path& dir, const fs::path& prefix);
 
+/// True when install_name_tool's output says a rewritten load command doesn't
+/// fit in the Mach-O header padding. relocate_bottle turns that into a hard
+/// UserError (the caller removes the partly relocated keg).
+bool install_name_tool_out_of_header_space(const std::string& output);
+
 /// Full relocation pass for a poured bottle.
 /// Text placeholders + Mach-O install-name/rpath expansion + ad-hoc re-sign
 /// (Apple) + ELF interpreter/RPATH expansion via patchelf (Linux).

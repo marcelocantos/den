@@ -28,7 +28,8 @@ namespace {
 constexpr std::array<char, 8> kMagic = {'D', 'E', 'N', 'I', 'D', 'X', '\0', '\0'};
 // v2: records carry Package::cask_uninstall (🎯T12 uninstall stanzas).
 // v3: records carry Package::revision (Homebrew formula revision).
-constexpr uint32_t kFormatVersion = 3;
+// v4: archives carry Package::Archive::cellar (fixed-cellar bottles).
+constexpr uint32_t kFormatVersion = 4;
 constexpr uint32_t kEndianTag = 0x01020304;
 constexpr size_t kHeaderSize = 80;
 constexpr size_t kEntrySize = 24;
@@ -378,6 +379,7 @@ std::string encode_package(const Package& pkg) {
         put_str(b, ar.url);
         put_str(b, ar.sha256);
         append<uint8_t>(b, static_cast<uint8_t>(ar.relocation));
+        put_str(b, ar.cellar);
     }
     append<uint32_t>(b, static_cast<uint32_t>(pkg.cask_artifacts.size()));
     for (const auto& a : pkg.cask_artifacts) {
@@ -429,6 +431,7 @@ Package decode_package(const char* data, size_t len) {
         ar.url = r.str();
         ar.sha256 = r.str();
         ar.relocation = static_cast<RelocationType>(r.enum_byte(2));
+        ar.cellar = r.str();
         pkg.archives.emplace(std::move(tag), std::move(ar));
     }
     auto n_arts = r.num<uint32_t>();
