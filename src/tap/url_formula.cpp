@@ -13,11 +13,16 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
 #include <fnmatch.h>
 #include <fstream>
 #include <iostream>
 #include <map>
 #include <sstream>
+#include <sys/wait.h>
+#include <unistd.h>
 
 namespace den {
 
@@ -508,6 +513,131 @@ struct Cursor {
     }
 };
 
+// Interpolations allowed in `system` arguments, expanded when the step runs.
+bool system_var(std::string_view v) {
+    return v == "version" || v == "name";
+}
+
+// One `system` argument: "…" (with #{version}/#{name}), '…', or a %w[…]
+// word list (optionally splatted). Appends to `out`; false on anything else.
+bool system_arg(Cursor& c, std::vector<std::string>& out) {
+    c.ws();
+    const auto& s = c.s;
+    if (c.i >= s.size())
+        return false;
+    if (s[c.i] == '"') {
+        std::string v;
+        for (++c.i; c.i < s.size(); ++c.i) {
+            char ch = s[c.i];
+            if (ch == '\\' && c.i + 1 < s.size()) {
+                v += s[++c.i];
+            } else if (ch == '"') {
+                ++c.i;
+                for (size_t b = v.find("#{"); b != std::string::npos; b = v.find("#{", b + 2)) {
+                    auto e = v.find('}', b);
+                    if (e == std::string::npos ||
+                        !system_var(std::string_view(v).substr(b + 2, e - b - 2)))
+                        return false;
+                }
+                out.push_back(std::move(v));
+                return true;
+            } else {
+                v += ch;
+            }
+        }
+        return false;
+    }
+    if (s[c.i] == '\'') {
+        std::string v;
+        for (++c.i; c.i < s.size(); ++c.i) {
+            char ch = s[c.i];
+            if (ch == '\\' && c.i + 1 < s.size() && (s[c.i + 1] == '\'' || s[c.i + 1] == '\\')) {
+                v += s[++c.i];
+            } else if (ch == '\'') {
+                ++c.i;
+                out.push_back(std::move(v));
+                return true;
+            } else {
+                v += ch;
+            }
+        }
+        return false;
+    }
+    c.eat("*");
+    if (c.eat("%w[") || c.eat("%w(")) {
+        const char close = s[c.i - 1] == '[' ? ']' : ')';
+        auto e = s.find(close, c.i);
+        if (e == std::string::npos)
+            return false;
+        std::istringstream words(s.substr(c.i, e - c.i));
+        for (std::string w; words >> w;)
+            out.push_back(w);
+        c.i = e + 1;
+        return true;
+    }
+    return false;
+}
+
+// make's -C/--directory must name a directory inside the stage.
+bool make_dirs_safe(const std::vector<std::string>& argv) {
+    auto base = fs::path(argv.front()).filename().string();
+    if (base != "make" && base != "gmake")
+        return true;
+    for (size_t i = 1; i < argv.size(); ++i) {
+        const auto& a = argv[i];
+        std::string dir;
+        if (a == "-C" || a == "--directory") {
+            if (i + 1 >= argv.size())
+                return false;
+            dir = argv[++i];
+        } else if (a.starts_with("--directory=")) {
+            dir = a.substr(12);
+        } else if (a.starts_with("-C")) {
+            dir = a.substr(2);
+        } else {
+            continue;
+        }
+        if (!safe_relative(dir))
+            return false;
+    }
+    return true;
+}
+
+// `system "cmd", "arg", …` or `system("cmd", …)`.
+std::optional<InstallStep> parse_system(const std::string& text) {
+    Cursor c{text};
+    if (!c.eat("system"))
+        return std::nullopt;
+    if (c.i < text.size() && text[c.i] != '(' &&
+        !std::isspace(static_cast<unsigned char>(text[c.i])))
+        return std::nullopt;
+    bool paren = c.eat("(");
+    InstallStep step;
+    step.kind = InstallStep::Kind::System;
+    do {
+        if (!system_arg(c, step.argv))
+            return std::nullopt;
+    } while (c.eat(","));
+    if (paren && !c.eat(")"))
+        return std::nullopt;
+    if (!c.done() || step.argv.empty())
+        return std::nullopt;
+    // A lone command string goes through /bin/sh in Ruby only when it holds
+    // shell metacharacters; den runs no shell, so it accepts the plain form
+    // and splits it on whitespace the way Ruby does.
+    if (step.argv.size() == 1 && step.argv[0].find_first_of(" \t") != std::string::npos) {
+        if (step.argv[0].find_first_of("*?{}[]<>()~&|\\$;'`\"\n#=%") != std::string::npos)
+            return std::nullopt;
+        std::istringstream words(step.argv[0]);
+        step.argv.clear();
+        for (std::string w; words >> w;)
+            step.argv.push_back(w);
+    }
+    if (step.argv.empty() || step.argv.front().empty() || !make_dirs_safe(step.argv))
+        return std::nullopt;
+    return step;
+}
+
 std::optional<InstallStep> parse_step(const std::string& stmt, const std::string& name) {
     std::string text = stmt;
     std::string heredoc;
@@ -515,6 +645,8 @@ std::optional<InstallStep> parse_step(const std::string& stmt, const std::string
         text = stmt.substr(0, nl);
         heredoc = stmt.substr(nl + 1);
     }
+    if (starts_with_word(text, "system") || text.starts_with("system("))
+        return heredoc.empty() ? parse_system(text) : std::nullopt;
     Cursor c{text};
     auto dir = c.dir_expr(name);
     if (!dir || !c.eat("."))
@@ -696,6 +828,91 @@ void move_into(const fs::path& src, const fs::path& dst) {
     }
 }
 
+// Expand #{version}/#{name} in a `system` argument.
+std::string expand_system_arg(std::string a, const InstallPaths& p) {
+    for (auto [var, val] : {std::pair<std::string, std::string>{"#{version}", p.version},
+                            std::pair<std::string, std::string>{"#{name}", p.name}}) {
+        for (size_t at = a.find(var); at != std::string::npos; at = a.find(var, at + val.size()))
+            a.replace(at, var.size(), val);
+    }
+    return a;
+}
+
+bool within(const fs::path& p, const fs::path& root) {
+    auto rel = p.lexically_normal().lexically_relative(root.lexically_normal());
+    return !rel.empty() && *rel.begin() != "..";
+}
+
+// Run argv in `cwd` with inherited stdout/stderr and stdin from /dev/null.
+// Returns the exit status, 128+signal, or -1 when the command did not start.
+int run_step_command(const std::vector<std::string>& argv, const fs::path& cwd, int& spawn_errno) {
+    std::vector<char*> ptrs;
+    for (const auto& a : argv)
+        ptrs.push_back(const_cast<char*>(a.c_str()));
+    ptrs.push_back(nullptr);
+    int pipefd[2];
+    if (::pipe(pipefd) != 0) {
+        spawn_errno = errno;
+        return -1;
+    }
+    ::fcntl(pipefd[1], F_SETFD, FD_CLOEXEC);
+    std::cout.flush();
+    std::cerr.flush();
+    pid_t pid = ::fork();
+    if (pid < 0) {
+        spawn_errno = errno;
+        ::close(pipefd[0]);
+        ::close(pipefd[1]);
+        return -1;
+    }
+    if (pid == 0) {
+        ::close(pipefd[0]);
+        int err = 0;
+        if (::chdir(cwd.c_str()) != 0) {
+            err = errno;
+        } else {
+            int null = ::open("/dev/null", O_RDONLY);
+            if (null >= 0) {
+                ::dup2(null, STDIN_FILENO);
+                ::close(null);
+            }
+            ::execvp(ptrs[0], ptrs.data());
+            err = errno;
+        }
+        (void)!::write(pipefd[1], &err, sizeof err);
+        ::_exit(127);
+    }
+    ::close(pipefd[1]);
+    int err = 0;
+    ssize_t n;
+    while ((n = ::read(pipefd[0], &err, sizeof err)) < 0 && errno == EINTR) {
+    }
+    ::close(pipefd[0]);
+    int status = 0;
+    while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+    }
+    if (n == static_cast<ssize_t>(sizeof err)) {
+        spawn_errno = err;
+        return -1;
+    }
+    if (WIFEXITED(status))
+        return WEXITSTATUS(status);
+    if (WIFSIGNALED(status))
+        return 128 + WTERMSIG(status);
+    return -1;
+}
+
+std::string quote_argv(const std::vector<std::string>& argv) {
+    std::string out;
+    for (const auto& a : argv) {
+        if (!out.empty())
+            out += ' ';
+        bool plain = !a.empty() && a.find_first_of(" \t\"'\\$`") == std::string::npos;
+        out += plain ? a : "\"" + a + "\"";
+    }
+    return out;
+}
+
 } // namespace
 
 void apply_install_steps(const std::vector<InstallStep>& steps, const fs::path& stage,
@@ -757,6 +974,28 @@ void apply_install_steps(const std::vector<InstallStep>& steps, const fs::path& 
             if (!fs::exists(f))
                 fail("chmod target '" + join_rel(s.dir, s.name) + "' does not exist");
             fs::permissions(f, static_cast<fs::perms>(s.mode), fs::perm_options::replace);
+            break;
+        }
+        case InstallStep::Kind::System: {
+            std::vector<std::string> argv;
+            for (const auto& a : s.argv)
+                argv.push_back(expand_system_arg(a, paths));
+            const auto shown = quote_argv(argv);
+            if (argv.front().find('/') != std::string::npos) {
+                auto cmd = fs::path(argv.front());
+                auto resolved = cmd.is_absolute() ? cmd : stage / cmd;
+                if (!cmd.is_absolute() && !within(resolved, stage))
+                    fail("`system " + shown + "` names a command outside the download");
+                if (!fs::exists(resolved))
+                    fail("`system " + shown + "`: '" + argv.front() + "' does not exist");
+            }
+            std::cout << "==> " << shown << "\n";
+            int spawn_errno = 0;
+            int rc = run_step_command(argv, stage, spawn_errno);
+            if (rc < 0)
+                fail("`system " + shown + "` could not start: " + std::strerror(spawn_errno));
+            if (rc != 0)
+                fail("`system " + shown + "` failed (exit " + std::to_string(rc) + ")");
             break;
         }
         }
