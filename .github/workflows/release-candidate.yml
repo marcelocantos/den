@@ -43,8 +43,8 @@ concurrency:
   cancel-in-progress: false
 
 # ---------------------------------------------------------------------------
-# Job 1: Validate inputs and compute the RC tag.  Outputs the tag and the
-# prior GA/RC tag for release-notes diffing to downstream jobs.
+# Job 1: Validate inputs and compute the RC tag.  Outputs the RC and GA tags
+# to downstream jobs.  (The release-notes base tag is chosen in publish.)
 # ---------------------------------------------------------------------------
 jobs:
   preflight:
@@ -54,7 +54,6 @@ jobs:
     outputs:
       rc_tag:   ${{ steps.compute.outputs.rc_tag }}
       ga_tag:   ${{ steps.compute.outputs.ga_tag }}
-      prior_tag: ${{ steps.compute.outputs.prior_tag }}
 
     steps:
       - name: Validate version format
@@ -111,19 +110,11 @@ jobs:
             exit 1
           fi
 
-          # Find prior GA/RC tag for release-notes diffing.
-          prior=$(gh api "repos/$GITHUB_REPOSITORY/git/refs/tags" \
-            --jq '.[].ref | ltrimstr("refs/tags/")' 2>/dev/null \
-            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$' \
-            | sort -V | tail -1 || echo "")
-
           echo "RC tag  : $RC_TAG"
           echo "GA tag  : $GA_TAG"
-          echo "Prior   : ${prior:-<none>}"
 
           echo "rc_tag=$RC_TAG"   >> "$GITHUB_OUTPUT"
           echo "ga_tag=$GA_TAG"   >> "$GITHUB_OUTPUT"
-          echo "prior_tag=$prior" >> "$GITHUB_OUTPUT"
 
   # -------------------------------------------------------------------------
   # Job 2: Build binaries on all three platforms.
@@ -277,7 +268,10 @@ jobs:
         run: |
           RC_TAG="${{ needs.preflight.outputs.rc_tag }}"
           VERSION="${{ github.event.inputs.version }}"
-          PRIOR="${{ needs.preflight.outputs.prior_tag }}"
+          # Diff against the highest final vX.Y.Z below VERSION; RCs and
+          # higher tags (e.g. a stray v1.0.0-rc.1) are never the base.
+          PRIOR=$(git tag -l 'v*' | scripts/prev-release-tag.sh "$VERSION")
+          echo "Release notes base: ${PRIOR:-<none>}"
 
           {
             echo "> **This is a release candidate.** Not for production until promoted via \`promote-rc.yml\`."

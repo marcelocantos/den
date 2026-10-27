@@ -127,6 +127,14 @@ add_test(
     COMMAND sh "${CMAKE_SOURCE_DIR}/tests/harness/test_installed_pkg_runs.sh"
 )
 
+# Shell-script regression tests for the release tooling under scripts/.
+# Each tests/scripts/test_<name>.sh is registered as script_test_<name>.
+file(GLOB SCRIPT_TESTS ${CMAKE_SOURCE_DIR}/tests/scripts/test_*.sh)
+foreach(script_test ${SCRIPT_TESTS})
+    get_filename_component(script_test_name "${script_test}" NAME_WE)
+    add_test(NAME script_${script_test_name} COMMAND sh "${script_test}")
+endforeach()
+
 # --- Install ---
 install(TARGETS den RUNTIME DESTINATION bin)
 
