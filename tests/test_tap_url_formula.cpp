@@ -381,11 +381,148 @@ end
         CHECK(slurp(s.keg / "bin/vellum-bin") == "bin");
     }
 
+    // ── system steps ──────────────────────────────────────────────────────
+
+    TEST_CASE("system: argument forms parse to an argv") {
+        auto argv_of = [](const std::string& line) {
+            auto steps = steps_of(line);
+            REQUIRE(steps.size() == 1);
+            CHECK(steps[0].kind == InstallStep::Kind::System);
+            return steps[0].argv;
+        };
+        using V = std::vector<std::string>;
+        CHECK(argv_of("system \"make\", \"-C\", \"src\"") == V{"make", "-C", "src"});
+        CHECK(argv_of("system(\"make\", \"-C\", \"src\")") == V{"make", "-C", "src"});
+        CHECK(argv_of("system 'make', '-C', 'src'") == V{"make", "-C", "src"});
+        CHECK(argv_of("system \"make\", *%w[-C src all]") == V{"make", "-C", "src", "all"});
+        CHECK(argv_of("system \"make -C src\"") == V{"make", "-C", "src"});
+        CHECK(argv_of("system \"make\", \"-Csrc\", \"--directory=lib/sub\"") ==
+              V{"make", "-Csrc", "--directory=lib/sub"});
+        CHECK(argv_of("system \"./build.sh\", \"v#{version}\", \"#{name}\"") ==
+              V{"./build.sh", "v#{version}", "#{name}"});
+        CHECK(argv_of("system \"sh\", \"-c\", \"echo \\\"hi\\\" > out\"") ==
+              V{"sh", "-c", "echo \"hi\" > out"});
+    }
+
+    TEST_CASE("system: forms that need Ruby or escape the stage are refused") {
+        for (const char* line : {
+                 "system \"make\", *std_configure_args",
+                 "system \"make\", \"PREFIX=#{prefix}\"",
+                 "system \"#{bin}/tool\", \"--version\"",
+                 "system \"make\" if OS.mac?",
+                 "system \"make\", \"-C\", \"../elsewhere\"",
+                 "system \"make\", \"-C\", \"/abs\"",
+                 "system \"make\", \"-C/abs\"",
+                 "system \"make\", \"--directory=../x\"",
+                 "system \"make\", \"-C\"",
+                 "system \"make && make install\"",
+                 "system \"echo $HOME\"",
+                 "system Formula[\"go\"].bin/\"go\", \"build\"",
+                 "system",
+                 "systemd \"x\"",
+             }) {
+            INFO(line);
+            CHECK(refusal_of(line) == std::string("unsupported install step: `") + line + "`");
+        }
+    }
+
+    TEST_CASE("system: the displayplacer formula parses to make -C src then bin.install") {
+        const char* src = R"RB(class Displayplacer < Formula
+  url "https://example.com/displayplacer/archive/v1.4.0.tar.gz"
+  sha256 "54b239359dbf9dc9b3a25e41a372eafb1de6c3131fe7fed37da53da77189b600"
+
+  def install
+    system "make", "-C", "src"
+    bin.install "src/displayplacer"
+  end
+end
+)RB";
+        auto parsed = parse_tap_formula(src, kMacArm);
+        REQUIRE(parsed.url_install.has_value());
+        std::string why;
+        auto steps = parse_install_steps(parsed.url_install->install_lines, "displayplacer", why);
+        INFO(why);
+        REQUIRE(steps.has_value());
+        REQUIRE(steps->size() == 2);
+        CHECK((*steps)[0].kind == InstallStep::Kind::System);
+        CHECK((*steps)[0].argv == std::vector<std::string>{"make", "-C", "src"});
+        CHECK((*steps)[1].kind == InstallStep::Kind::Install);
+    }
+
+    TEST_CASE("system: a multi-line call is joined into one step") {
+        const char* src = R"RB(class Tool < Formula
+  url "https://example.com/tool.tar.gz"
+  sha256 "abc"
+  def install
+    system "./build.sh",
+      "--fast",
+      "--out=bin"
+    bin.install "bin/tool"
+  end
+end
+)RB";
+        auto parsed = parse_tap_formula(src, kLinuxIntel);
+        REQUIRE(parsed.url_install.has_value());
+        std::string why;
+        auto steps = parse_install_steps(parsed.url_install->install_lines, "tool", why);
+        INFO(why);
+        REQUIRE(steps.has_value());
+        CHECK((*steps)[0].argv == std::vector<std::string>{"./build.sh", "--fast", "--out=bin"});
+    }
+
+    TEST_CASE("system: make -C builds in the stage, then the result installs") {
+        Stage s;
+        write(s.stage / "src/Makefile", "all:\n\tprintf built > tool-built\n");
+        s.apply("system \"make\", \"-C\", \"src\"\nbin.install \"src/tool-built\"");
+        CHECK(slurp(s.keg / "bin/tool-built") == "built");
+    }
+
+    TEST_CASE("system: runs in the stage with #{version} and #{name} expanded") {
+        Stage s;
+        s.apply("system \"/bin/sh\", \"-c\", \"pwd -P > where; echo #{name}-#{version} > nv\"");
+        CHECK(slurp(s.stage / "where") == fs::canonical(s.stage).string() + "\n");
+        CHECK(slurp(s.stage / "nv") == "tool-1.0\n");
+    }
+
+    TEST_CASE("system: a stage-relative command runs; one outside the stage is refused") {
+        Stage s;
+        write(s.stage / "build.sh", "#!/bin/sh\necho ok > built\n");
+        fs::permissions(s.stage / "build.sh", static_cast<fs::perms>(0755));
+        s.apply("system \"./build.sh\"");
+        CHECK(slurp(s.stage / "built") == "ok\n");
+        write(s.tmp.path / "outside.sh", "#!/bin/sh\ntouch escaped\n");
+        fs::permissions(s.tmp.path / "outside.sh", static_cast<fs::perms>(0755));
+        try {
+            s.apply("system \"../outside.sh\"");
+            FAIL("expected UserError");
+        } catch (const UserError& e) {
+            CHECK(std::string(e.what()).find("outside the download") != std::string::npos);
+        }
+        CHECK_FALSE(fs::exists(s.stage / "escaped"));
+    }
+
+    TEST_CASE("system: a non-zero exit or a missing command is a clear error") {
+        Stage s;
+        try {
+            s.apply("system \"/bin/sh\", \"-c\", \"exit 3\"");
+            FAIL("expected UserError");
+        } catch (const UserError& e) {
+            CHECK(std::string(e.what()) ==
+                  "cannot install tool: `system /bin/sh -c \"exit 3\"` failed (exit 3)");
+        }
+        try {
+            s.apply("system \"den-no-such-command-xyz\"");
+            FAIL("expected UserError");
+        } catch (const UserError& e) {
+            CHECK(std::string(e.what()).find("could not start") != std::string::npos);
+        }
+    }
+
     // ── clean refusals ────────────────────────────────────────────────────
 
     TEST_CASE("refuses anything outside the whitelist, naming the step") {
-        CHECK(refusal_of("system \"make\", \"install\"") ==
-              "unsupported install step: `system \"make\", \"install\"`");
+        CHECK(refusal_of("system \"make\", *std_configure_args") ==
+              "unsupported install step: `system \"make\", *std_configure_args`");
         CHECK(refusal_of("mkdir \"build\"").find("mkdir") != std::string::npos);
         CHECK(refusal_of("bin.install Dir[\"bin/*\"], \"extra\"").starts_with("unsupported"));
         CHECK(refusal_of("bin.install \"../escape\"").starts_with("unsupported"));
@@ -453,9 +590,12 @@ end
                        " HOMEBREW_CELLAR=" + (brew / "Cellar").string() + " ./den " + args);
         }
         // A tap with one formula whose download is a local tarball.
-        void make_tap(const std::string& install_body, const std::string& sha_override = "") {
+        void make_tap(const std::string& install_body, const std::string& sha_override = "",
+                      const std::vector<std::pair<std::string, std::string>>& extra = {}) {
             auto src = tmp.path / "src" / "tool-1.0";
             write(src / "tool", "#!/bin/sh\necho tool 1.0\n");
+            for (const auto& [rel, body] : extra)
+                write(src / rel, body);
             fs::permissions(src / "tool", static_cast<fs::perms>(0755));
             auto tarball = tmp.path / "tool-1.0.tar.gz";
             run("tar -czf " + tarball.string() + " -C " + (tmp.path / "src").string() +
@@ -495,11 +635,33 @@ end
 
     TEST_CASE("e2e: unsupported install step is refused cleanly") {
         Env env;
-        env.make_tap("system \"make\", \"install\"");
+        env.make_tap("system \"./configure\", \"--prefix=#{prefix}\"");
         auto out = env.den("install tool");
         INFO(out);
-        CHECK(out.find("cannot install tool 1.0: unsupported install step: `system \"make\", "
-                       "\"install\"`") != std::string::npos);
+        CHECK(out.find("cannot install tool 1.0: unsupported install step: `system "
+                       "\"./configure\", \"--prefix=#{prefix}\"`") != std::string::npos);
+        CHECK_FALSE(fs::exists(env.prefix / "Cellar/tool"));
+    }
+
+    TEST_CASE("e2e: system \"make\", \"-C\", \"src\" builds and installs (displayplacer shape)") {
+        Env env;
+        env.make_tap("system \"make\", \"-C\", \"src\"\n    bin.install \"src/tool-built\"", "",
+                     {{"src/Makefile", "all:\n\tcp ../tool tool-built\n"}});
+        auto out = env.den("install test/urltap/tool");
+        INFO(out);
+        CHECK(out.find("==> make -C src") != std::string::npos);
+        auto keg = env.prefix / "Cellar/tool/1.0";
+        CHECK(slurp(keg / "bin/tool-built") == "#!/bin/sh\necho tool 1.0\n");
+        CHECK(fs::is_symlink(env.prefix / "opt/tool"));
+    }
+
+    TEST_CASE("e2e: a failing system step leaves no keg") {
+        Env env;
+        env.make_tap("system \"make\", \"-C\", \"src\"\n    bin.install \"tool\"", "",
+                     {{"src/Makefile", "all:\n\tfalse\n"}});
+        auto out = env.den("install tool");
+        INFO(out);
+        CHECK(out.find("`system make -C src` failed") != std::string::npos);
         CHECK_FALSE(fs::exists(env.prefix / "Cellar/tool"));
     }
 
