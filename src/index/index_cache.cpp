@@ -29,8 +29,9 @@ constexpr std::array<char, 8> kMagic = {'D', 'E', 'N', 'I', 'D', 'X', '\0', '\0'
 // v2: records carry Package::cask_uninstall (🎯T12 uninstall stanzas).
 // v3: records carry Package::revision (Homebrew formula revision).
 // v4: archives carry Package::Archive::cellar (fixed-cellar bottles).
-// v5: cask artifacts may be CaskArtifactKind::Font.
-constexpr uint32_t kFormatVersion = 5;
+// v5: records carry Package::old_names (renamed casks/formulae).
+// v6: cask artifacts may be CaskArtifactKind::Font.
+constexpr uint32_t kFormatVersion = 6;
 constexpr uint32_t kEndianTag = 0x01020304;
 constexpr size_t kHeaderSize = 80;
 constexpr size_t kEntrySize = 24;
