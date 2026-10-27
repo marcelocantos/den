@@ -56,20 +56,20 @@ struct TempDir {
 // combined stdout+stderr.  The binary is expected at ./den relative to the
 // working directory (the build directory when run via ctest).
 //
-// Tests also override HOMEBREW_PREFIX and HOMEBREW_CELLAR so the binary
-// sees an empty, isolated package store rather than the host's shared
-// Homebrew Cellar. Without this, `den list` (and any other command that
-// enumerates the store) leaks host state into test assertions.
+// Tests pin DEN_PREFIX (den's store) and HOMEBREW_PREFIX/CELLAR (where den
+// believes Homebrew lives, used by migrate/diagnostics) into the per-test
+// DEN_HOME, so neither the store nor brew detection sees host state.
 // ---------------------------------------------------------------------------
 static std::string run_den(const std::string& args, const std::string& den_home) {
     // Build command: redirect stderr to stdout so we capture everything.
-    // Isolate the shared Cellar by pointing HOMEBREW_PREFIX/CELLAR into the
-    // per-test DEN_HOME. The directories don't need to pre-exist — den
+    // Point den's prefix and the Homebrew location into the per-test
+    // DEN_HOME. The directories don't need to pre-exist — den
     // tolerates a missing store for read-only queries.
     const std::string prefix = den_home + "/brew";
     const std::string cellar = prefix + "/Cellar";
-    std::string cmd = "DEN_HOME=" + den_home + " HOMEBREW_PREFIX=" + prefix +
-                      " HOMEBREW_CELLAR=" + cellar + " ./den " + args + " 2>&1";
+    std::string cmd = "DEN_HOME=" + den_home + " DEN_PREFIX=" + prefix +
+                      " HOMEBREW_PREFIX=" + prefix + " HOMEBREW_CELLAR=" + cellar + " ./den " +
+                      args + " 2>&1";
 
     FILE* pipe = ::popen(cmd.c_str(), "r");
     if (!pipe) {
@@ -96,12 +96,15 @@ struct DenResult {
     int exit_code;      // raw process exit code (from WEXITSTATUS)
 };
 
-// Run den with an explicit HOMEBREW_CELLAR override; returns output and exit code.
+// Run den with an explicit store. den's Cellar is always <DEN_PREFIX>/Cellar,
+// so `cellar` must end in "/Cellar"; its parent becomes DEN_PREFIX.
 static DenResult run_den_with_cellar(const std::string& args, const std::string& den_home,
                                      const std::string& cellar) {
-    const std::string prefix = den_home + "/brew";
-    std::string cmd = "DEN_HOME=" + den_home + " HOMEBREW_PREFIX=" + prefix +
-                      " HOMEBREW_CELLAR=" + cellar + " ./den " + args + " 2>&1";
+    REQUIRE(fs::path(cellar).filename() == "Cellar");
+    const std::string prefix = fs::path(cellar).parent_path().string();
+    std::string cmd = "DEN_HOME=" + den_home + " DEN_PREFIX=" + prefix +
+                      " HOMEBREW_PREFIX=" + prefix + " HOMEBREW_CELLAR=" + cellar + " ./den " +
+                      args + " 2>&1";
 
     FILE* pipe = ::popen(cmd.c_str(), "r");
     if (!pipe) {
@@ -406,7 +409,8 @@ TEST_SUITE("cli::integration") {
 
         // Block the Cellar path by placing a regular file there.
         // fs::create_directories(<cellar>/<pkg_name>) will fail with ENOTDIR.
-        const std::string blocked_cellar = home + "/blocked-cellar";
+        fs::create_directories(home + "/blocked");
+        const std::string blocked_cellar = home + "/blocked/Cellar";
         std::ofstream(blocked_cellar) << "not a directory\n";
 
         auto result = run_den_with_cellar("install den-test-pkg", home, blocked_cellar);
@@ -431,7 +435,7 @@ TEST_SUITE("cli::integration") {
     // -----------------------------------------------------------------------
     TEST_CASE("cleanup keeps an untracked brew keg and removes a den-owned stale version") {
         TempDir home;
-        const fs::path cellar = home.path / "cellar";
+        const fs::path cellar = home.path / "pfx" / "Cellar";
 
         const auto brew = cellar / "brew-only-pkg" / "1.0";
         fs::create_directories(brew);

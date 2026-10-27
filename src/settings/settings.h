@@ -33,8 +33,16 @@ struct TapSettings {
     std::map<std::string, std::string> taps;
 };
 
+// Where den installs (🎯 store isolation). Unset means the default,
+// <den_home>/prefix. `den migrate` pins this to Homebrew's prefix because
+// migrated kegs stay in Homebrew's Cellar. Overridden by DEN_PREFIX.
+struct StoreSettings {
+    std::optional<std::string> prefix;
+};
+
 struct Settings {
     DaemonSettings daemon;
+    StoreSettings store;
     SearchSettings search;
     TapSettings taps;
     /// Casks recorded by `den migrate` (token -> version). These stay in the

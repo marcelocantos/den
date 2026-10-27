@@ -102,10 +102,11 @@ struct DenRun {
 
 /// Run the built den against a scratch DEN_HOME / prefix / Cellar / HOME.
 DenRun run_den(const std::string& args, const fs::path& home, const fs::path& prefix) {
-    const std::string cmd = "HOME=" + home.string() + " DEN_HOME=" + (home / "den").string() +
-                            " HOMEBREW_PREFIX=" + prefix.string() +
-                            " HOMEBREW_CELLAR=" + (prefix / "Cellar").string() + " ./den " + args +
-                            " 2>&1";
+    // DEN_PREFIX picks den's store; HOMEBREW_PREFIX/CELLAR only locate brew.
+    const std::string cmd =
+        "HOME=" + home.string() + " DEN_HOME=" + (home / "den").string() +
+        " DEN_PREFIX=" + prefix.string() + " HOMEBREW_PREFIX=" + prefix.string() +
+        " HOMEBREW_CELLAR=" + (prefix / "Cellar").string() + " ./den " + args + " 2>&1";
     FILE* pipe = ::popen(cmd.c_str(), "r");
     if (!pipe) {
         throw std::runtime_error("popen failed");

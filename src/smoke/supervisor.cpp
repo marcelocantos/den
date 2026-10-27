@@ -81,7 +81,8 @@ SupervisorSmokeResult run_supervisor_smoke(const fs::path& den_binary,
     std::string prefix = den_home.string() + "/brew";
     std::string cellar = prefix + "/Cellar";
     std::string env_prefix = "PATH=" + path_env + " DEN_HOME=" + den_home.string() +
-                             " HOMEBREW_PREFIX=" + prefix + " HOMEBREW_CELLAR=" + cellar + " ";
+                             " DEN_PREFIX=" + prefix + " HOMEBREW_PREFIX=" + prefix +
+                             " HOMEBREW_CELLAR=" + cellar + " ";
 
     auto invoke = [&](const std::string& args) {
         return shell(env_prefix + den_binary.string() + " " + args);

@@ -166,6 +166,8 @@ Package transform_formula(const json& f) {
                 }
             }
             ar.relocation = parse_relocation(cellar_str);
+            if (ar.relocation == RelocationType::HardcodedPrefix)
+                ar.cellar = cellar_str;
 
             pkg.archives[it.key()] = std::move(ar);
         }
@@ -356,6 +358,8 @@ json package_to_json(const Package& pkg) {
         aj["url"] = ar.url;
         aj["sha256"] = ar.sha256;
         aj["relocation"] = relocation_to_string(ar.relocation);
+        if (!ar.cellar.empty())
+            aj["cellar"] = ar.cellar;
         archives_json[platform] = std::move(aj);
     }
     j["archives"] = std::move(archives_json);
@@ -433,6 +437,7 @@ Package package_from_json(const json& j) {
             ar.url = it.value().value("url", "");
             ar.sha256 = it.value().value("sha256", "");
             ar.relocation = relocation_from_string(it.value().value("relocation", "portable"));
+            ar.cellar = it.value().value("cellar", "");
             pkg.archives[it.key()] = std::move(ar);
         }
     }

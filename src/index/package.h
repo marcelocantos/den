@@ -86,6 +86,11 @@ struct Package {
         std::string url;
         std::string sha256;
         RelocationType relocation = RelocationType::Portable;
+        // Homebrew's `cellar` for this bottle when it is a fixed path (e.g.
+        // /opt/homebrew/Cellar): the bottle only works poured there. Empty
+        // for :any / :any_skip_relocation, and for index entries written
+        // before den recorded it (see required_bottle_cellar()).
+        std::string cellar;
     };
     std::map<std::string, Archive> archives;
 
