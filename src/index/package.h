@@ -57,7 +57,17 @@ struct CaskUninstall {
 // The artifact_type field controls install behaviour internally.
 struct Package {
     std::string name; // "ffmpeg" or "marcelocantos/jevon"
+
+    // Installed version, matching the keg directory name. For Homebrew
+    // formulae this is Homebrew's pkg_version: versions.stable, plus
+    // "_<revision>" when the formula's revision is non-zero (e.g. "1.25.0_1").
+    // Bottles unpack as <name>/<pkg_version>/ and dependents' load commands
+    // and wrapper scripts name that exact directory, so the keg must use it.
     std::string version;
+
+    // Homebrew formula revision (0 when absent). Already folded into
+    // `version`; kept separately so the upstream version can be recovered.
+    int revision = 0;
     std::string description;
     std::string homepage;
     std::string license;
@@ -98,6 +108,20 @@ struct Package {
     // Metadata.
     bool deprecated = false;
     bool disabled = false;
+
+    /// The upstream version without Homebrew's "_<revision>" suffix (what
+    /// Homebrew calls versions.stable). Equal to `version` when revision is 0.
+    std::string upstream_version() const {
+        if (revision <= 0) {
+            return version;
+        }
+        const std::string suffix = "_" + std::to_string(revision);
+        if (version.size() > suffix.size() &&
+            version.compare(version.size() - suffix.size(), suffix.size(), suffix) == 0) {
+            return version.substr(0, version.size() - suffix.size());
+        }
+        return version;
+    }
 
     // Is this a "bare" name (Homebrew-sourced) or "owner/repo" (GitHub)?
     bool is_github_package() const { return name.find('/') != std::string::npos; }

@@ -98,8 +98,11 @@ TEST_SUITE("shared_opt") {
         CHECK(find_bottle_keg_dir(t.path, "x", "1.9.7").empty());
     }
 
-#ifdef __APPLE__
-    TEST_CASE("link_package never creates or repoints the shared prefix opt link on macOS") {
+    // PR #64 forbade den from touching <prefix>/opt on macOS. Relocated text
+    // files (node shebangs, wrapper scripts) still go through opt/, so den
+    // now creates a missing link on every platform, but the #64 invariant
+    // stands: a link Homebrew owns is never repointed.
+    TEST_CASE("link_package never repoints Homebrew's shared prefix opt link") {
         OptTmp t;
         const auto prefix = t.path / "prefix";
         const auto cellar = prefix / "Cellar";
@@ -114,15 +117,32 @@ TEST_SUITE("shared_opt") {
         CHECK(fs::read_symlink(prefix / "opt" / "libgit2") == cellar / "libgit2" / "1.8.4");
         // The env's own opt link does point at den's keg.
         CHECK(fs::read_symlink(env / "opt" / "libgit2") == newkeg);
-
-        // Absent shared link stays absent.
-        const auto pv = cellar / "pv" / "1.12.0";
-        touch(pv / "bin" / "pv");
-        link_package(pv, env, "pv", {"bin"});
-        CHECK_FALSE(fs::exists(prefix / "opt" / "pv"));
-        CHECK_FALSE(fs::is_symlink(prefix / "opt" / "pv"));
+        // Unlinking den's keg from the env leaves Homebrew's link alone.
+        unlink_package(newkeg, env, "libgit2", {"lib"});
+        CHECK(fs::read_symlink(prefix / "opt" / "libgit2") == cellar / "libgit2" / "1.8.4");
     }
-#endif
+
+    TEST_CASE("link_package creates a missing shared prefix opt link") {
+        OptTmp t;
+        const auto prefix = t.path / "prefix";
+        const auto cellar = prefix / "Cellar";
+        const auto node = cellar / "node" / "25.1.0";
+        touch(node / "bin" / "node");
+        const auto env = t.path / "env";
+        link_package(node, env, "node", {"bin"});
+        REQUIRE(fs::is_symlink(prefix / "opt" / "node"));
+        CHECK(fs::read_symlink(prefix / "opt" / "node") == fs::path("../Cellar/node/25.1.0"));
+        CHECK(fs::exists(prefix / "opt" / "node" / "bin" / "node"));
+        // The link tracks the keg, not the env: unlinking keeps it.
+        unlink_package(node, env, "node", {"bin"});
+        CHECK(fs::is_symlink(prefix / "opt" / "node"));
+
+        // A store not laid out as <prefix>/Cellar gets no prefix link.
+        const auto other = t.path / "store" / "pv" / "1.12.0";
+        touch(other / "bin" / "pv");
+        link_package(other, env, "pv", {"bin"});
+        CHECK_FALSE(fs::is_symlink(t.path / "opt" / "pv"));
+    }
 }
 
 TEST_CASE("looks_like_macho_header distinguishes fat Mach-O from Java class files") {

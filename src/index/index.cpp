@@ -114,9 +114,19 @@ Package transform_formula(const json& f) {
         }
     }
 
-    // Version: prefer versions.stable.
+    // Version: prefer versions.stable, then append Homebrew's revision to
+    // form pkg_version ("1.25.0" revision 1 -> "1.25.0_1"). Bottles are
+    // built into, and unpack as, Cellar/<name>/<pkg_version>, and every
+    // dependent bottle references that directory by name. The bottle
+    // rebuild number does not affect the directory and is ignored here.
     if (f.contains("versions") && f["versions"].contains("stable")) {
         pkg.version = f["versions"]["stable"].get<std::string>();
+    }
+    if (f.contains("revision") && f["revision"].is_number_integer()) {
+        pkg.revision = std::max(0, f["revision"].get<int>());
+    }
+    if (pkg.revision > 0 && !pkg.version.empty()) {
+        pkg.version += "_" + std::to_string(pkg.revision);
     }
 
     // Dependencies.
@@ -326,6 +336,9 @@ json package_to_json(const Package& pkg) {
     json j;
     j["name"] = pkg.name;
     j["version"] = pkg.version;
+    if (pkg.revision > 0) {
+        j["revision"] = pkg.revision;
+    }
     j["description"] = pkg.description;
     j["homepage"] = pkg.homepage;
     j["license"] = pkg.license;
@@ -389,6 +402,9 @@ Package package_from_json(const json& j) {
     Package pkg;
     pkg.name = j.value("name", "");
     pkg.version = j.value("version", "");
+    if (j.contains("revision") && j["revision"].is_number_integer()) {
+        pkg.revision = std::max(0, j["revision"].get<int>());
+    }
     pkg.description = j.value("description", "");
     pkg.homepage = j.value("homepage", "");
     pkg.license = j.value("license", "");
