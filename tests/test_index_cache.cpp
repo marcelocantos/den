@@ -377,7 +377,7 @@ TEST_SUITE("index_cache") {
         // Pins the on-disk format version: bump this alongside kFormatVersion
         // whenever the record layout changes, so an older den's cache is
         // never decoded with the new layout.
-        constexpr uint32_t kExpectedFormatVersion = 6;
+        constexpr uint32_t kExpectedFormatVersion = 7;
         IndexCacheTmpDir tmp;
         auto json = tmp.path / "index.json";
         save_index(fixture(), json);

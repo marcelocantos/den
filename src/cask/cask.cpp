@@ -224,6 +224,33 @@ bool path_within(const fs::path& p, const fs::path& dir) {
     return !rel.empty() && *rel.begin() != "..";
 }
 
+/// Replace every occurrence of `from` in s with `to`.
+void replace_all(std::string& s, const std::string& from, const std::string& to) {
+    for (size_t pos = s.find(from); pos != std::string::npos; pos = s.find(from, pos + to.size())) {
+        s.replace(pos, from.size(), to);
+    }
+}
+
+/// Fill in a command_wrapper script template. Homebrew's
+/// $HOMEBREW_PREFIX/Caskroom/<token>/<version> is where den staged the cask;
+/// other $HOMEBREW_PREFIX paths map to den's prefix and $APPDIR to the
+/// cask appdir. Substituted paths land inside single quotes, so a path
+/// containing one is refused.
+std::string expand_wrapper_script(std::string script, const std::string& token,
+                                  const std::string& version, const fs::path& stage,
+                                  const fs::path& appdir, const fs::path& prefix) {
+    for (const auto* p : {&stage, &appdir, &prefix}) {
+        if (p->string().find('\'') != std::string::npos) {
+            throw UserError("cask '" + token + "': cannot write a command wrapper for path " +
+                            p->string());
+        }
+    }
+    replace_all(script, "$HOMEBREW_PREFIX/Caskroom/" + token + "/" + version, stage.string());
+    replace_all(script, "$APPDIR", appdir.string());
+    replace_all(script, "$HOMEBREW_PREFIX", prefix.string());
+    return script;
+}
+
 /// If `source` is an "$APPDIR/<App>.app/..." reference, return the part after
 /// "$APPDIR/"; otherwise nullopt.
 std::optional<std::string> appdir_relative(const std::string& source) {
@@ -947,6 +974,35 @@ InstallResult install_cask(const Config& config, const Package& pkg) {
                 }
                 planned_fonts.push_back({src, dest});
                 receipt.fonts.push_back(dest);
+                placed_anything = true;
+            } else if (art.kind == CaskArtifactKind::Wrapper) {
+                const std::string link_name = binary_link_name(art);
+                if (link_name.empty() || link_name.find('/') != std::string::npos ||
+                    link_name == "." || link_name == "..") {
+                    throw UserError("cask '" + token + "': unsafe command wrapper name");
+                }
+                // The script lives with the staged cask so env rebuilds can relink.
+                const fs::path script = stage / ".den-bin" / link_name;
+                fs::create_directories(script.parent_path());
+                {
+                    std::ofstream out(script, std::ios::binary | std::ios::trunc);
+                    out << expand_wrapper_script(art.source, token, pkg.version, stage, appdir,
+                                                 config.prefix);
+                    if (!out) {
+                        throw Error("failed to write command wrapper " + script.string());
+                    }
+                }
+                fs::permissions(script,
+                                fs::perms::owner_all | fs::perms::group_read |
+                                    fs::perms::group_exec | fs::perms::others_read |
+                                    fs::perms::others_exec,
+                                fs::perm_options::replace);
+                const fs::path link = bin_dir / link_name;
+                if (!fs::is_symlink(link, ec) && fs::exists(link, ec)) {
+                    throw UserError("refusing to overwrite binary '" + link.string() + "'");
+                }
+                planned_links.push_back({link, script});
+                receipt.binaries.push_back(CaskBinaryLink{link, script});
                 placed_anything = true;
             } else if (art.kind == CaskArtifactKind::Pkg) {
                 fs::path pkg_file = stage / art.source;

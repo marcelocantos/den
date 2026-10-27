@@ -207,7 +207,48 @@ Package transform_formula(const json& f) {
     return pkg;
 }
 
-/// Parse cask artifacts of kinds den can install (app, binary, pkg, font).
+/// Single-quote s for /bin/sh.
+std::string sh_quote(const std::string& s) {
+    std::string out = "'";
+    for (char c : s) {
+        if (c == '\'') {
+            out += "'\\''";
+        } else {
+            out += c;
+        }
+    }
+    out += "'";
+    return out;
+}
+
+/// Script template for a cask `command_wrapper` artifact's options object:
+/// either its literal `content`, or `exec <executable> <args...> "$@"`.
+/// Returns "" if the options are not understood.
+std::string command_wrapper_script(const json& opts) {
+    if (!opts.is_object()) {
+        return {};
+    }
+    if (opts.contains("content") && opts["content"].is_string()) {
+        return opts["content"].get<std::string>();
+    }
+    if (!opts.contains("executable") || !opts["executable"].is_string()) {
+        return {};
+    }
+    std::string script = "#!/bin/sh\nexec " + sh_quote(opts["executable"].get<std::string>());
+    if (opts.contains("args") && opts["args"].is_array()) {
+        for (const auto& arg : opts["args"]) {
+            if (!arg.is_string()) {
+                return {};
+            }
+            script += " " + sh_quote(arg.get<std::string>());
+        }
+    }
+    script += " \"$@\"\n";
+    return script;
+}
+
+/// Parse cask artifacts of kinds den can install (app, binary, command_wrapper,
+/// pkg, font).
 /// Unsupported kinds (installer scripts, preflight, zap-only, …) are ignored;
 /// install_cask will error if nothing supported remains.
 void parse_cask_artifacts(const json& arts, std::vector<CaskArtifact>& out) {
@@ -275,6 +316,22 @@ void parse_cask_artifacts(const json& arts, std::vector<CaskArtifact>& out) {
             }
             if (!art.source.empty()) {
                 out.push_back(std::move(art));
+            }
+        }
+        if (a.contains("command_wrapper")) {
+            // ["name", {"executable": ..., "args": [...]}] or
+            // ["name", {"content": "#!/bin/sh..."}], target "$HOMEBREW_PREFIX/bin/name".
+            const auto& cw = a["command_wrapper"];
+            if (cw.is_array() && cw.size() >= 2 && cw[0].is_string()) {
+                CaskArtifact art;
+                art.kind = CaskArtifactKind::Wrapper;
+                art.source = command_wrapper_script(cw[1]);
+                art.target = a.contains("target") && a["target"].is_string()
+                                 ? a["target"].get<std::string>()
+                                 : cw[0].get<std::string>();
+                if (!art.source.empty()) {
+                    out.push_back(std::move(art));
+                }
             }
         }
         if (a.contains("pkg")) {
@@ -423,6 +480,9 @@ json package_to_json(const Package& pkg) {
             case CaskArtifactKind::Font:
                 aj["kind"] = "font";
                 break;
+            case CaskArtifactKind::Wrapper:
+                aj["kind"] = "command_wrapper";
+                break;
             }
             aj["source"] = a.source;
             if (!a.target.empty()) {
@@ -504,6 +564,8 @@ Package package_from_json(const json& j) {
                 a.kind = CaskArtifactKind::Pkg;
             } else if (kind == "font") {
                 a.kind = CaskArtifactKind::Font;
+            } else if (kind == "command_wrapper") {
+                a.kind = CaskArtifactKind::Wrapper;
             } else {
                 a.kind = CaskArtifactKind::App;
             }

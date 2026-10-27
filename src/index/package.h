@@ -26,6 +26,11 @@ enum class CaskArtifactKind {
     Binary, // bare executable → env bin symlink
     Pkg,    // macOS installer package
     Font,   // font file → user font dir (~/Library/Fonts or DEN_FONTDIR)
+    // command_wrapper: den writes a small shell script and links it like a
+    // binary. `source` holds the script template (placeholders such as
+    // $APPDIR and $HOMEBREW_PREFIX are substituted at install time) and
+    // `target` the command name (often "$HOMEBREW_PREFIX/bin/foo").
+    Wrapper,
 };
 
 /// One installable artifact declared by a Homebrew cask.

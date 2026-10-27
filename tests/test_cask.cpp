@@ -903,5 +903,172 @@ TEST_SUITE("cask::binary_dir_collision") {
 
 #endif
 
+// command_wrapper artifacts (prince, blender, inkscape, kitty, …) were
+// ignored, so prince failed with "has no supported artifacts" and app casks
+// installed without their command-line entry point.
+TEST_SUITE("cask::command_wrapper") {
+
+    TEST_CASE("index turns command_wrapper into a script template that survives the caches") {
+        json casks = json::array({{
+            {"token", "prince"},
+            {"version", "17"},
+            {"url", "https://example.com/prince-17-macos.zip"},
+            {"sha256", std::string(64, 'a')},
+            {"artifacts",
+             json::array({
+                 {{"command_wrapper",
+                   json::array({"prince",
+                                {{"executable", "$HOMEBREW_PREFIX/Caskroom/prince/17/"
+                                                "prince-17-macos/lib/prince/bin/prince"},
+                                 {"args", json::array({"--prefix", "it's here"})}}})},
+                  {"target", "$HOMEBREW_PREFIX/bin/prince"}},
+                 {{"command_wrapper",
+                   json::array({"gogs", {{"content", "#!/bin/sh\ncd /x && ./gogs \"$@\"\n"}}})},
+                  {"target", "$HOMEBREW_PREFIX/bin/gogs"}},
+                 {{"zap", json::array()}},
+             })},
+        }});
+        auto idx = transform_homebrew("[]", casks.dump());
+        const auto* p = idx.find("prince");
+        REQUIRE(p != nullptr);
+        REQUIRE(p->cask_artifacts.size() == 2);
+        const auto& w = p->cask_artifacts[0];
+        CHECK(w.kind == CaskArtifactKind::Wrapper);
+        CHECK(w.target == "$HOMEBREW_PREFIX/bin/prince");
+        CHECK(w.source == "#!/bin/sh\nexec "
+                          "'$HOMEBREW_PREFIX/Caskroom/prince/17/prince-17-macos/lib/prince/bin/"
+                          "prince' '--prefix' 'it'\\''s here' \"$@\"\n");
+        CHECK(p->cask_artifacts[1].kind == CaskArtifactKind::Wrapper);
+        CHECK(p->cask_artifacts[1].source == "#!/bin/sh\ncd /x && ./gogs \"$@\"\n");
+
+        TmpDir tmp;
+        const auto path = tmp.path / "index.json";
+        save_index(idx, path);
+        for (auto loaded : {load_index(path), load_index_json(path)}) {
+            const auto* q = loaded.find("prince");
+            REQUIRE(q != nullptr);
+            REQUIRE(q->cask_artifacts.size() == 2);
+            CHECK(q->cask_artifacts[0].kind == CaskArtifactKind::Wrapper);
+            CHECK(q->cask_artifacts[0].source == w.source);
+            CHECK(q->cask_artifacts[0].target == w.target);
+        }
+        auto enc = index_cache::encode_package(*p);
+        auto dec = index_cache::decode_package(enc.data(), enc.size());
+        REQUIRE(dec.cask_artifacts.size() == 2);
+        CHECK(dec.cask_artifacts[0].kind == CaskArtifactKind::Wrapper);
+    }
+}
+
+#ifdef __APPLE__
+
+namespace {
+
+std::string run_capture(const std::string& cmd) {
+    std::string out;
+    FILE* f = popen(cmd.c_str(), "r");
+    if (!f) {
+        return out;
+    }
+    char buf[256];
+    while (fgets(buf, sizeof buf, f)) {
+        out += buf;
+    }
+    pclose(f);
+    return out;
+}
+
+} // namespace
+
+TEST_SUITE("cask::command_wrapper") {
+
+    TEST_CASE("wrappers into the Caskroom and the app are written, linked and removed") {
+        TmpDir tmp;
+        Config cfg = make_cfg(tmp.path);
+        cfg.prefix = tmp.path / "prefix";
+        setenv("DEN_APPDIR", cfg.appdir.c_str(), 1);
+        setenv("DEN_HOME", cfg.den_home.c_str(), 1);
+
+        const fs::path content = tmp.path / "zip" / "content";
+        write_file(content / "tool-1.0" / "lib" / "bin" / "tool", "#!/bin/sh\necho \"tool:$*\"\n");
+        fs::permissions(content / "tool-1.0" / "lib" / "bin" / "tool", fs::perms::owner_all);
+        auto zip = make_app_zip(tmp.path / "zip", "Demo.app");
+        auto pkg = make_zip_cask("tool", "1.0", zip, "Demo.app");
+        {
+            json opts = {
+                {"executable", "$HOMEBREW_PREFIX/Caskroom/tool/1.0/tool-1.0/lib/bin/tool"},
+                {"args", json::array({"--prefix", "$HOMEBREW_PREFIX/Caskroom/tool/1.0/tool-1.0/lib",
+                                      "two words"})}};
+            json casks = json::array(
+                {{{"token", "tool"},
+                  {"version", "1.0"},
+                  {"url", "https://example.com/t.zip"},
+                  {"artifacts", json::array({
+                                    {{"command_wrapper", {"tool", opts}},
+                                     {"target", "$HOMEBREW_PREFIX/bin/tool"}},
+                                    {{"command_wrapper",
+                                      {"demo",
+                                       {{"executable", "$APPDIR/Demo.app/Contents/MacOS/"
+                                                       "AppBin"}}}},
+                                     {"target", "$HOMEBREW_PREFIX/bin/demo"}},
+                                })}}});
+            auto idx = transform_homebrew("[]", casks.dump());
+            const auto* parsed = idx.find("tool");
+            REQUIRE(parsed != nullptr);
+            for (const auto& a : parsed->cask_artifacts) {
+                pkg.cask_artifacts.push_back(a);
+            }
+        }
+        install_cask(cfg, pkg);
+
+        auto receipt = read_cask_receipt(cask_version_path(cfg, "tool", "1.0"));
+        REQUIRE(receipt);
+        REQUIRE(receipt->binaries.size() == 2);
+        const fs::path tool_link = receipt->binaries[0].link;
+        const fs::path demo_link = receipt->binaries[1].link;
+        CHECK(tool_link.filename() == "tool");
+        CHECK(demo_link.filename() == "demo");
+        REQUIRE(fs::is_symlink(tool_link));
+
+        const fs::path stage = cask_version_path(cfg, "tool", "1.0") / "stage";
+        CHECK(run_capture("'" + tool_link.string() + "' a 'b c'") ==
+              "tool:--prefix " + (stage / "tool-1.0" / "lib").string() + " two words a b c\n");
+        CHECK(run_capture("'" + demo_link.string() + "'") == "ok\n");
+
+        uninstall_cask(cfg, "tool");
+        CHECK_FALSE(fs::exists(tool_link));
+        CHECK_FALSE(fs::is_symlink(demo_link));
+        unsetenv("DEN_APPDIR");
+        unsetenv("DEN_HOME");
+    }
+
+    TEST_CASE("a wrapper-only cask installs (was: no supported artifacts)") {
+        TmpDir tmp;
+        Config cfg = make_cfg(tmp.path);
+        cfg.prefix = tmp.path / "prefix";
+        setenv("DEN_APPDIR", cfg.appdir.c_str(), 1);
+        setenv("DEN_HOME", cfg.den_home.c_str(), 1);
+        auto zip = make_app_zip(tmp.path / "zip", "Unused.app", "inner.sh");
+        auto pkg = make_zip_cask("wonly", "2", zip, "Unused.app");
+        pkg.cask_artifacts.clear();
+        CaskArtifact w;
+        w.kind = CaskArtifactKind::Wrapper;
+        w.source = "#!/bin/sh\nexec '$HOMEBREW_PREFIX/Caskroom/wonly/2/inner.sh' \"$@\"\n";
+        w.target = "$HOMEBREW_PREFIX/bin/wonly";
+        pkg.cask_artifacts.push_back(w);
+        install_cask(cfg, pkg);
+        CHECK(fs::is_empty(cfg.appdir));
+        auto receipt = read_cask_receipt(cask_version_path(cfg, "wonly", "2"));
+        REQUIRE(receipt);
+        REQUIRE(receipt->binaries.size() == 1);
+        CHECK(run_capture("'" + receipt->binaries[0].link.string() + "'") == "bin\n");
+        uninstall_cask(cfg, "wonly");
+        CHECK_FALSE(fs::is_symlink(receipt->binaries[0].link));
+        unsetenv("DEN_APPDIR");
+        unsetenv("DEN_HOME");
+    }
+}
+
+#endif
+
 } // namespace test
 } // namespace den
