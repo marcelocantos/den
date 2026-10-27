@@ -53,6 +53,22 @@ configure_file(
 )
 list(APPEND DEN_SOURCES "${CMAKE_BINARY_DIR}/generated/embedded_replica.cpp")
 
+# Compile src/ruby/den_build.rb into the binary so the unpacked Ruby bundle
+# always runs the current script (the bundle's own copy can be stale).
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/src/ruby/den_build.rb")
+file(READ "${CMAKE_SOURCE_DIR}/src/ruby/den_build.rb" DEN_BUILD_RB)
+string(FIND "${DEN_BUILD_RB}" ")den_build\"" _den_build_delim)
+if(NOT _den_build_delim EQUAL -1)
+    message(FATAL_ERROR "src/ruby/den_build.rb contains the raw-string delimiter")
+endif()
+configure_file(
+    "${CMAKE_SOURCE_DIR}/cmake/embedded_den_build.cpp.in"
+    "${CMAKE_BINARY_DIR}/generated/embedded_den_build.cpp"
+    @ONLY
+)
+list(APPEND DEN_SOURCES "${CMAKE_BINARY_DIR}/generated/embedded_den_build.cpp")
+
 add_library(den_lib STATIC ${DEN_SOURCES})
 target_include_directories(den_lib PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(den_lib PUBLIC

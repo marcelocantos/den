@@ -8,12 +8,20 @@
 #   2. Standalone with bundled Portable Ruby (den's embedded bundle)
 #
 # The formula Ruby source is passed as a file (from `brew cat`).
+#
+# Usage: den_build.rb <formula_file> <store_path> <den_home> [<version> [<name>]]
+# den passes the version and keg name it expects, so the keg lands exactly
+# where den looks for it.
 
 # Bootstrap: if Homebrew's library isn't loaded yet, load it.
 unless defined?(Formula)
-  # Load env vars from the bundled snapshot (generated from a real brew invocation).
+  # Load env vars from the bundled snapshot (generated from a real brew
+  # invocation) — only when den did not supply the environment itself. The
+  # snapshot's paths name the machine that captured it (/opt/homebrew, its
+  # home directory), so den derives those from its own configuration and sets
+  # DEN_RUBY_ENV=1; backfilling here would reintroduce them.
   env_file = File.expand_path("homebrew_env.txt", File.dirname(__FILE__))
-  if File.exist?(env_file)
+  if ENV["DEN_RUBY_ENV"] != "1" && File.exist?(env_file)
     File.readlines(env_file).each do |line|
       line.strip!
       next if line.empty? || line.start_with?("#")
@@ -42,9 +50,11 @@ unless defined?(Formula)
   require "formulary"
 end
 
-formula_file = ARGV[0] or abort "usage: den_build.rb <formula_file> <store_path> <den_home>"
+formula_file = ARGV[0] or abort "usage: den_build.rb <formula_file> <store_path> <den_home> [<version> [<name>]]"
 store_path = Pathname.new(ARGV[1])
 den_home = Pathname.new(ARGV[2])
+want_version = ARGV[3].to_s.empty? ? nil : ARGV[3]
+want_name = ARGV[4].to_s.empty? ? nil : ARGV[4]
 
 # --- Scan den's store for installed packages ---
 
@@ -87,9 +97,9 @@ klass = ObjectSpace.each_object(Class).select { |c| c < Formula }.last
 abort "error: no Formula subclass found in #{formula_file}" unless klass
 
 # Get metadata from the API-loaded formula (has version info).
-api_formula = Formulary.factory(klass.name.downcase) rescue nil
-version = api_formula&.pkg_version&.to_s || "0.0.0"
-name = klass.name.downcase
+name = want_name || klass.name.gsub(/([a-z\d])([A-Z])/, '\\1-\\2').downcase
+api_formula = want_version ? nil : (Formulary.factory(name) rescue nil)
+version = want_version || api_formula&.pkg_version&.to_s || klass.stable&.version&.to_s || "0.0.0"
 
 dest = store_path / name / version
 $stderr.puts "==> #{name} #{version} -> #{dest}"
@@ -143,6 +153,8 @@ pc_paths = installed.values.flat_map { |p|
 ENV["PKG_CONFIG_PATH"] = (pc_paths + [ENV["PKG_CONFIG_PATH"]].compact).join(":")
 ENV["CPATH"] = (inc_paths + [ENV["CPATH"]].compact).join(":")
 ENV["LIBRARY_PATH"] = (lib_paths + [ENV["LIBRARY_PATH"]].compact).join(":")
+bin_paths = installed.values.map { |p| (p / "bin").to_s }.select { |p| File.directory?(p) }
+ENV["PATH"] = (bin_paths + [ENV["PATH"]].compact).join(":")
 
 # --- Download and extract source ---
 
