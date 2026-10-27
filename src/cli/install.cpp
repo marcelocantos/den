@@ -9,6 +9,7 @@
 #include "../env/environment.h"
 #include "../env/manifest.h"
 #include "../store/pins.h"
+#include "../store/store.h"
 
 #include <iostream>
 #include <vector>
@@ -50,6 +51,7 @@ void uninstall_packages(const Config& config, PackageProvider& provider,
     auto active = active_env_path(config.den_home);
     auto pname = std::string(provider.provider_name());
 
+    std::vector<std::string> removed;
     with_manifest(config.den_home, active, [&](Manifest& m) {
         auto& bucket = m.packages[pname];
         auto& auto_bucket = m.auto_deps[pname];
@@ -62,6 +64,7 @@ void uninstall_packages(const Config& config, PackageProvider& provider,
             provider.uninstall(config, name);
             bucket.erase(name);
             auto_bucket.erase(name);
+            removed.push_back(name);
             std::cout << "Removed '" << name << "' from environment '" << active << "'.\n";
             // brew parity: uninstalling a package drops its pin.
             if (unpin_package(config.den_home, name)) {
@@ -72,6 +75,24 @@ void uninstall_packages(const Config& config, PackageProvider& provider,
 
     auto links = materialise(config.den_home, config.store, active);
     std::cout << "Materialised: " << links << " symlinks.\n";
+
+    // The keg stays until `den cleanup`, but <prefix>/opt/<name> should not
+    // keep advertising a version no environment uses any more.
+    if (pname == "homebrew") {
+        for (const auto& name : removed) {
+            std::string to;
+            switch (release_prefix_opt_link(config.store, config.den_home, name, &to)) {
+            case OptReleaseAction::HandedOff:
+                std::cout << "Pointed opt/" << name << " at " << name << " " << to << ".\n";
+                break;
+            case OptReleaseAction::Removed:
+                std::cout << "Removed opt/" << name << " link.\n";
+                break;
+            default:
+                break;
+            }
+        }
+    }
 }
 
 void upgrade_packages(const Config& config, PackageProvider& provider, const PackageIndex& idx,

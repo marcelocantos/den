@@ -13,8 +13,9 @@ everything — not just Python, but every package on your system.
   placeholders, which den rewrites on pour: on macOS it rewrites Mach-O
   install names with `otool`/`install_name_tool` and pins `opt/<dep>`
   references to the exact dependency keg; on Linux it patches ELF paths
-  with patchelf. On macOS den never creates or repoints Homebrew's
-  shared `/opt/homebrew/opt` links.
+  with patchelf. Den writes `<prefix>/opt/<name>` links only for kegs
+  it poured itself, and never repoints one that points at a keg
+  Homebrew installed.
 - **Unified package model** — no formula/cask distinction. Just
   `den install firefox` or `den install ffmpeg`. Cask apps go to
   `DEN_APPDIR` (default `/Applications`), staged under
@@ -108,8 +109,12 @@ manifest, or environment-composition layers.
   is pinned to Homebrew's, so the store *is* the shared Homebrew Cellar
   (🎯T49) and brew/den kegs coexist. Den rewrites bottle
   placeholders on pour (Mach-O deps pinned to exact kegs on macOS,
-  patchelf on Linux) and does not touch Homebrew's shared `opt/` links
-  on macOS. Other providers keep their own storage areas.
+  patchelf on Linux). It writes `<prefix>/opt/<name>` links only for
+  its own kegs and never repoints Homebrew's. `den uninstall` drops a
+  package from the environment but keeps its keg until `den cleanup`;
+  if no environment still uses that version, its `opt/` link is handed
+  to another installed version den manages, or removed. Other providers
+  keep their own storage areas.
 - **Manifests** declare what each environment contains, grouped per
   provider. Child environments inherit from parents and override
   specific packages.
@@ -199,7 +204,7 @@ Run `den --help` for the full list. Key commands:
 | Command | Description |
 |---|---|
 | `den install <pkg> [--provider <p>]` | Install a package (with dependency resolution); `--provider` routes to a specific provider |
-| `den uninstall <pkg> [--provider <p>]` | Remove from the active environment |
+| `den uninstall <pkg> [--provider <p>]` | Remove from the active environment. The keg stays until `den cleanup`; if no environment still uses it, den hands its `opt/<name>` link to another installed version den manages, or removes it |
 | `den use <pkg> <version>` | Switch active version |
 | `den upgrade [pkg]` | Upgrade outdated packages |
 | `den list` | List packages in the active environment |
