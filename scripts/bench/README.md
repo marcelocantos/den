@@ -107,25 +107,56 @@ Result files are committed to `bench/results/` as snapshots. The CI workflow
 appends a new snapshot on every run, so a trend accrues across releases.
 
 `compare-results.sh` evaluates a snapshot against the 🎯T68 contract and, when
-a prior snapshot exists, flags regressions:
+a prior same-host snapshot exists, flags regressions:
 
 ```bash
-# Evaluate the newest snapshot against the previous one (auto-discovered):
+# Evaluate the newest snapshot against the previous same-host one:
 scripts/bench/compare-results.sh
 
-# Explicit snapshot + baseline + tighter regression threshold:
+# Explicit snapshot + baseline + custom tolerances:
 scripts/bench/compare-results.sh bench/results/bench-NEW.json \
   --baseline bench/results/bench-OLD.json \
-  --max-regression 15
+  --max-regression 50 --max-aggregate-regression 20
 ```
 
 It exits non-zero (failing CI) if den is no longer at least as fast as brew on
-every op, if no op is meaningfully faster, or if a den op regressed beyond the
-threshold against a **same-host** baseline *and* by more than 25 ms (hyperfine
-cannot calibrate shell startup below ~5 ms; a 0.2 ms `list` vs 6 ms remeasurement
-is noise). If no prior snapshot shares the current host class, the regression
-clause is skipped (den-vs-brew still gates) so a first-on-this-runner run can
-commit a CI baseline.
+every op, if no op is meaningfully faster (>= 1.5x), or if den lost ground to
+brew against a **same-host** baseline. If no prior snapshot shares the current
+host class, the regression clause is skipped (den-vs-brew still gates) so a
+first-on-this-runner run can commit a CI baseline.
+
+The regression clause compares **den/brew time ratios**, not raw den ms. GitHub
+runners vary from week to week by much more than any change we would want to
+catch: run 39244425261 measured every den op 38–51% slower than the 12 Oct
+snapshot while brew slowed by the same amount, and den's ratio to brew stayed
+flat. A ratio cancels that out. Per op, `ratio = den_ms / brew_ms`:
+
+- **Per op:** an op regresses when its ratio grew by more than 75%
+  (`--max-regression`) *and* den itself got more than 25 ms slower.
+- **Aggregate:** the geometric mean of the per-op ratio changes must not grow
+  by more than 30% (`--max-aggregate-regression`). A uniform den-only slowdown,
+  such as a new fixed startup cost, shows up here before any single op trips.
+- **Tiny ops:** an op whose den mean is under 20 ms in both runs (in practice
+  `list`) is shown but left out of both checks. hyperfine cannot calibrate
+  shell startup below ~5 ms, and `list` ratios have swung from -94% to +3060%
+  between weekly runs.
+
+The tolerances come from the 13 weekly gha-macos14 runs between 27 Jul and
+19 Oct 2026, leaving out the 7 Sep step where brew itself got about 2x faster:
+
+- Per-op ratio changes between consecutive weeks have an sd of 14–20% and
+  reach +35%. Failed runs are not committed, so the baseline can be several
+  weeks old; across every pair of runs since 7 Sep the worst change is +70%
+  (install, where brew's own run-to-run stddev is 14%).
+- The aggregate has an sd of 10.3% and a worst case of +18.7%, about half the
+  noise of raw den ms (sd 18.9%, worst +44%).
+- Replaying all 36 same-era run pairs, the old raw-ms gate fails 12 and the
+  ratio gate fails none.
+
+Known limit: because the gate is relative to brew, a big brew speedup (like
+7 Sep) shrinks den's lead and can trip it even when den did not change. That
+is still a real change in the T68 comparison; refresh the baseline once it
+has been reviewed.
 
 ## Current status (🎯T68 — satisfied)
 
