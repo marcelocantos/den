@@ -5,9 +5,14 @@
 
 #include <spdlog/spdlog.h>
 
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <vector>
 
 namespace den {
@@ -144,15 +149,41 @@ void save_json_atomic(const fs::path& den_home, const nlohmann::json& j) {
     // Ensure the parent directory exists.
     fs::create_directories(den_home);
 
-    {
-        std::ofstream f(tmp);
-        if (!f) {
-            throw std::runtime_error("cannot write " + tmp.string());
+    // config.json is a sensitive file (`den doctor` expects kConfigFileMode).
+    // Create the temp file with that mode and fchmod it before writing, so the
+    // mode does not depend on the umask or on a stale temp file, and the file
+    // is never visible at its final path with a wider mode.
+    const std::string body = j.dump(4) + '\n';
+    int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, kConfigFileMode);
+    if (fd < 0) {
+        throw std::runtime_error("cannot write " + tmp.string() + ": " + std::strerror(errno));
+    }
+    auto fail = [&](const std::string& what) {
+        int saved = errno;
+        ::close(fd);
+        std::error_code ec;
+        fs::remove(tmp, ec);
+        throw std::runtime_error(what + " " + tmp.string() + ": " + std::strerror(saved));
+    };
+    if (::fchmod(fd, kConfigFileMode) != 0) {
+        fail("cannot set mode on");
+    }
+    const char* data = body.data();
+    size_t left = body.size();
+    while (left > 0) {
+        ssize_t n = ::write(fd, data, left);
+        if (n < 0) {
+            if (errno == EINTR)
+                continue;
+            fail("write failed for");
         }
-        f << j.dump(4) << '\n';
-        if (!f) {
-            throw std::runtime_error("write failed for " + tmp.string());
-        }
+        data += n;
+        left -= static_cast<size_t>(n);
+    }
+    if (::close(fd) != 0) {
+        std::error_code ec;
+        fs::remove(tmp, ec);
+        throw std::runtime_error("write failed for " + tmp.string());
     }
     // Atomic rename.
     fs::rename(tmp, p);
