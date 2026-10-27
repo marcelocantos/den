@@ -4,6 +4,7 @@
 #include "cli.h"
 #include "daemon_status.h"
 #include "install.h"
+#include "pin.h"
 #include "shell.h"
 
 #include "../activity/activity.h"
@@ -25,6 +26,7 @@
 #include "../selfupdate/selfupdate.h"
 #include "../settings/settings.h"
 #include "../smoke/runner.h"
+#include "../store/pins.h"
 #include "../store/store.h"
 #include "../supervisor/supervisor.h"
 #include "../tap/tap.h"
@@ -398,6 +400,9 @@ void Cli::M::setup() {
             upgrade_packages(cfg, *provider, idx, names);
         }
     });
+
+    // --- pin / unpin ---
+    register_pin_commands(app);
 
     // --- update ---
     auto* update = app.add_subcommand("update", "Refresh the package index");
@@ -1303,6 +1308,7 @@ void Cli::M::setup() {
             std::cout << "No packages installed.\n";
             return;
         }
+        const auto pins = read_pins(cfg.den_home);
         size_t count = 0;
         size_t max_name = 0;
         // Pre-scan for column width.
@@ -1313,7 +1319,11 @@ void Cli::M::setup() {
             const auto* index_pkg = idx.find(pkg.name);
             if (index_pkg && index_pkg->version != pkg.version) {
                 std::cout << std::left << std::setw(static_cast<int>(max_name + 2)) << pkg.name
-                          << pkg.version << " -> " << index_pkg->version << "\n";
+                          << pkg.version << " -> " << index_pkg->version;
+                if (pins.count(pkg.name)) {
+                    std::cout << "  [pinned at " << pins.at(pkg.name) << "]";
+                }
+                std::cout << "\n";
                 ++count;
             }
         }
