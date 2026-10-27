@@ -124,6 +124,7 @@ manifest, or environment-composition layers.
 ~/.den/
 ├── bin/den                  # the binary
 ├── prefix/                  # den's prefix (unless pinned elsewhere)
+│   ├── bin/ sbin/ lib/ ...  # root env links, brew-style
 │   └── Cellar/              # package store
 │       ├── tree/2.3.2/      # each version in its own directory
 │       └── ffmpeg/7.1.1/
@@ -134,12 +135,12 @@ manifest, or environment-composition layers.
 │   └── ml/
 │       └── manifest.json    # /ml (inherits from /)
 ├── envs/                    # materialised environments
-│   ├── ROOT/
-│   │   ├── bin/             # symlinks into Cellar
-│   │   ├── lib/
-│   │   ├── include/
-│   │   └── opt/
+│   ├── ROOT/                # the root env is linked into prefix/ itself
+│   │   ├── bin -> ../../prefix/bin   # compat links to the prefix dirs
+│   │   └── .den/            # link ledgers
 │   └── ml/
+│       ├── bin/             # symlinks into Cellar
+│       ├── lib/
 │       └── ...
 ├── cache/                   # content-addressed archive cache
 ├── caskroom/                # den's cask staging (<token>/<version>/)
