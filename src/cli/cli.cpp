@@ -182,6 +182,20 @@ void print_deps_explain(const PackageIndex& idx, const std::vector<std::string>&
     }
 }
 
+/// Follow a Homebrew rename (cask old_tokens, formula oldnames): when `name`
+/// is not in the index but a current package lists it as an old name, return
+/// the current name and say so, as brew does. Otherwise return `name`.
+std::string follow_rename(const PackageIndex& idx, const std::string& name) {
+    if (idx.empty() || idx.find(name)) {
+        return name;
+    }
+    if (const auto* pkg = idx.find_renamed(name)) {
+        std::cerr << "==> " << name << " has been renamed to " << pkg->name << "\n";
+        return pkg->name;
+    }
+    return name;
+}
+
 } // namespace
 
 struct Cli::M {
@@ -301,7 +315,7 @@ void Cli::M::setup() {
         // "user/repo/name" is recorded qualified in the manifest; the keg
         // and links use the bare name.
         for (auto& name : install_names)
-            name = resolve_tap_install_name(idx, name);
+            name = follow_rename(idx, resolve_tap_install_name(idx, name));
 
         MaterialiseOptions link_opts;
         if (this->install_overwrite) {
@@ -630,6 +644,7 @@ void Cli::M::setup() {
         auto idx = load_index(cfg.cache / "index.json");
         // Tapped formulae (🎯T67) are queryable by `den info` once merged.
         merge_taps_into_index(cfg, idx);
+        info_name = follow_rename(idx, info_name);
 
         // Resolve which provider owns this package. A manifest hint or
         // `--provider` would refine this; for info we use the active env's

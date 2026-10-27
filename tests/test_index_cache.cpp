@@ -11,6 +11,7 @@
 #include "index/index_cache.h"
 
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -369,6 +370,48 @@ TEST_SUITE("index_cache") {
             check_matches_json(idx, json);
             // ...and the cache was rebuilt in place.
             CHECK(index_cache::open(json) != nullptr);
+        }
+    }
+
+    TEST_CASE("cache written by the previous format version is rebuilt") {
+        // Pins the on-disk format version: bump this alongside kFormatVersion
+        // whenever the record layout changes, so an older den's cache is
+        // never decoded with the new layout.
+        constexpr uint32_t kExpectedFormatVersion = 5;
+        IndexCacheTmpDir tmp;
+        auto json = tmp.path / "index.json";
+        save_index(fixture(), json);
+        auto cache = index_cache::cache_path_for(json);
+        auto bytes = slurp(cache);
+        REQUIRE(bytes.size() >= 12);
+
+        uint32_t version = 0;
+        std::memcpy(&version, bytes.data() + 8, sizeof version);
+        REQUIRE(version == kExpectedFormatVersion);
+
+        for (uint32_t older = 1; older < kExpectedFormatVersion; ++older) {
+            CAPTURE(older);
+            std::string stale = bytes;
+            std::memcpy(stale.data() + 8, &older, sizeof older);
+            spit(cache, stale);
+
+            std::string why;
+            CHECK(index_cache::open(json, &why) == nullptr);
+            CHECK(why == "format version mismatch");
+
+            auto idx = load_index(json);
+            CHECK(idx.backing == nullptr); // parsed from JSON, not the old cache
+            check_matches_json(idx, json);
+
+            // ...and the cache was rewritten at the current version.
+            auto rebuilt = slurp(cache);
+            REQUIRE(rebuilt.size() >= 12);
+            uint32_t now = 0;
+            std::memcpy(&now, rebuilt.data() + 8, sizeof now);
+            CHECK(now == kExpectedFormatVersion);
+            auto again = load_index(json);
+            CHECK(again.backing != nullptr);
+            check_matches_json(again, json);
         }
     }
 
