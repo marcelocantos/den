@@ -32,6 +32,34 @@ uint32_t link_package(const fs::path& pkg_path, const fs::path& env_dir, const s
 uint32_t unlink_package(const fs::path& pkg_path, const fs::path& env_dir, const std::string& name,
                         const std::vector<std::string>& subdirs);
 
+/// Outcome of ensure_prefix_opt_link.
+enum class OptLinkAction {
+    Created,   // link was missing or dangling and now points at the keg
+    Repointed, // link pointed at an older den-poured keg and now points at this one
+    Unchanged, // link already resolves to this keg
+    Kept,      // link resolves to another keg den does not own (Homebrew's) or a newer one
+    Failed,    // filesystem error (logged)
+};
+
+/// Maintain Homebrew's shared `<prefix>/opt/<name>` link for a keg den has
+/// poured or linked, where `<prefix>` is `store.parent_path()` (the same
+/// prefix relocate_bottle substitutes for @@HOMEBREW_PREFIX@@). Text files
+/// such as `#!<prefix>/opt/node/bin/node` shebangs and wrapper scripts are
+/// relocated to that path and need the link to exist.
+///
+/// The link is created (relative, `../Cellar/<name>/<version>`, as Homebrew
+/// writes it) when missing or dangling. An existing link is repointed only
+/// when it resolves to an *older* keg of the same formula that den itself
+/// poured (keg_owned_by_den). A link resolving to a keg den does not own
+/// (Homebrew's) is never touched.
+OptLinkAction ensure_prefix_opt_link(const fs::path& store, const std::string& name,
+                                     const fs::path& keg);
+
+/// If `<store.parent>/opt/<name>` points at `keg` (resolved lexically, so a
+/// link left dangling by deleting the keg still matches), remove it. Returns
+/// true when a link was removed.
+bool remove_prefix_opt_link_to(const fs::path& store, const std::string& name, const fs::path& keg);
+
 /// Record which version of a package is linked in an environment.
 /// Writes to env_dir/.den/linked/<name>.
 void record_linked_version(const fs::path& env_dir, const std::string& name,

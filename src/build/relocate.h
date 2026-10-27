@@ -35,8 +35,10 @@ fs::path select_dep_keg(const fs::path& cellar, const std::string& dep);
 /// shared opt link (`@@HOMEBREW_PREFIX@@/opt/<dep>/...`) to the exact keg
 /// den binds instead (`<cellar>/<dep>/<version>/...`). The package's own name
 /// maps to `self_dir`. Den never depends on Homebrew's opt links (which
-/// Homebrew may repoint to an ABI-incompatible version), and never writes
-/// them. Returns the input unchanged when no keg can be found.
+/// Homebrew may repoint to an ABI-incompatible version) for Mach-O load
+/// commands; it maintains them only for text references such as shebangs, and
+/// never repoints one Homebrew owns (ensure_prefix_opt_link). Returns the input unchanged when no
+/// keg can be found.
 std::string pin_opt_reference(const std::string& name, const fs::path& cellar,
                               const std::string& self_name, const fs::path& self_dir);
 

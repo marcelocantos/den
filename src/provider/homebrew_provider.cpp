@@ -13,6 +13,7 @@
 #include "../env/manifest.h"
 #include "../index/dep_resolve.h"
 #include "../platform/platform.h"
+#include "../store/link.h"
 #include "../store/store.h"
 #include "../trust/trust_model.h"
 
@@ -79,6 +80,10 @@ bool install_one(const Config& config, const Package& pkg) {
 
     if (is_installed(config.store, pkg.name, pkg.version)) {
         SPDLOG_DEBUG("{} {} already installed", pkg.name, pkg.version);
+        // A keg poured before den maintained opt links (or by a Homebrew
+        // that has since lost the link) still needs <prefix>/opt/<name>.
+        ensure_prefix_opt_link(config.store, pkg.name,
+                               package_path(config.store, pkg.name, pkg.version));
         return false;
     }
 
@@ -111,7 +116,7 @@ bool install_one(const Config& config, const Package& pkg) {
         MaybeHash replica_hash;
         try {
             auto replica = load_local_replica(config);
-            replica_hash = replica_lookup(replica, pkg.name, pkg.version, *best);
+            replica_hash = replica_lookup(replica, pkg.name, pkg.upstream_version(), *best);
         } catch (const std::exception& e) {
             // A corrupt replica snapshot leaves the replica source unreachable
             // (nullopt) rather than aborting — the cross-check then degrades to
@@ -154,7 +159,12 @@ bool install_one(const Config& config, const Package& pkg) {
     fs::create_directories(tmp_dir);
 
     std::cout << "==> Extracting " << pkg.name << " " << pkg.version << "\n";
-    auto result = extract_archive(archive_path, tmp_dir);
+    // tmp_dir stands in for the Cellar (the keg unpacks as
+    // <name>/<version>/ and is renamed into $HOMEBREW_CELLAR), so bottle
+    // symlinks into $HOMEBREW_PREFIX/etc, /opt, ... are legitimate.
+    ExtractOptions xopts;
+    xopts.symlink_scope = SymlinkScope::BottlePrefix;
+    auto result = extract_archive(archive_path, tmp_dir, xopts);
     SPDLOG_INFO("extracted {} files", result.files.size());
 
     auto inner = tmp_dir / pkg.name / pkg.version;
@@ -165,6 +175,18 @@ bool install_one(const Config& config, const Package& pkg) {
         inner = find_bottle_keg_dir(tmp_dir, pkg.name, pkg.version);
         if (inner.empty()) {
             inner = tmp_dir / result.root;
+        } else if (inner.filename() != pkg.version) {
+            // The bottle was built as <version>_<rev> but the index entry
+            // has no revision (an index.json written before den tracked
+            // revisions). Pouring it under the bare version would break
+            // every dependent, whose load commands name the revisioned
+            // directory, so refuse and ask for a fresh index.
+            const auto bottle_dir = inner.filename().string();
+            std::error_code tec;
+            fs::remove_all(tmp_dir, tec);
+            throw UserError("bottle for " + pkg.name + " unpacks as " + pkg.name + "/" +
+                            bottle_dir + " but the index says " + pkg.version +
+                            "; the package index is out of date. Run `den update` and retry.");
         }
     }
 
@@ -215,6 +237,10 @@ bool install_one(const Config& config, const Package& pkg) {
     // were already in the shared Cellar, so a Homebrew install is never
     // marked as ours and `den cleanup` will not delete it.
     mark_keg_owned(dest, pkg.name, pkg.version);
+
+    // Text files relocated to <prefix>/opt/<name> (e.g. node shebangs) need
+    // the shared opt link; create it, or move it along from an older den keg.
+    ensure_prefix_opt_link(config.store, pkg.name, dest);
 
     return true;
 }

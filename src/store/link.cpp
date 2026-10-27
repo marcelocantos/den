@@ -3,7 +3,9 @@
 
 #include "link.h"
 
+#include "../build/relocate.h"
 #include "../core/error.h"
+#include "store.h"
 
 #include <spdlog/spdlog.h>
 
@@ -136,39 +138,24 @@ uint32_t link_package(const fs::path& pkg_path, const fs::path& env_dir, const s
         ++count;
     }
 
-    // <prefix>/opt/<name> is Homebrew's shared, single-version link. On macOS
-    // den never touches it: den-poured Mach-O kegs are relocated to the exact
-    // dependency keg (pin_opt_reference), so they don't need it, and
-    // repointing it breaks Homebrew-installed packages built against another
-    // ABI (e.g. bat → libgit2.1.8 vs 1.9). On Linux, relocated ELF RPATHs
-    // still use <prefix>/opt/<dep>/lib, so den creates the link only when it
-    // is missing or dangling, never repointing one that resolves to a keg.
-#ifndef __APPLE__
-    auto cellar = pkg_path.parent_path().parent_path(); // .../Cellar
-    auto prefix = cellar.parent_path();
-    if (!prefix.empty() && cellar.filename() == "Cellar") {
-        auto prefix_opt_dir = prefix / "opt";
-        fs::create_directories(prefix_opt_dir, ec);
-        auto prefix_opt_link = prefix_opt_dir / name;
-        const bool present = fs::is_symlink(prefix_opt_link, ec) || fs::exists(prefix_opt_link, ec);
-        const bool dangling =
-            fs::is_symlink(prefix_opt_link, ec) && !fs::exists(prefix_opt_link, ec);
-        if (dangling) {
-            fs::remove(prefix_opt_link, ec);
-        }
-        if (!present || dangling) {
-            fs::create_symlink(pkg_path, prefix_opt_link, ec);
-            if (ec) {
-                SPDLOG_WARN("failed to create prefix opt symlink {}: {}", prefix_opt_link.string(),
-                            ec.message());
-            } else {
+    // <prefix>/opt/<name> is Homebrew's shared, single-version link.
+    // Relocated text files (node shebangs, wrapper scripts) reference it, so
+    // den creates it when missing or dangling, but never repoints a link that
+    // resolves to a keg Homebrew owns (see ensure_prefix_opt_link). Mach-O
+    // load commands don't rely on it: they are pinned to the exact dependency
+    // keg (pin_opt_reference). Only kegs that sit in a Homebrew-style
+    // <prefix>/Cellar/<name>/<version> layout get a prefix link here; other
+    // providers' package roots are left alone.
+    {
+        auto cellar = pkg_path.parent_path().parent_path(); // .../Cellar
+        if (!cellar.parent_path().empty() && cellar.filename() == "Cellar" &&
+            pkg_path.parent_path().filename() == name) {
+            auto action = ensure_prefix_opt_link(cellar, name, pkg_path);
+            if (action == OptLinkAction::Created || action == OptLinkAction::Repointed) {
                 ++count;
             }
-        } else {
-            SPDLOG_DEBUG("leaving existing prefix opt link {}", prefix_opt_link.string());
         }
     }
-#endif
 
     SPDLOG_INFO("linked {} ({} symlinks)", name, count);
     return count;
@@ -198,26 +185,10 @@ uint32_t unlink_package(const fs::path& pkg_path, const fs::path& env_dir, const
         }
     }
 
-    // Remove <prefix>/opt/<name> only if it still points at this keg (don't
-    // clobber a newer link owned by another version or by Homebrew).
-    auto cellar = pkg_path.parent_path().parent_path();
-    auto prefix = cellar.parent_path();
-    if (!prefix.empty() && cellar.filename() == "Cellar") {
-        auto prefix_opt_link = prefix / "opt" / name;
-        if (fs::is_symlink(prefix_opt_link, ec)) {
-            auto target = fs::read_symlink(prefix_opt_link, ec);
-            if (!ec) {
-                auto target_canon = fs::weakly_canonical(target, ec);
-                auto pkg_canon = fs::weakly_canonical(pkg_path, ec);
-                if (!ec && target_canon == pkg_canon) {
-                    fs::remove(prefix_opt_link, ec);
-                    if (!ec) {
-                        ++count;
-                    }
-                }
-            }
-        }
-    }
+    // <prefix>/opt/<name> tracks the keg, not any one environment: other
+    // environments and other kegs' shebangs still use it after this env
+    // drops the package, and the keg itself stays in the store. It is
+    // removed by cleanup_kegs when the keg it points at is deleted.
 
     // Remove linked version record.
     auto linked_file = env_dir / ".den" / "linked" / name;
@@ -227,6 +198,140 @@ uint32_t unlink_package(const fs::path& pkg_path, const fs::path& env_dir, const
 
     SPDLOG_INFO("unlinked {} ({} symlinks removed)", name, count);
     return count;
+}
+
+namespace {
+
+/// Lexically resolve a symlink's target (relative targets are taken from the
+/// link's directory). Empty on error.
+fs::path lexical_link_target(const fs::path& link) {
+    std::error_code ec;
+    auto target = fs::read_symlink(link, ec);
+    if (ec) {
+        return {};
+    }
+    if (target.is_relative()) {
+        target = link.parent_path() / target;
+    }
+    return target.lexically_normal();
+}
+
+bool same_path(const fs::path& a, const fs::path& b) {
+    std::error_code ec1, ec2;
+    if (fs::exists(a, ec1) && fs::exists(b, ec2)) {
+        std::error_code ec;
+        if (fs::equivalent(a, b, ec) && !ec) {
+            return true;
+        }
+    }
+    return a.lexically_normal() == b.lexically_normal();
+}
+
+} // namespace
+
+OptLinkAction ensure_prefix_opt_link(const fs::path& store, const std::string& name,
+                                     const fs::path& keg) {
+    if (!is_valid_package_name(name) || name.find('/') != std::string::npos) {
+        return OptLinkAction::Kept;
+    }
+    const auto prefix = store.parent_path();
+    if (prefix.empty() || store.empty()) {
+        return OptLinkAction::Kept;
+    }
+    std::error_code ec;
+    if (!fs::is_directory(keg, ec) || ec) {
+        return OptLinkAction::Kept;
+    }
+
+    const auto opt_dir = prefix / "opt";
+    const auto link = opt_dir / name;
+
+    // Homebrew writes opt links relative (../Cellar/<name>/<version>) so the
+    // prefix can move; do the same when the keg sits under the prefix.
+    auto make_target = [&]() {
+        auto rel = keg.lexically_normal().lexically_relative(opt_dir.lexically_normal());
+        if (!rel.empty() && rel.native().rfind("..", 0) == 0 &&
+            keg.lexically_normal().native().rfind(prefix.lexically_normal().native(), 0) == 0) {
+            return rel;
+        }
+        return keg;
+    };
+
+    auto create = [&]() {
+        std::error_code cec;
+        fs::create_directories(opt_dir, cec);
+        fs::create_symlink(make_target(), link, cec);
+        if (cec) {
+            SPDLOG_WARN("failed to create prefix opt symlink {}: {}", link.string(), cec.message());
+            return false;
+        }
+        return true;
+    };
+
+    const bool is_link = fs::is_symlink(link, ec);
+    if (!is_link) {
+        if (fs::exists(link, ec)) {
+            // A real file or directory: not ours to replace.
+            SPDLOG_DEBUG("leaving non-symlink {}", link.string());
+            return OptLinkAction::Kept;
+        }
+        return create() ? OptLinkAction::Created : OptLinkAction::Failed;
+    }
+
+    if (!fs::exists(link, ec)) {
+        // Dangling: whatever it pointed at is gone.
+        fs::remove(link, ec);
+        return create() ? OptLinkAction::Created : OptLinkAction::Failed;
+    }
+
+    const auto current = lexical_link_target(link);
+    if (same_path(current, keg)) {
+        return OptLinkAction::Unchanged;
+    }
+
+    // Repoint only den's own, older keg of this formula (an upgrade). A link
+    // to a keg den didn't pour belongs to Homebrew: repointing it would swap
+    // the dependency under Homebrew-installed packages (PR #64).
+    std::error_code cec;
+    const auto current_keg = fs::canonical(link, cec);
+    if (cec || current_keg.parent_path().filename() != name || !keg_owned_by_den(current_keg)) {
+        SPDLOG_DEBUG("leaving prefix opt link {} (not den-owned)", link.string());
+        return OptLinkAction::Kept;
+    }
+    if (compare_keg_versions(keg.filename().string(), current_keg.filename().string()) <= 0) {
+        return OptLinkAction::Kept;
+    }
+    // Swap atomically so the link never disappears under a running process.
+    const auto tmp = opt_dir / ("." + name + ".den-tmp");
+    fs::remove(tmp, ec);
+    fs::create_symlink(make_target(), tmp, cec);
+    if (!cec) {
+        fs::rename(tmp, link, cec);
+    }
+    if (cec) {
+        fs::remove(tmp, ec);
+        SPDLOG_WARN("failed to repoint prefix opt symlink {}: {}", link.string(), cec.message());
+        return OptLinkAction::Failed;
+    }
+    return OptLinkAction::Repointed;
+}
+
+bool remove_prefix_opt_link_to(const fs::path& store, const std::string& name,
+                               const fs::path& keg) {
+    const auto prefix = store.parent_path();
+    if (prefix.empty() || name.find('/') != std::string::npos) {
+        return false;
+    }
+    const auto link = prefix / "opt" / name;
+    std::error_code ec;
+    if (!fs::is_symlink(link, ec)) {
+        return false;
+    }
+    if (lexical_link_target(link) != keg.lexically_normal()) {
+        return false;
+    }
+    fs::remove(link, ec);
+    return !ec;
 }
 
 void record_linked_version(const fs::path& env_dir, const std::string& name,
