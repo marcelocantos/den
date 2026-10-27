@@ -91,18 +91,25 @@ fs::path fetch_archive(const std::string& url, const std::string& sha256,
     }
 
     SPDLOG_INFO("downloading {}", url);
-    std::string data = fetch_url(url);
+    // Stream to a temporary file next to the cache entry, so large casks are
+    // never held in memory, and only publish it once verified.
+    fs::path tmp = cached;
+    tmp += ".download";
+    download_to_file(url, tmp);
 
-    // Verify hash before writing to cache (unless cask declared no_check).
-    std::string actual = hash_string(data);
-    if (!skip_verify && actual != sha256) {
-        throw DownloadError("SHA256 mismatch for " + url + ": expected " + sha256 + ", got " +
-                            actual);
+    // Verify hash before publishing to the cache (unless cask declared no_check).
+    if (!skip_verify) {
+        std::string actual = hash_file(tmp);
+        if (actual != sha256) {
+            std::error_code rec;
+            fs::remove(tmp, rec);
+            throw DownloadError("SHA256 mismatch for " + url + ": expected " + sha256 + ", got " +
+                                actual);
+        }
     }
+    fs::rename(tmp, cached);
 
-    write_file_atomic(cached, data);
-
-    SPDLOG_INFO("cached {} ({} bytes)", cache_key, data.size());
+    SPDLOG_INFO("cached {} ({} bytes)", cache_key, fs::file_size(cached));
     return cached;
 }
 
