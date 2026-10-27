@@ -4,6 +4,7 @@
 #include "selfupdate.h"
 
 #include "../core/error.h"
+#include "../core/self_exe.h"
 #include "../download/http.h"
 #include "../download/sha256.h"
 #include "../index/sat_solver.h"
@@ -18,6 +19,7 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <vector>
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
@@ -61,6 +63,68 @@ fs::path self_exe() {
 }
 
 } // namespace
+
+namespace {
+
+/// Index of the first `a/b` component pair in `comps` (with at least `after`
+/// further components), or npos.
+size_t find_pair(const std::vector<std::string>& comps, const char* a, const char* b,
+                 size_t after) {
+    for (size_t i = 0; i + 1 + after < comps.size(); ++i) {
+        if (comps[i] == a && comps[i + 1] == b)
+            return i;
+    }
+    return std::string::npos;
+}
+
+std::optional<fs::path> keg_in(const fs::path& p) {
+    std::vector<std::string> comps;
+    for (const auto& c : p.lexically_normal())
+        comps.push_back(c.string());
+    // <...>/Cellar/den/<version>/<...>
+    if (size_t i = find_pair(comps, "Cellar", "den", 2); i != std::string::npos) {
+        fs::path keg;
+        for (size_t j = 0; j <= i + 2; ++j)
+            keg /= comps[j];
+        return keg;
+    }
+    // <P>/opt/den/<...>, only when <P> is a Homebrew prefix with a den keg.
+    if (size_t i = find_pair(comps, "opt", "den", 1); i != std::string::npos) {
+        fs::path prefix;
+        for (size_t j = 0; j < i; ++j)
+            prefix /= comps[j];
+        std::error_code ec;
+        if (fs::is_directory(prefix / "Cellar" / "den", ec))
+            return prefix / "opt" / "den";
+    }
+    return std::nullopt;
+}
+
+} // namespace
+
+std::optional<fs::path> brew_keg_for_exe(const fs::path& exe) {
+    if (auto k = keg_in(exe))
+        return k;
+    std::error_code ec;
+    auto real = fs::canonical(exe, ec);
+    if (!ec) {
+        if (auto k = keg_in(real))
+            return k;
+    }
+    return std::nullopt;
+}
+
+void refuse_self_update_if_brew_managed(const fs::path& exe) {
+    if (auto keg = brew_keg_for_exe(exe)) {
+        throw UserError("den is installed by Homebrew (" + keg->string() +
+                        "); self-update would bypass brew. Run `" + kBrewUpgradeCommand +
+                        "` instead.");
+    }
+}
+
+std::optional<fs::path> running_exe_path() {
+    return current_executable_path();
+}
 
 void refresh_packaged_replica(const fs::path& extracted_root, const fs::path& exe) {
     // 🎯T42: keep an installed <bin>/../share/den/known_hashes.json in step
@@ -192,6 +256,8 @@ bool is_sha256_hex(const std::string& s) {
 void apply_update(const UpdateInfo& info, const Config& cfg) {
     (void)cfg;
     auto exe = self_exe();
+    // Defence in depth: the CLI refuses first, before any network access.
+    refuse_self_update_if_brew_managed(exe);
 
     // Fail closed: never replace the running binary without a verified SHA256.
     if (info.checksum_url.empty()) {
