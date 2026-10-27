@@ -185,6 +185,12 @@ fs::path resolve_binary_source(const fs::path& stage, const fs::path& appdir,
     return candidate;
 }
 
+/// True when `p` is `dir` or lies beneath it (lexically, after normalising).
+bool path_within(const fs::path& p, const fs::path& dir) {
+    const fs::path rel = p.lexically_normal().lexically_relative(dir.lexically_normal());
+    return !rel.empty() && *rel.begin() != "..";
+}
+
 /// Basename of the link den should create for a binary artifact.
 std::string binary_link_name(const CaskArtifact& art) {
     if (!art.target.empty()) {
@@ -761,14 +767,23 @@ InstallResult install_cask(const Config& config, const Package& pkg) {
                 if (link_name.empty() || link_name.find('/') != std::string::npos) {
                     throw UserError("cask '" + token + "': unsafe binary name");
                 }
-                // Keep a durable copy under the stage so env rebuilds can relink.
-                fs::path staged_bin = stage / link_name;
-                if (src.string().find(stage.string()) == 0) {
-                    if (!fs::exists(staged_bin)) {
-                        staged_bin = src;
+                // Link straight to a source inside the stage: it is already
+                // durable. Only a source outside the stage gets a durable
+                // copy, and that copy must not land on an unrelated stage
+                // entry of the same name (flutter's "flutter/bin/flutter"
+                // binary vs its "flutter/" top-level directory).
+                fs::path staged_bin;
+                if (path_within(src, stage)) {
+                    staged_bin = src;
+                } else {
+                    staged_bin = stage / link_name;
+                    if (fs::exists(staged_bin, ec) && !fs::is_regular_file(staged_bin, ec)) {
+                        staged_bin = stage / ".den-bin" / link_name;
+                        fs::create_directories(staged_bin.parent_path());
                     }
-                } else if (!fs::exists(staged_bin)) {
-                    fs::copy_file(src, staged_bin, fs::copy_options::overwrite_existing);
+                    if (!fs::exists(staged_bin, ec)) {
+                        fs::copy_file(src, staged_bin, fs::copy_options::overwrite_existing);
+                    }
                 }
                 fs::permissions(staged_bin,
                                 fs::perms::owner_exec | fs::perms::group_exec |
