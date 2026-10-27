@@ -7,6 +7,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -49,8 +50,26 @@ std::optional<std::string> capture_command(const std::string& cmd);
 /// Detect the current CPU architecture at compile time.
 Arch detect_arch();
 
-/// Detect the macOS version from the kernel utsname, or nullopt on Linux.
+/// Detect the macOS version, or nullopt on Linux. Prefers
+/// sysctl kern.osproductversion and cross-checks it against the Darwin
+/// kernel release (see resolve_macos_version).
 std::optional<MacOsVersion> detect_macos_version();
+
+/// Parse a product version string such as "26.6.2" or "15.1" into
+/// major.minor. Returns nullopt for unparseable input.
+std::optional<MacOsVersion> parse_macos_product_version(std::string_view s);
+
+/// Map a Darwin kernel release ("25.6.0") to the macOS version it ships
+/// with: Darwin 20–24 → macOS 11–15, Darwin 25+ → macOS 26+.
+/// Returns nullopt for pre-Big Sur or unparseable input.
+std::optional<MacOsVersion> macos_version_from_darwin(std::string_view release);
+
+/// Combine the reported product version with the Darwin release. The
+/// product version wins unless it is a SYSTEM_VERSION_COMPAT shim (10.16,
+/// 16.x–25.x) or disagrees with the kernel, in which case the Darwin
+/// mapping is used.
+std::optional<MacOsVersion> resolve_macos_version(const std::optional<std::string>& product_version,
+                                                  const std::optional<std::string>& darwin_release);
 
 /// Map a macOS major version number to its lowercase codename.
 /// Returns nullopt for unknown versions.

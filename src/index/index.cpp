@@ -586,7 +586,7 @@ const std::vector<std::pair<Arch, std::optional<MacOsVersion>>>& macos_platforms
         std::vector<std::pair<Arch, std::optional<MacOsVersion>>> out;
         for (Arch arch : {Arch::Arm64, Arch::X86_64}) {
             std::vector<std::vector<std::string>> seen;
-            // Darwin 20+ maps to macOS 11+ (see detect_macos_version); scan
+            // Darwin 20+ maps to macOS 11+ (see macos_version_from_darwin); scan
             // well past the newest known codename so future majors are covered.
             for (int major = 11; major <= 60; ++major) {
                 MacOsVersion v{major, 0};

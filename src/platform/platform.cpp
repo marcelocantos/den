@@ -9,10 +9,14 @@
 #include <array>
 #include <cctype>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <sstream>
 #include <string_view>
 
+#ifdef __APPLE__
+#include <sys/sysctl.h>
+#endif
 #include <sys/utsname.h>
 #include <sys/wait.h>
 
@@ -187,20 +191,79 @@ Arch detect_arch() {
 #endif
 }
 
-std::optional<MacOsVersion> detect_macos_version() {
-#ifdef __APPLE__
-    struct utsname uts{};
-    if (uname(&uts) == 0) {
-        // Darwin kernel version is offset by 9 relative to macOS version.
-        // Darwin 24.x = macOS 15.x (Sequoia), Darwin 25.x = macOS 16.x, etc.
-        int darwin_major = 0;
-        if (sscanf(uts.release, "%d", &darwin_major) == 1 && darwin_major >= 20) {
-            SPDLOG_DEBUG("Detected Darwin kernel version {}", darwin_major);
-            return MacOsVersion{darwin_major - 9, 0};
+std::optional<MacOsVersion> parse_macos_product_version(std::string_view s) {
+    int major = 0;
+    int minor = 0;
+    const std::string str(s);
+    const int n = sscanf(str.c_str(), "%d.%d", &major, &minor);
+    if (n < 1 || major <= 0) {
+        return std::nullopt;
+    }
+    return MacOsVersion{major, n >= 2 ? minor : 0};
+}
+
+std::optional<MacOsVersion> macos_version_from_darwin(std::string_view release) {
+    int darwin_major = 0;
+    int darwin_minor = 0;
+    const std::string str(release);
+    const int n = sscanf(str.c_str(), "%d.%d", &darwin_major, &darwin_minor);
+    if (n < 1 || darwin_major < 20) {
+        return std::nullopt;
+    }
+    if (n < 2) {
+        darwin_minor = 0;
+    }
+    // Darwin 20–24 are macOS 11–15 (offset 9). Apple then jumped the
+    // marketing version to the year: Darwin 25 is macOS 26 (Tahoe), so from
+    // Darwin 25 on the offset is -1. The Darwin minor tracks the macOS minor
+    // closely enough to serve as a fallback.
+    const int major = darwin_major <= 24 ? darwin_major - 9 : darwin_major + 1;
+    return MacOsVersion{major, darwin_minor};
+}
+
+std::optional<MacOsVersion>
+resolve_macos_version(const std::optional<std::string>& product_version,
+                      const std::optional<std::string>& darwin_release) {
+    const auto from_darwin =
+        darwin_release ? macos_version_from_darwin(*darwin_release) : std::nullopt;
+    const auto product =
+        product_version ? parse_macos_product_version(*product_version) : std::nullopt;
+    if (product) {
+        // SYSTEM_VERSION_COMPAT (and binaries linked against older SDKs)
+        // see a shimmed version: 10.16 on Big Sur+ and 16.0 on Tahoe+. No
+        // real macOS 16–25 or 10.16 ever shipped, so treat those as shims.
+        const bool shim = (product->major == 10 && product->minor == 16) ||
+                          (product->major >= 16 && product->major <= 25);
+        const bool consistent = !from_darwin || from_darwin->major == product->major;
+        if (!shim && consistent) {
+            return product;
         }
     }
-#endif
+    return from_darwin;
+}
+
+std::optional<MacOsVersion> detect_macos_version() {
+#ifdef __APPLE__
+    std::optional<std::string> product;
+    std::array<char, 64> buf{};
+    size_t len = buf.size();
+    if (sysctlbyname("kern.osproductversion", buf.data(), &len, nullptr, 0) == 0 && len > 0) {
+        product = std::string(buf.data(), strnlen(buf.data(), len));
+    }
+    std::optional<std::string> darwin;
+    struct utsname uts{};
+    if (uname(&uts) == 0) {
+        darwin = std::string(uts.release);
+    }
+    auto v = resolve_macos_version(product, darwin);
+    if (v) {
+        SPDLOG_DEBUG("Detected macOS {} (kern.osproductversion={}, darwin={})", v->to_string(),
+                     product.value_or("?"), darwin.value_or("?"));
+    }
+    return v;
+#else
     return std::nullopt;
+#endif
 }
 
 std::optional<std::string> macos_codename(int major) {
