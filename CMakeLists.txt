@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(den VERSION 0.13.0 LANGUAGES C CXX)
+project(den VERSION 0.14.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -102,6 +102,14 @@ target_link_libraries(den PRIVATE den_lib)
 # --- Tests ---
 enable_testing()
 
+# The built binary must report exactly the CMake project version, so a
+# release cut from this tree can never ship a stale `den --version`.
+add_test(
+    NAME den_version_matches_cmake
+    COMMAND sh "${CMAKE_SOURCE_DIR}/scripts/check-version.sh"
+            --binary "$<TARGET_FILE:den>" "${PROJECT_VERSION}"
+)
+
 # Only pick up top-level tests/*.cpp, not anything that might land under
 # tests/corpus/** (e.g. the homebrew-core submodule). Use a non-recursive
 # glob so the submodule's contents are ignored even if it grows .cpp
@@ -126,6 +134,14 @@ add_test(
     NAME harness_installed_pkg_runs
     COMMAND sh "${CMAKE_SOURCE_DIR}/tests/harness/test_installed_pkg_runs.sh"
 )
+
+# Shell-script regression tests for the release tooling under scripts/.
+# Each tests/scripts/test_<name>.sh is registered as script_test_<name>.
+file(GLOB SCRIPT_TESTS ${CMAKE_SOURCE_DIR}/tests/scripts/test_*.sh)
+foreach(script_test ${SCRIPT_TESTS})
+    get_filename_component(script_test_name "${script_test}" NAME_WE)
+    add_test(NAME script_${script_test_name} COMMAND sh "${script_test}")
+endforeach()
 
 # --- Install ---
 install(TARGETS den RUNTIME DESTINATION bin)

@@ -197,6 +197,21 @@ jobs:
           } > ga-release-notes.md
 
       # -----------------------------------------------------------------------
+      # 6b. Refuse to promote an RC whose binary reports a different version
+      #     (the Homebrew formula test asserts the same thing post-release).
+      #     CMake is not checked here: master may already be bumped past
+      #     the RC commit.
+      # -----------------------------------------------------------------------
+      - name: Check RC binary version
+        run: |
+          GA_TAG="${{ env.GA_TAG }}"
+          VERSION="${GA_TAG#v}"
+          mkdir -p rc-check
+          tar xzf "rc-assets/den-${VERSION}-linux-x86_64.tar.gz" -C rc-check den
+          scripts/check-version.sh --skip-cmake --binary rc-check/den "$GA_TAG"
+          rm -rf rc-check
+
+      # -----------------------------------------------------------------------
       # 7. Create the GA tag on the RC commit and publish the GA release.
       # -----------------------------------------------------------------------
       - name: Create GA tag

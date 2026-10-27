@@ -66,6 +66,14 @@ jobs:
             exit 1
           fi
 
+      - uses: actions/checkout@v6
+
+      - name: Check version matches CMake project version
+        run: |
+          # Refuse to cut an RC whose binaries would report a different
+          # version than the one requested (e.g. a forgotten CMake bump).
+          scripts/check-version.sh "${{ github.event.inputs.version }}"
+
       - name: Compute RC tag and check for conflicts
         id: compute
         env:
@@ -172,6 +180,9 @@ jobs:
 
       - name: Test
         run: cd build && ctest --output-on-failure
+
+      - name: Check binary version
+        run: scripts/check-version.sh --binary build/den "${{ github.event.inputs.version }}"
 
       - name: Package binary
         run: |
