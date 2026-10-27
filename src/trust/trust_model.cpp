@@ -4,6 +4,7 @@
 #include "trust_model.h"
 
 #include "../core/error.h"
+#include "../core/self_exe.h"
 #include "../download/http.h"
 #include "../download/sha256.h"
 
@@ -12,6 +13,7 @@
 
 #include <array>
 #include <fstream>
+#include <vector>
 
 namespace den {
 
@@ -107,48 +109,99 @@ std::map<std::string, std::string> parse_replica_document(const std::string& jso
     return out;
 }
 
-fs::path local_replica_path(const Config& config) {
-    // Search order (first existing wins):
-    //   1. den_home/trust/known_hashes.json — user-synced / overridable copy.
-    //   2. ../share/den/known_hashes.json    — packaged alongside the binary.
-    //   3. /usr/local/share/den/known_hashes.json — system install fallback.
-    //   4. data/known_hashes.json            — repo-relative, for dev runs.
-    // Mirrors the candidate-list pattern used for the bundled Ruby build
-    // script in source_build.cpp.
-    const std::array<fs::path, 4> candidates{
-        config.den_home / "trust" / "known_hashes.json",
-        fs::path("../share/den/known_hashes.json"),
-        fs::path("/usr/local/share/den/known_hashes.json"),
-        fs::path("data/known_hashes.json"),
-    };
-    for (const auto& c : candidates) {
-        std::error_code ec;
-        if (fs::exists(c, ec) && !ec)
-            return c;
+std::string ReplicaSource::describe() const {
+    switch (kind) {
+    case Kind::File:
+        return path.string();
+    case Kind::Embedded:
+        return "embedded snapshot";
+    case Kind::None:
+        break;
     }
-    // None present: return the canonical den_home location for diagnostics.
+    return "none";
+}
+
+ReplicaSource locate_local_replica(const Config& config, const std::optional<fs::path>& exe,
+                                   std::string_view embedded) {
+    auto exists = [](const fs::path& p) {
+        std::error_code ec;
+        return fs::is_regular_file(p, ec) && !ec;
+    };
+
+    std::vector<fs::path> candidates{config.den_home / "trust" / "known_hashes.json"};
+    if (exe && !exe->empty()) {
+        // Both the path as invoked (e.g. <prefix>/bin/den, a symlink into a
+        // keg) and its resolved target (the keg's own bin/den).
+        std::vector<fs::path> dirs{exe->parent_path()};
+        std::error_code ec;
+        auto real = fs::canonical(*exe, ec);
+        if (!ec && real.parent_path() != dirs.front()) {
+            dirs.push_back(real.parent_path());
+        }
+        for (const auto& d : dirs) {
+            candidates.push_back(d / ".." / "share" / "den" / "known_hashes.json");
+        }
+        for (const auto& d : dirs) {
+            candidates.push_back(d / "share" / "den" / "known_hashes.json");
+        }
+        for (const auto& d : dirs) {
+            candidates.push_back(d / ".." / "data" / "known_hashes.json");
+        }
+    }
+    for (const auto& c : candidates) {
+        if (exists(c)) {
+            return {ReplicaSource::Kind::File, c.lexically_normal()};
+        }
+    }
+    if (!embedded.empty()) {
+        return {ReplicaSource::Kind::Embedded, {}};
+    }
+    return {};
+}
+
+ReplicaSource locate_local_replica(const Config& config) {
+    return locate_local_replica(config, current_executable_path(), embedded_replica_json());
+}
+
+fs::path local_replica_path(const Config& config) {
+    auto src = locate_local_replica(config);
+    if (src.kind == ReplicaSource::Kind::File) {
+        return src.path;
+    }
+    // No on-disk copy: return the canonical den_home location for diagnostics.
     return config.den_home / "trust" / "known_hashes.json";
 }
 
-std::map<std::string, std::string> load_local_replica(const Config& config) {
-    fs::path path = local_replica_path(config);
-    std::error_code ec;
-    if (!fs::exists(path, ec) || ec) {
-        SPDLOG_DEBUG("local replica snapshot absent: {}", path.string());
+std::map<std::string, std::string> load_replica(const ReplicaSource& source,
+                                                std::string_view embedded) {
+    switch (source.kind) {
+    case ReplicaSource::Kind::None:
+        SPDLOG_DEBUG("local replica snapshot absent");
         return {};
+    case ReplicaSource::Kind::Embedded:
+        SPDLOG_DEBUG("using embedded replica snapshot");
+        return parse_replica_document(std::string(embedded));
+    case ReplicaSource::Kind::File:
+        break;
     }
 
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(source.path, std::ios::binary);
     if (!in) {
-        SPDLOG_WARN("cannot read local replica snapshot: {}", path.string());
-        return {};
+        // Present but unreadable: fail closed rather than silently falling
+        // back to an older embedded snapshot.
+        throw UserError("cannot read local replica snapshot: " + source.path.string());
     }
     std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    SPDLOG_DEBUG("using replica snapshot {}", source.path.string());
 
     // A malformed local snapshot is a hard error rather than a silent empty
     // map: an attacker who can corrupt the file should not be able to disable
     // the replica check by making the JSON unparseable.
     return parse_replica_document(text);
+}
+
+std::map<std::string, std::string> load_local_replica(const Config& config) {
+    return load_replica(locate_local_replica(config), embedded_replica_json());
 }
 
 MaybeHash replica_lookup(const std::map<std::string, std::string>& replica,

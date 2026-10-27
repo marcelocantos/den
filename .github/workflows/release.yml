@@ -57,7 +57,7 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           archive="den-${version}-${{ matrix.target }}.tar.gz"
-          tar czf "${archive}" -C build den
+          scripts/package-release.sh build "${archive}"
           shasum -a 256 "${archive}" > "${archive}.sha256"
 
       - name: Upload to release

@@ -89,11 +89,20 @@ main() {
     tar xzf "$tmpdir/$archive_name" -C "$tmpdir"
 
     if [ -f "$tmpdir/den" ]; then
-        mv "$tmpdir/den" "$bin_dir/den"
+        pkg_root="$tmpdir"
     elif [ -f "$tmpdir/den-${version}-${os}-${arch}/den" ]; then
-        mv "$tmpdir/den-${version}-${os}-${arch}/den" "$bin_dir/den"
+        pkg_root="$tmpdir/den-${version}-${os}-${arch}"
     else
         err "binary not found in archive"
+    fi
+    mv "$pkg_root/den" "$bin_dir/den"
+
+    # Trust replica snapshot (🎯T42): den resolves it at
+    # <bin>/../share/den/known_hashes.json. Older archives don't carry it;
+    # den then falls back to the copy compiled into the binary.
+    if [ -f "$pkg_root/share/den/known_hashes.json" ]; then
+        mkdir -p "$den_dir/share/den"
+        cp "$pkg_root/share/den/known_hashes.json" "$den_dir/share/den/known_hashes.json"
     fi
 
     chmod +x "$bin_dir/den"
