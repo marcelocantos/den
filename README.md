@@ -203,7 +203,7 @@ Run `den --help` for the full list. Key commands:
 | Command | Description |
 |---|---|
 | `den install <pkg> [--provider <p>]` | Install a package (with dependency resolution); `--provider` routes to a specific provider |
-| `den uninstall <pkg> [--provider <p>]` | Remove from the active environment. The keg stays until `den cleanup`; if no environment still uses it, den hands its `opt/<name>` link to another installed version den manages, or removes it |
+| `den uninstall <pkg> [--provider <p>] [--ignore-dependencies]` | Remove from the active environment. Refuses (listing them) while installed packages in any environment need it at runtime; `--ignore-dependencies` overrides. The keg stays until `den cleanup`; if no environment still uses it, den hands its `opt/<name>` link to another installed version den manages, or removes it |
 | `den use <pkg> <version>` | Switch active version |
 | `den upgrade [pkg]` | Upgrade outdated packages |
 | `den list` | List packages in the active environment |

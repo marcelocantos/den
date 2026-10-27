@@ -6,6 +6,7 @@
 #include "install.h"
 #include "pin.h"
 #include "shell.h"
+#include "uninstall_deps.h"
 
 #include "../activity/activity.h"
 #include "../build/source_build.h"
@@ -196,6 +197,7 @@ struct Cli::M {
     // uninstall
     std::vector<std::string> uninstall_names;
     std::string uninstall_provider;
+    bool uninstall_ignore_deps = false;
 
     // upgrade
     std::vector<std::string> upgrade_names;
@@ -338,6 +340,8 @@ void Cli::M::setup() {
     uninstall->add_option("names", uninstall_names, "Package names to uninstall")->required();
     uninstall->add_option("--provider", uninstall_provider,
                           "Provider that owns the package (default: auto-resolve)");
+    uninstall->add_flag("--ignore-dependencies", uninstall_ignore_deps,
+                        "Uninstall even if other installed packages need it at runtime");
     uninstall->callback([this] {
         auto cfg = Config::detect();
         auto registry = make_default_registry(nullptr);
@@ -348,6 +352,27 @@ void Cli::M::setup() {
         for (const auto& name : uninstall_names) {
             auto& provider = resolve_provider(registry, name, manifest, this->uninstall_provider);
             by_provider[&provider].push_back(name);
+        }
+
+        // brew parity: refuse to remove a package that installed packages
+        // (in any environment) still need at runtime. Build-only
+        // dependencies don't count. Nothing is removed if any is refused.
+        if (!this->uninstall_ignore_deps) {
+            std::vector<std::string> brew_names;
+            for (const auto& [provider, names] : by_provider) {
+                if (provider->provider_name() == "homebrew") {
+                    brew_names.insert(brew_names.end(), names.begin(), names.end());
+                }
+            }
+            if (!brew_names.empty()) {
+                auto idx = load_index(cfg.cache / "index.json");
+                merge_taps_into_index(cfg, idx);
+                auto dependents = find_runtime_dependents(cfg, idx, active, brew_names);
+                if (!dependents.empty()) {
+                    std::cerr << format_dependents_refusal(dependents);
+                    std::exit(1);
+                }
+            }
         }
         for (auto& [provider, names] : by_provider) {
             uninstall_packages(cfg, *provider, names);
