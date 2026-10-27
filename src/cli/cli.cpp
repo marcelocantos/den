@@ -293,7 +293,7 @@ void Cli::M::setup() {
         if (this->build_from_source) {
             // Source builds are Homebrew-only — the Ruby DSL belongs to the
             // Homebrew ecosystem. --provider is ignored on this path.
-            if (idx.packages.empty()) {
+            if (idx.empty()) {
                 SPDLOG_ERROR("package index is empty — run `den update` first");
                 return;
             }
@@ -323,7 +323,7 @@ void Cli::M::setup() {
         // only when a Homebrew install is actually in the batch, so installs
         // through pip/npm/go/cargo work without `den update`.
         for (auto& [provider, names] : by_provider) {
-            if (provider->provider_name() == "homebrew" && idx.packages.empty()) {
+            if (provider->provider_name() == "homebrew" && idx.empty()) {
                 SPDLOG_ERROR("package index is empty — run `den update` first");
                 continue;
             }
@@ -364,7 +364,7 @@ void Cli::M::setup() {
     upgrade->callback([this] {
         auto cfg = Config::detect();
         auto idx = load_index(cfg.cache / "index.json");
-        if (idx.packages.empty()) {
+        if (idx.empty()) {
             SPDLOG_ERROR("package index is empty — run `den update` first");
             return;
         }
@@ -628,10 +628,12 @@ void Cli::M::setup() {
     search->callback([this] {
         auto cfg = Config::detect();
         auto idx = load_index(cfg.cache / "index.json");
-        if (idx.packages.empty()) {
+        if (idx.empty()) {
             std::cerr << "Index is empty. Run 'den update' first.\n";
             return;
         }
+        // Search scans every package, so decode the whole index up front.
+        idx.materialise_all();
         // Case-insensitive substring match.
         std::string query_lower = search_query;
         std::transform(query_lower.begin(), query_lower.end(), query_lower.begin(), ::tolower);
@@ -1285,7 +1287,7 @@ void Cli::M::setup() {
     outdated->callback([] {
         auto cfg = Config::detect();
         auto idx = load_index(cfg.cache / "index.json");
-        if (idx.packages.empty()) {
+        if (idx.empty()) {
             std::cerr << "Index is empty. Run 'den update' first.\n";
             return;
         }
