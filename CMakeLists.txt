@@ -37,6 +37,22 @@ if(APPLE AND EXISTS "${CMAKE_SOURCE_DIR}/src/ruby/bundle_data.c")
     list(APPEND DEN_SOURCES "${CMAKE_SOURCE_DIR}/src/ruby/bundle_data.c")
 endif()
 
+# 🎯T42/T64: compile the trust replica snapshot into the binary as the
+# last-resort fallback, so a bare `den` (release tarball, install.sh,
+# self-update) can still cross-check bottle hashes. configure_file re-runs
+# whenever data/known_hashes.json changes.
+file(READ "${CMAKE_SOURCE_DIR}/data/known_hashes.json" DEN_REPLICA_JSON)
+string(FIND "${DEN_REPLICA_JSON}" ")den_replica\"" _den_replica_delim)
+if(NOT _den_replica_delim EQUAL -1)
+    message(FATAL_ERROR "data/known_hashes.json contains the raw-string delimiter")
+endif()
+configure_file(
+    "${CMAKE_SOURCE_DIR}/cmake/embedded_replica.cpp.in"
+    "${CMAKE_BINARY_DIR}/generated/embedded_replica.cpp"
+    @ONLY
+)
+list(APPEND DEN_SOURCES "${CMAKE_BINARY_DIR}/generated/embedded_replica.cpp")
+
 add_library(den_lib STATIC ${DEN_SOURCES})
 target_include_directories(den_lib PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(den_lib PUBLIC
@@ -83,7 +99,8 @@ if(TEST_SOURCES)
     # submodule. Pass the path as a compile-time constant so the tests can
     # locate the corpus and skip gracefully if it isn't initialised.
     target_compile_definitions(den_tests PRIVATE
-        DEN_CORPUS_DIR="${CMAKE_SOURCE_DIR}/tests/corpus/homebrew-core")
+        DEN_CORPUS_DIR="${CMAKE_SOURCE_DIR}/tests/corpus/homebrew-core"
+        DEN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
     add_test(NAME den_tests COMMAND den_tests)
 endif()
 
@@ -99,5 +116,6 @@ install(TARGETS den RUNTIME DESTINATION bin)
 
 # 🎯T42/T64: ship the independent trust replica snapshot alongside the binary
 # so `den install` and `den doctor` can cross-check bottle hashes offline. The
-# runtime resolves it via ../share/den/known_hashes.json relative to bin/.
+# runtime resolves it via <exe_dir>/../share/den/known_hashes.json (see
+# locate_local_replica); the copy compiled into the binary is the fallback.
 install(FILES ${CMAKE_SOURCE_DIR}/data/known_hashes.json DESTINATION share/den)

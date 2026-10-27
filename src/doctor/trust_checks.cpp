@@ -49,7 +49,9 @@ TrustReport build_trust_report(const Config& config) {
     std::map<std::string, std::string> replica;
     bool replica_ok = true;
     try {
-        replica = load_local_replica(config);
+        auto source = locate_local_replica(config);
+        report.replica_source = source.describe();
+        replica = load_replica(source, embedded_replica_json());
     } catch (const std::exception& e) {
         replica_ok = false;
         SPDLOG_WARN("trust replica snapshot unreadable: {}", e.what());
@@ -127,6 +129,7 @@ void check_trust_model(const Config& config, std::vector<Finding>& findings) {
     std::cout << "[trust] replica: " << replica_status_label(report.replica_status)
               << ", entries: " << report.replica_entry_count
               << ", last sync: " << report.last_replica_sync_iso8601.value_or("never") << "\n";
+    std::cout << "[trust] replica source: " << report.replica_source << "\n";
     std::cout << "[trust] layers: ";
     if (report.active_advanced_layers.empty()) {
         std::cout << "none";

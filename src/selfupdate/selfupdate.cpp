@@ -62,6 +62,35 @@ fs::path self_exe() {
 
 } // namespace
 
+void refresh_packaged_replica(const fs::path& extracted_root, const fs::path& exe) {
+    // 🎯T42: keep an installed <bin>/../share/den/known_hashes.json in step
+    // with the new binary — a stale on-disk copy would otherwise shadow the
+    // newer snapshot compiled into it. Only refresh a copy that already
+    // exists (never create or delete one); without one den uses its embedded
+    // snapshot.
+    auto shipped = extracted_root / "share" / "den" / "known_hashes.json";
+    auto installed = exe.parent_path() / ".." / "share" / "den" / "known_hashes.json";
+    std::error_code ec;
+    if (!fs::is_regular_file(installed, ec)) {
+        return;
+    }
+    if (!fs::is_regular_file(shipped, ec)) {
+        SPDLOG_WARN("update tarball has no share/den/known_hashes.json; leaving {} as is",
+                    installed.string());
+        return;
+    }
+    auto staging = installed;
+    staging += ".new";
+    fs::copy_file(shipped, staging, fs::copy_options::overwrite_existing, ec);
+    if (!ec) {
+        fs::rename(staging, installed, ec);
+    }
+    if (ec) {
+        fs::remove(staging, ec);
+        SPDLOG_WARN("could not refresh trust replica {}", installed.string());
+    }
+}
+
 std::string resolve_latest_version() {
     std::string url = "https://api.github.com/repos/marcelocantos/den/releases/latest";
 
@@ -203,7 +232,8 @@ void apply_update(const UpdateInfo& info, const Config& cfg) {
         out.write(tarball_data.data(), static_cast<std::streamsize>(tarball_data.size()));
     }
 
-    // Extract — tarball contains just "den" at the top level.
+    // Extract — tarball has "den" at the top level (and, from 🎯T42 on,
+    // share/den/known_hashes.json beside it).
     auto rc = std::system(("tar xzf " + tarball_path.string() + " -C " + tmp_dir.string()).c_str());
     if (rc != 0) {
         fs::remove_all(tmp_dir);
@@ -239,6 +269,8 @@ void apply_update(const UpdateInfo& info, const Config& cfg) {
             throw UserError("failed to replace binary: " + ec.message());
         }
     }
+
+    refresh_packaged_replica(tmp_dir, exe);
 
     fs::remove_all(tmp_dir);
 

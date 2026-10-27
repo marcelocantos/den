@@ -37,6 +37,7 @@ struct TrustReport {
     std::optional<std::string> last_replica_sync_iso8601; // nullopt = never synced
     std::vector<std::string> active_advanced_layers;      // 🎯T44 layers
     size_t replica_entry_count = 0;                       // entries in the snapshot
+    std::string replica_source = "none"; // ReplicaSource::describe(): path or "embedded snapshot"
 };
 
 /// Inspect the live configuration and build a trust report.

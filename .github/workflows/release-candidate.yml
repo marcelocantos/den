@@ -166,7 +166,7 @@ jobs:
         run: |
           VERSION="${{ github.event.inputs.version }}"
           archive="den-${VERSION}-${{ matrix.target }}.tar.gz"
-          tar czf "${archive}" -C build den
+          scripts/package-release.sh build "${archive}"
           # Portable SHA256: macOS runners have `shasum`, not `sha256sum`.
           # Both emit the same "<hash>  <file>" format consumed downstream.
           if command -v sha256sum >/dev/null 2>&1; then
