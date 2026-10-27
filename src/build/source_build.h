@@ -38,4 +38,20 @@ std::string fetch_formula_source(const PackageIndex& idx, const std::string& nam
 
 BuildRecipe extract_build_recipe(const PackageIndex& idx, const std::string& name);
 
+/// The shell command for the bundled-Ruby build (Path A): den_build.rb run
+/// by the bundled Ruby with an environment derived from `config` (see
+/// bundled_ruby_env), so the build uses den's prefix and Cellar and never a
+/// live Homebrew's paths.
+std::string bundled_ruby_command(const Config& config, const fs::path& ruby_dir,
+                                 const fs::path& formula_file, const std::string& name,
+                                 const std::string& version);
+
+/// The `brew` an unqualified `brew` would run on `path`, or empty.
+fs::path find_brew_on_path(const std::string& path);
+
+/// True when `brew` belongs to the Homebrew installed at `prefix`, i.e.
+/// `brew ruby` would build into den's own Cellar. A brew for any other prefix
+/// must not be used for den's source builds.
+bool brew_serves_prefix(const fs::path& brew, const fs::path& prefix);
+
 } // namespace den

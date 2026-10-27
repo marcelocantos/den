@@ -11,6 +11,7 @@
 #include "../platform/platform.h"
 #include "../provider/exec.h"
 #include "../ruby/bundle.h"
+#include "../ruby/ruby_env.h"
 #include "../store/link.h"
 #include "../store/store.h"
 
@@ -23,6 +24,8 @@
 #include <iostream>
 #include <map>
 #include <regex>
+#include <sstream>
+#include <unistd.h>
 
 namespace den {
 
@@ -206,6 +209,60 @@ BuildRecipe extract_build_recipe(const PackageIndex& idx, const std::string& nam
     return recipe;
 }
 
+std::string bundled_ruby_command(const Config& config, const fs::path& ruby_dir,
+                                 const fs::path& formula_file, const std::string& name,
+                                 const std::string& version) {
+    const char* path = std::getenv("PATH");
+    auto env = bundled_ruby_env(config, ruby_dir, read_env_snapshot(ruby_dir / "homebrew_env.txt"),
+                                path ? path : "/usr/bin:/bin:/usr/sbin:/sbin");
+    std::string cmd;
+    for (const auto& [k, v] : env)
+        cmd += k + "=" + shell_quote(v) + " ";
+    auto ruby_bin = ruby_dir / "ruby" / "bin" / "ruby";
+    auto homebrew_lib = ruby_dir / "homebrew";
+    auto sorbet_lib = ruby_dir / "gems" / "sorbet-runtime";
+    auto ruby_lib = ruby_dir / "ruby" / "lib" / "ruby" / "4.0.0";
+    cmd += shell_quote(ruby_bin.string()) + " -I" + shell_quote(homebrew_lib.string()) + " -I" +
+           shell_quote(sorbet_lib.string()) + " -I" + shell_quote(ruby_lib.string()) + " " +
+           shell_quote((ruby_dir / "den_build.rb").string()) + " " +
+           shell_quote(formula_file.string()) + " " + shell_quote(config.store.string()) + " " +
+           shell_quote(config.den_home.string()) + " " + shell_quote(version) + " " +
+           shell_quote(name);
+    return cmd;
+}
+
+fs::path find_brew_on_path(const std::string& path) {
+    std::istringstream in(path);
+    for (std::string dir; std::getline(in, dir, ':');) {
+        if (dir.empty())
+            continue;
+        auto candidate = fs::path(dir) / "brew";
+        std::error_code ec;
+        if (fs::exists(candidate, ec) && ::access(candidate.c_str(), X_OK) == 0)
+            return candidate;
+    }
+    return {};
+}
+
+bool brew_serves_prefix(const fs::path& brew, const fs::path& prefix) {
+    if (brew.empty() || prefix.empty())
+        return false;
+    std::error_code ec;
+    auto real = fs::weakly_canonical(brew, ec);
+    if (ec)
+        return false;
+    auto want = fs::weakly_canonical(prefix, ec);
+    if (ec)
+        return false;
+    // <prefix>/bin/brew -> <prefix>/Library/.../bin/brew or
+    // <prefix>/Homebrew/bin/brew (Linux/Intel repository layouts).
+    for (auto p = real.parent_path(); !p.empty() && p != p.root_path(); p = p.parent_path()) {
+        if (p == want)
+            return true;
+    }
+    return false;
+}
+
 fs::path build_from_source(const Config& config, const PackageIndex& idx,
                            const std::string& requested, const std::string& version) {
     // "user/repo/name" is looked up qualified and built into Cellar/<name>.
@@ -241,7 +298,9 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
         auto ruby_bin = ruby_dir / "ruby" / "bin" / "ruby";
         auto script_path = ruby_dir / "den_build.rb";
 
-        if (fs::exists(ruby_bin) && fs::exists(script_path)) {
+        // Linux's lazily downloaded Portable Ruby has no Homebrew library.
+        if (fs::exists(ruby_bin) && fs::exists(script_path) &&
+            fs::is_directory(ruby_dir / "homebrew")) {
             auto formula_file = config.cache / "formulas" / (name + ".rb");
             fs::create_directories(formula_file.parent_path());
             {
@@ -249,24 +308,21 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
                 f << formula_source;
             }
 
-            auto homebrew_lib = ruby_dir / "homebrew";
-            auto sorbet_lib = ruby_dir / "gems" / "sorbet-runtime";
-            auto ruby_lib = ruby_dir / "ruby" / "lib" / "ruby" / "4.0.0";
-
-            auto cmd = ruby_bin.string() + " -I" + homebrew_lib.string() + " -I" +
-                       sorbet_lib.string() + " -I" + ruby_lib.string() + " " +
-                       script_path.string() + " " + formula_file.string() + " " +
-                       config.store.string() + " " + config.den_home.string();
-
+            auto cmd = bundled_ruby_command(config, ruby_dir, formula_file, name, version);
             SPDLOG_INFO("bundled ruby build: {}", cmd);
             auto [ruby_rc, ruby_output] = run(cmd);
 
-            if (ruby_rc == 0 && ruby_output.find("status=ok") != std::string::npos) {
+            std::error_code dec;
+            const bool built = fs::is_directory(dest, dec) && !fs::is_empty(dest, dec);
+            if (ruby_rc == 0 && ruby_output.find("status=ok") != std::string::npos && built) {
                 std::cout << "==> Built " << name << " " << version << "\n";
                 return claim();
             }
-            SPDLOG_WARN("bundled ruby build failed (rc={}), falling back", ruby_rc);
-            SPDLOG_DEBUG("output: {}", ruby_output.substr(0, 500));
+            SPDLOG_WARN("bundled ruby build failed (rc={}{}), falling back", ruby_rc,
+                        built ? "" : ", no keg at " + dest.string());
+            SPDLOG_WARN("bundled ruby output (tail): {}",
+                        ruby_output.size() > 2000 ? ruby_output.substr(ruby_output.size() - 2000)
+                                                  : ruby_output);
             std::error_code ec;
             fs::remove_all(dest, ec);
         }
@@ -274,7 +330,16 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
 
     // Path B: brew ruby subprocess (Homebrew fallback — only if formula
     // source was fetched but bundled Ruby failed).
-    if (!formula_source.empty()) {
+    // Only a brew that owns den's prefix may build: any other Homebrew (e.g.
+    // a live /opt/homebrew while den uses its own prefix) would build with
+    // its own Cellar, caches and environment.
+    const char* path_env = std::getenv("PATH");
+    const auto brew = find_brew_on_path(path_env ? path_env : "");
+    const bool brew_ok = brew_serves_prefix(brew, config.prefix);
+    if (!formula_source.empty() && !brew_ok)
+        SPDLOG_INFO("skipping `brew ruby` build: {} does not serve den's prefix {}",
+                    brew.empty() ? "no brew on PATH" : brew.string(), config.prefix.string());
+    if (!formula_source.empty() && brew_ok) {
         auto formula_file = config.cache / "formulas" / (name + ".rb");
         // formula_file was already written in Path A; reuse it.
 
@@ -288,8 +353,11 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
         }
 
         if (!build_script.empty()) {
-            auto cmd = "brew ruby " + build_script + " " + formula_file.string() + " " +
-                       config.store.string() + " " + config.den_home.string();
+            auto cmd = shell_quote(brew.string()) + " ruby " + shell_quote(build_script) + " " +
+                       shell_quote(formula_file.string()) + " " +
+                       shell_quote(config.store.string()) + " " +
+                       shell_quote(config.den_home.string()) + " " + shell_quote(version) + " " +
+                       shell_quote(name);
             SPDLOG_INFO("ruby build: {}", cmd);
             auto [ruby_rc, ruby_output] = run(cmd);
 

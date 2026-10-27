@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "bundle.h"
+#include "ruby_env.h"
 
 #include "../core/error.h"
 
@@ -110,7 +111,11 @@ fs::path ensure_ruby_bundle_embedded(const fs::path& den_home) {
 fs::path ensure_ruby_bundle(const fs::path& den_home) {
 #ifdef __APPLE__
     // macOS: use the Ruby bundle embedded in the den binary at build time.
-    return ensure_ruby_bundle_embedded(den_home);
+    // The bundle's own den_build.rb predates later fixes, so always run the
+    // copy compiled into this den (cheap compare on every call).
+    auto ruby_dir = ensure_ruby_bundle_embedded(den_home);
+    refresh_den_build_script(ruby_dir);
+    return ruby_dir;
 #else
     // Linux: lazy-download Homebrew Portable Ruby from the pinned GitHub
     // release on first use (🎯T47).
