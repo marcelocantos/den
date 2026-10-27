@@ -94,14 +94,16 @@ struct MaintenanceReport {
     bool index_refreshed = false;
     std::size_t pending = 0;
     std::size_t downloaded = 0;
+    std::size_t skipped_pinned = 0; // pending but pinned: not pre-downloaded
     std::size_t applied = 0;
     std::size_t deferred = 0;
 };
 
 /// One maintenance cycle: refresh the index, recompute `state.pending`
 /// (dropping deferrals for packages that are no longer pending), prefetch
-/// archives when auto_download is on, and run the in-use-aware upgrade pass
-/// when auto_upgrade is on and the window allows. Mutates `state` (including
+/// archives when auto_download is on (never for packages pinned in
+/// den_home/pins.json; an unreadable pins.json skips every prefetch), and run the in-use-aware
+/// upgrade pass when auto_upgrade is on and the window allows. Mutates `state` (including
 /// last_check and errors); the caller persists it.
 MaintenanceReport run_maintenance_cycle(const fs::path& cellar, const fs::path& den_home,
                                         const MaintenanceSettings& settings, DaemonState& state,

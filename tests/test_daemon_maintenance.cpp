@@ -9,6 +9,7 @@
 
 #include "daemon/daemon.h"
 #include "daemon/upgrade_pass.h"
+#include "store/pins.h"
 
 #include <chrono>
 #include <filesystem>
@@ -226,6 +227,125 @@ TEST_SUITE("daemon_maintenance") {
         CHECK(rep.downloaded == 1);
         REQUIRE(state.errors.size() == 1);
         CHECK(state.errors[0].find("download jq") != std::string::npos);
+    }
+
+    // Pinned packages never upgrade, so the daemon must not spend bandwidth
+    // or cache space pre-downloading their bottles.
+    TEST_CASE("maintenance cycle does not pre-download pinned packages") {
+        TempDir t;
+        fs::path home = t.path / "home";
+        fs::create_directories(home);
+        write_pins(home, {{"jq", "1.7.1"}});
+        DaemonState state;
+        std::vector<std::string> fetched;
+        MaintenanceHooks h;
+        h.refresh_index = [] { return sample_index(); };
+        h.installed = [] { return sample_installed(); };
+        h.prefetch = [&](const PendingUpgrade& p) { fetched.push_back(p.name); };
+        MaintenanceSettings s; // auto_download on
+        auto rep = run_maintenance_cycle(t.path / "Cellar", home, s, state, h);
+        CHECK(fetched == std::vector<std::string>{"pv"});
+        CHECK(rep.downloaded == 1);
+        CHECK(rep.skipped_pinned == 1);
+        // Still reported as pending (den outdated shows it, tagged pinned).
+        CHECK(rep.pending == 2);
+        REQUIRE(state.pending.size() == 2);
+        CHECK(state.pending[0].name == "jq");
+        CHECK(state.errors.empty());
+    }
+
+    TEST_CASE("maintenance cycle pre-downloads nothing when every pending package is pinned") {
+        TempDir t;
+        fs::path home = t.path / "home";
+        fs::create_directories(home);
+        write_pins(home, {{"jq", "1.7.1"}, {"pv", "1.11.0"}});
+        DaemonState state;
+        int fetches = 0;
+        MaintenanceHooks h;
+        h.refresh_index = [] { return sample_index(); };
+        h.installed = [] { return sample_installed(); };
+        h.prefetch = [&](const PendingUpgrade&) { ++fetches; };
+        MaintenanceSettings s;
+        auto rep = run_maintenance_cycle(t.path / "Cellar", home, s, state, h);
+        CHECK(fetches == 0);
+        CHECK(rep.downloaded == 0);
+        CHECK(rep.skipped_pinned == 2);
+        CHECK(state.pending.size() == 2);
+        CHECK(state.errors.empty());
+    }
+
+    TEST_CASE("unpinning a package resumes its pre-download on the next cycle") {
+        TempDir t;
+        fs::path home = t.path / "home";
+        fs::create_directories(home);
+        write_pins(home, {{"jq", "1.7.1"}});
+        DaemonState state;
+        std::vector<std::string> fetched;
+        MaintenanceHooks h;
+        h.refresh_index = [] { return sample_index(); };
+        h.installed = [] { return sample_installed(); };
+        h.prefetch = [&](const PendingUpgrade& p) { fetched.push_back(p.name); };
+        MaintenanceSettings s;
+        run_maintenance_cycle(t.path / "Cellar", home, s, state, h);
+        CHECK(fetched == std::vector<std::string>{"pv"});
+        CHECK(unpin_package(home, "jq"));
+        fetched.clear();
+        auto rep = run_maintenance_cycle(t.path / "Cellar", home, s, state, h);
+        CHECK(fetched == std::vector<std::string>{"jq", "pv"});
+        CHECK(rep.skipped_pinned == 0);
+    }
+
+    TEST_CASE("a corrupt pins.json fails closed: no pre-downloads, error recorded") {
+        TempDir t;
+        fs::path home = t.path / "home";
+        fs::create_directories(home);
+        {
+            std::ofstream f(pins_path(home));
+            f << "{ not json";
+        }
+        DaemonState state;
+        int fetches = 0;
+        MaintenanceHooks h;
+        h.refresh_index = [] { return sample_index(); };
+        h.installed = [] { return sample_installed(); };
+        h.prefetch = [&](const PendingUpgrade&) { ++fetches; };
+        MaintenanceSettings s;
+        auto rep = run_maintenance_cycle(t.path / "Cellar", home, s, state, h);
+        CHECK(fetches == 0);
+        CHECK(rep.downloaded == 0);
+        CHECK(rep.skipped_pinned == 2);
+        CHECK(rep.pending == 2);
+        bool found = false;
+        for (const auto& e : state.errors)
+            if (e.find("pins unreadable") != std::string::npos)
+                found = true;
+        CHECK(found);
+    }
+
+    TEST_CASE("pinned package is neither pre-downloaded nor applied in the upgrade window") {
+        TempDir t;
+        fs::create_directories(t.path / "Cellar" / "jq" / "1.7.1" / "bin");
+        fs::create_directories(t.path / "Cellar" / "pv" / "1.11.0" / "bin");
+        fs::path home = t.path / "home";
+        fs::create_directories(home);
+        write_pins(home, {{"jq", "1.7.1"}});
+        DaemonState state;
+        std::vector<std::string> fetched, applied;
+        MaintenanceHooks h;
+        h.refresh_index = [] { return sample_index(); };
+        h.installed = [] { return sample_installed(); };
+        h.prefetch = [&](const PendingUpgrade& p) { fetched.push_back(p.name); };
+        h.apply = [&](const PendingUpgrade& p) { applied.push_back(p.name); };
+        h.in_window = [](const std::string&) { return true; };
+        MaintenanceSettings s;
+        s.auto_upgrade = true;
+        s.upgrade_window = "03:00-05:00";
+        auto rep = run_maintenance_cycle(t.path / "Cellar", home, s, state, h);
+        CHECK(fetched == std::vector<std::string>{"pv"});
+        CHECK(applied == std::vector<std::string>{"pv"});
+        CHECK(rep.skipped_pinned == 1);
+        REQUIRE(state.pending.size() == 1);
+        CHECK(state.pending[0].name == "jq");
     }
 
 } // TEST_SUITE
