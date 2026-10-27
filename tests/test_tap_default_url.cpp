@@ -122,10 +122,9 @@ TEST_SUITE("tap::default_url") {
                               << "[protocol \"file\"]\n\tallow = always\n";
 
         const std::string den_home = (tmp.path / "den").string();
-        const std::string env = "GIT_CONFIG_GLOBAL=" + gitcfg.string() +
-                                " GIT_CONFIG_NOSYSTEM=1 DEN_HOME=" + den_home +
-                                " HOMEBREW_PREFIX=" + den_home + "/brew HOMEBREW_CELLAR=" +
-                                den_home + "/brew/Cellar ";
+        const std::string env =
+            "GIT_CONFIG_GLOBAL=" + gitcfg.string() + " GIT_CONFIG_NOSYSTEM=1 DEN_HOME=" + den_home +
+            " HOMEBREW_PREFIX=" + den_home + "/brew HOMEBREW_CELLAR=" + den_home + "/brew/Cellar ";
         auto [rc, out] = sh(env + "./den tap add mutagen-io/mutagen");
         REQUIRE_MESSAGE(rc == 0, out);
         const fs::path tapped = fs::path(den_home) / "taps" / "mutagen-io" / "mutagen";
