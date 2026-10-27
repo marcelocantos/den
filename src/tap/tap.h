@@ -38,6 +38,16 @@ struct Tap {
 // untrusted CLI input and are used to build filesystem paths.
 bool is_valid_tap_name(const std::string& name);
 
+// Homebrew's name normalisation: "user/homebrew-repo" is the same tap as
+// "user/repo" (`brew tap` strips the "homebrew-" prefix from the repo part).
+// Names that are not valid tap names are returned unchanged.
+std::string canonical_tap_name(const std::string& name);
+
+// The clone URL `brew tap user/repo` uses when no source is given:
+// https://github.com/user/homebrew-repo.git. The "homebrew-" prefix is added
+// to the repo part (never doubled). Returns empty for an invalid name.
+std::string default_tap_url(const std::string& name);
+
 // Filesystem location of a tap, given its "user/repo" name.
 // Returns nullopt for an invalid name.
 std::optional<fs::path> tap_dir(const Config& config, const std::string& name);

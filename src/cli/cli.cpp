@@ -1146,8 +1146,9 @@ void Cli::M::setup() {
             const std::string& name = tap_args[1];
             std::string source = tap_args.size() >= 3 ? tap_args[2] : tap_url;
             if (source.empty()) {
-                // Default to GitHub's canonical homebrew-tap URL for user/repo.
-                source = "https://github.com/" + name + ".git";
+                // Same default as `brew tap user/repo`:
+                // https://github.com/user/homebrew-repo.git.
+                source = default_tap_url(name);
             }
             auto added = tap_add(cfg, name, source);
             std::cout << "Tapped " << added.name << "\n";
