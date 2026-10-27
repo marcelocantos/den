@@ -63,7 +63,7 @@ Package formula(const std::string& name, const std::string& version,
     p.archives["arm64_sequoia"] = {"https://ghcr.io/" + name + "/arm", std::string(64, 'a'),
                                    RelocationType::NeedsSubstitution};
     p.archives["x86_64_sonoma"] = {"https://ghcr.io/" + name + "/x86", std::string(64, 'b'),
-                                   RelocationType::HardcodedPrefix};
+                                   RelocationType::HardcodedPrefix, "/usr/local/Cellar"};
     p.source_url = "https://example.com/" + name + ".tar.gz";
     p.source_sha256 = std::string(64, 'c');
     p.ruby_source_path = "Formula/" + name.substr(0, 1) + "/" + name + ".rb";
@@ -141,6 +141,7 @@ void check_same(const Package& a, const Package& b) {
         CHECK(b.archives.at(tag).url == ar.url);
         CHECK(b.archives.at(tag).sha256 == ar.sha256);
         CHECK(b.archives.at(tag).relocation == ar.relocation);
+        CHECK(b.archives.at(tag).cellar == ar.cellar);
     }
     REQUIRE(a.cask_artifacts.size() == b.cask_artifacts.size());
     for (size_t i = 0; i < a.cask_artifacts.size(); ++i) {

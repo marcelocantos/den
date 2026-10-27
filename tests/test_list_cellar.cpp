@@ -67,8 +67,9 @@ struct TempDir {
 static std::string run_den(const std::string& args, const fs::path& den_home,
                            const fs::path& cellar) {
     const std::string prefix = cellar.parent_path().string();
-    std::string cmd = "DEN_HOME=" + den_home.string() + " HOMEBREW_PREFIX=" + prefix +
-                      " HOMEBREW_CELLAR=" + cellar.string() + " ./den " + args + " 2>&1";
+    std::string cmd = "DEN_HOME=" + den_home.string() + " DEN_PREFIX=" + prefix +
+                      " HOMEBREW_PREFIX=" + prefix + " HOMEBREW_CELLAR=" + cellar.string() +
+                      " ./den " + args + " 2>&1";
     FILE* pipe = ::popen(cmd.c_str(), "r");
     if (!pipe) {
         throw std::runtime_error("popen failed for: " + cmd);

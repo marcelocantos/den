@@ -178,8 +178,9 @@ static std::pair<int, std::string> run_den(const std::string& args, const std::s
 
     const std::string prefix = den_home + "/brew";
     const std::string cellar = prefix + "/Cellar";
-    std::string cmd = "PATH=" + path_env + " DEN_HOME=" + den_home + " HOMEBREW_PREFIX=" + prefix +
-                      " HOMEBREW_CELLAR=" + cellar + " ./den " + args + " 2>&1";
+    std::string cmd = "PATH=" + path_env + " DEN_HOME=" + den_home + " DEN_PREFIX=" + prefix +
+                      " HOMEBREW_PREFIX=" + prefix + " HOMEBREW_CELLAR=" + cellar + " ./den " +
+                      args + " 2>&1";
 
     FILE* pipe = ::popen(cmd.c_str(), "r");
     if (!pipe)

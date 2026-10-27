@@ -166,20 +166,12 @@ jobs:
       - name: Verify ${{ matrix.formula }} binary is present
         if: steps.override_check.outputs.skip != 'true'
         run: |
-          # den stores packages in the shared Homebrew Cellar:
-          #   macOS:  /opt/homebrew/Cellar/<name>/
-          #   Linux:  /home/linuxbrew/.linuxbrew/Cellar/<name>/
-          # (controlled by HOMEBREW_CELLAR env var; we use the default)
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            ARCH=$(uname -m)
-            if [ "$ARCH" = "arm64" ]; then
-              cellar="/opt/homebrew/Cellar"
-            else
-              cellar="/usr/local/Cellar"
-            fi
-          else
-            cellar="/home/linuxbrew/.linuxbrew/Cellar"
-          fi
+          # Ask den where its store is rather than assuming Homebrew's Cellar.
+          # With DEN_HOME set (job env) den keeps kegs under its own prefix,
+          # e.g. ${DEN_HOME}/prefix/Cellar, never /opt/homebrew/Cellar.
+          ./build/den config
+          cellar="$(./build/den config | awk -F': *' '$1 == "store" { print $2; exit }')"
+          [ -n "${cellar}" ] || { echo "FAIL: could not read store from 'den config'"; exit 1; }
           pkg_dir="${cellar}/${{ matrix.formula }}"
           echo "Looking for install under: ${pkg_dir}"
           find "${pkg_dir}" -maxdepth 3 2>/dev/null || true

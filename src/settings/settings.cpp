@@ -77,6 +77,18 @@ inline void from_json(const nlohmann::json& j, SearchSettings& s) {
         s.provider = j["provider"].get<std::string>();
 }
 
+inline void to_json(nlohmann::json& j, const StoreSettings& s) {
+    j = nlohmann::json::object();
+    if (s.prefix)
+        j["prefix"] = *s.prefix;
+}
+
+inline void from_json(const nlohmann::json& j, StoreSettings& s) {
+    s = StoreSettings{};
+    if (j.is_object() && j.contains("prefix") && j["prefix"].is_string())
+        s.prefix = j["prefix"].get<std::string>();
+}
+
 inline void to_json(nlohmann::json& j, const TapSettings& t) {
     j = nlohmann::json::object();
     for (const auto& [name, url] : t.taps)
@@ -93,7 +105,7 @@ inline void from_json(const nlohmann::json& j, TapSettings& t) {
     }
 }
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Settings, daemon, search, taps, casks)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Settings, daemon, store, search, taps, casks)
 
 // ---------------------------------------------------------------------------
 // File helpers

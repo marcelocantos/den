@@ -5,11 +5,14 @@
 
 #include "../core/error.h"
 #include "../env/manifest.h"
+#include "../index/bottle_cellar.h"
+#include "../index/index.h"
 #include "../platform/platform.h"
 #include "trust_checks.h"
 
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <iostream>
@@ -70,6 +73,52 @@ void check_store(const Config& config, std::vector<Finding>& findings) {
     } else if (!fs::is_directory(config.store)) {
         error(findings, "store path exists but is not a directory: " + config.store.string());
     }
+}
+
+// ---------------------------------------------------------------------------
+// Check 2b: bottle Cellars and Mach-O header space. A prefix longer than the
+// standard one is only an informational note; it's a warning when the store
+// already holds kegs whose bottles were built for a different fixed Cellar.
+// ---------------------------------------------------------------------------
+void check_prefix_header_space(const Config& config, std::vector<Finding>& findings,
+                               std::vector<std::string>& notes) {
+    SPDLOG_DEBUG("check: prefix header space");
+#ifdef __APPLE__
+    constexpr bool macho = true;
+#else
+    constexpr bool macho = false;
+#endif
+    auto note = prefix_header_space_note(config.prefix.string(),
+                                         standard_bottle_prefix(config.arch), macho);
+
+    std::vector<std::string> mismatched;
+    const auto index_path = config.cache / "index.json";
+    std::error_code ec;
+    if (fs::is_directory(config.store, ec) && fs::exists(index_path, ec)) {
+        try {
+            auto idx = load_index(index_path);
+            mismatched =
+                kegs_with_mismatched_cellar(config.store, idx, config.arch, config.macos_version);
+        } catch (const std::exception& e) {
+            SPDLOG_DEBUG("bottle cellar check skipped: {}", e.what());
+        }
+    }
+
+    if (mismatched.empty()) {
+        if (!note.empty())
+            notes.push_back(std::move(note));
+        return;
+    }
+    std::string msg = std::to_string(mismatched.size()) + " keg(s) in " + config.store.string() +
+                      " come from bottles built for a different fixed Cellar and likely don't "
+                      "work (den no longer pours these):";
+    for (const auto& k : mismatched)
+        msg += "\n    " + k;
+    msg += "\n  Reinstall them from source (den install --build-from-source <name>) or remove "
+           "them.";
+    if (!note.empty())
+        msg += "\n  " + note;
+    warn(findings, std::move(msg));
 }
 
 // ---------------------------------------------------------------------------
@@ -297,15 +346,71 @@ const char* severity_label(Severity s) {
 
 } // namespace
 
+std::string standard_bottle_prefix(Arch arch) {
+#ifdef __APPLE__
+    return arch == Arch::Arm64 ? "/opt/homebrew" : "/usr/local";
+#else
+    (void)arch;
+    return "/home/linuxbrew/.linuxbrew";
+#endif
+}
+
+std::string prefix_header_space_note(const std::string& prefix, const std::string& standard,
+                                     bool macho) {
+    if (!macho || prefix.size() <= standard.size())
+        return {};
+    return "prefix " + prefix + " is " + std::to_string(prefix.size()) +
+           " characters, longer than " + standard + " (" + std::to_string(standard.size()) +
+           ") that bottles are built for. Relocatable bottles pour here as they do with "
+           "Homebrew; den refuses fixed-cellar bottles, and an install fails cleanly if a "
+           "relocated Mach-O load command doesn't fit in the binary's header space.";
+}
+
+std::vector<std::string> kegs_with_mismatched_cellar(const fs::path& store, const PackageIndex& idx,
+                                                     Arch arch,
+                                                     const std::optional<MacOsVersion>& macos) {
+    std::vector<std::string> out;
+    std::error_code ec;
+    for (const auto& formula : fs::directory_iterator(store, ec)) {
+        if (!formula.is_directory(ec))
+            continue;
+        const auto name = formula.path().filename().string();
+        const auto* pkg = idx.find(name);
+        if (!pkg || pkg->archives.empty())
+            continue;
+        std::vector<std::string> tags;
+        for (const auto& [tag, _] : pkg->archives)
+            tags.push_back(tag);
+        auto best = best_archive_tag(arch, macos, tags);
+        if (!best)
+            continue;
+        const auto& archive = pkg->archives.at(*best);
+        if (bottle_pours_into(*best, archive, store))
+            continue;
+        const auto required = required_bottle_cellar(*best, archive);
+        std::error_code kec;
+        for (const auto& keg : fs::directory_iterator(formula.path(), kec)) {
+            const auto ver = keg.path().filename().string();
+            if (ver.empty() || ver[0] == '.' || !keg.is_directory(kec))
+                continue;
+            out.push_back(name + "/" + ver + " (bottle Cellar " + required + ")");
+        }
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
 std::vector<Finding> doctor(const Config& config) {
     std::vector<Finding> findings;
+    std::vector<std::string> notes;
 
     check_den_home_structure(config, findings);
     check_store(config, findings);
+    check_prefix_header_space(config, findings, notes);
     check_manifest(config, findings);
     check_env_materialisation(config, findings);
     check_broken_symlinks(config, findings);
@@ -313,6 +418,11 @@ std::vector<Finding> doctor(const Config& config) {
     check_file_permissions(config, findings);
     check_host_toolchain(config, findings);
     check_trust_model(config, findings);
+
+    // Informational notes aren't findings: they don't count or affect the
+    // exit status.
+    for (const auto& n : notes)
+        std::cout << "[info] " << n << "\n";
 
     // Summary output.
     int warnings = 0;

@@ -68,8 +68,8 @@ static RunResult run_den_env(const std::string& extra_env, const std::string& ar
                              const std::string& den_home) {
     const std::string prefix = den_home + "/brew";
     const std::string cellar = prefix + "/Cellar";
-    const std::string cmd = "DEN_HOME=" + den_home + " HOMEBREW_PREFIX=" + prefix +
-                            " HOMEBREW_CELLAR=" + cellar +
+    const std::string cmd = "DEN_HOME=" + den_home + " DEN_PREFIX=" + prefix +
+                            " HOMEBREW_PREFIX=" + prefix + " HOMEBREW_CELLAR=" + cellar +
                             (extra_env.empty() ? "" : " " + extra_env) + " ./den " + args + " 2>&1";
 
     FILE* pipe = ::popen(cmd.c_str(), "r");

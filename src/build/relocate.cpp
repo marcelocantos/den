@@ -223,6 +223,16 @@ void codesign_adhoc(const fs::path& file) {
     }
 }
 
+[[noreturn]] void throw_header_space(const fs::path& file, const std::string& from,
+                                     const std::string& to, const std::string& output) {
+    throw UserError("cannot relocate " + file.string() + ": the rewritten load command\n  " + from +
+                    "\n  -> " + to +
+                    "\ndoes not fit in the binary's Mach-O header space (den's prefix is longer "
+                    "than the one the bottle was built for). The keg was not installed.\n"
+                    "install_name_tool: " +
+                    output);
+}
+
 /// Expand @@HOMEBREW_*@@ placeholders in Mach-O load commands, dylib ids, and
 /// rpaths via install_name_tool. Length may grow (CELLAR placeholder is 19
 /// bytes; /opt/homebrew/Cellar is 20), so in-place null-pad patching is not
@@ -262,6 +272,8 @@ uint32_t fix_macho_placeholders(const fs::path& dir, const std::string& prefix,
                 if (r.spawned && r.exit_code == 0) {
                     changed = true;
                     SPDLOG_DEBUG("relocated dylib id: {} -> {}", id, new_id);
+                } else if (install_name_tool_out_of_header_space(r.output)) {
+                    throw_header_space(file, id, new_id, r.output);
                 } else {
                     SPDLOG_WARN("install_name_tool -id failed for {}: {}", file.string(), r.output);
                 }
@@ -285,6 +297,8 @@ uint32_t fix_macho_placeholders(const fs::path& dir, const std::string& prefix,
             if (r.spawned && r.exit_code == 0) {
                 changed = true;
                 SPDLOG_DEBUG("relocated install name: {} -> {}", name, new_name);
+            } else if (install_name_tool_out_of_header_space(r.output)) {
+                throw_header_space(file, name, new_name, r.output);
             } else {
                 SPDLOG_WARN("install_name_tool -change failed for {} ({} -> {}): {}", file.string(),
                             name, new_name, r.output);
@@ -305,6 +319,8 @@ uint32_t fix_macho_placeholders(const fs::path& dir, const std::string& prefix,
             if (r.spawned && r.exit_code == 0) {
                 changed = true;
                 SPDLOG_DEBUG("relocated rpath: {} -> {}", rpath, new_rpath);
+            } else if (install_name_tool_out_of_header_space(r.output)) {
+                throw_header_space(file, rpath, new_rpath, r.output);
             } else {
                 SPDLOG_WARN("install_name_tool -rpath failed for {}: {}", file.string(), r.output);
             }
@@ -551,6 +567,15 @@ uint32_t fix_elf_placeholders(const fs::path& dir, const std::string& prefix,
 }
 
 } // namespace
+
+/// install_name_tool's report that a rewritten load command no longer fits
+/// in the binary's header padding ("larger updated load commands do not
+/// fit"). Brew bottles are built for their standard prefix, so a longer den
+/// prefix can exhaust the padding.
+bool install_name_tool_out_of_header_space(const std::string& output) {
+    return output.find("load commands do not fit") != std::string::npos ||
+           output.find("headerpad") != std::string::npos;
+}
 
 std::string expand_homebrew_placeholders(std::string path, const std::string& prefix,
                                          const std::string& cellar) {

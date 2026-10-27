@@ -68,6 +68,7 @@ Snapshot as of v0.10.0.
 | `daemon.upgrade_window` | string? | `null` | Stable |
 | `daemon.interval_secs` | u64? | `null` | Stable |
 | `search.provider` | string? | `null` | Stable |
+| `store.prefix` | string? | `null` | Needs review |
 | `taps` | object (name → source) | `{}` | Needs review |
 | `casks` | object (token → version) | `{}` | Needs review |
 
@@ -76,6 +77,8 @@ Snapshot as of v0.10.0.
 | Variable | Stability | Notes |
 |---|---|---|
 | `DEN_HOME` | Stable | Override den home directory |
+| `DEN_PREFIX` | Needs review | Override den's prefix (store = `$DEN_PREFIX/Cellar`); beats `store.prefix` |
+| `HOMEBREW_PREFIX` / `HOMEBREW_CELLAR` / `HOMEBREW_CASKROOM` | Stable | Locate Homebrew for `den migrate` and diagnostics only; never select den's store |
 | `DEN_ENV` | Stable | Currently active environment path |
 
 ### File formats
@@ -106,7 +109,8 @@ Snapshot as of v0.10.0.
 
 | Path | Stability | Notes |
 |---|---|---|
-| `/opt/homebrew/Cellar/<name>/<version>/` | Stable | Shared Cellar with Homebrew (🎯T49). den and brew coexist; den tracks what it manages via `~/.den/` manifests. |
+| `<prefix>/Cellar/<name>/<version>/` | Stable | den's store. `<prefix>` resolves as `DEN_PREFIX` > `config.json` `store.prefix` > `$DEN_HOME/prefix` (if populated) > legacy shared Homebrew Cellar > `$DEN_HOME/prefix` (default `~/.den/prefix`). `HOMEBREW_*` env vars never select it. |
+| `/opt/homebrew/Cellar/<name>/<version>/` | Stable | Shared Cellar with Homebrew (🎯T49) — opt-in: `den migrate` pins `store.prefix` to Homebrew's prefix, after which den and brew coexist and den tracks what it manages via `~/.den/` manifests. Pre-isolation den homes with kegs there keep using it. |
 
 ## Gaps and prerequisites for 1.0
 

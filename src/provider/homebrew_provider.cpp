@@ -11,6 +11,7 @@
 #include "../download/fetch.h"
 #include "../env/environment.h"
 #include "../env/manifest.h"
+#include "../index/bottle_cellar.h"
 #include "../index/dep_resolve.h"
 #include "../platform/platform.h"
 #include "../store/link.h"
@@ -98,6 +99,15 @@ bool install_one(const Config& config, const Package& pkg) {
     }
 
     const auto& archive = pkg.archives.at(*best);
+
+    // Like Homebrew, only :any / :any_skip_relocation bottles pour anywhere.
+    // A bottle built for a fixed Cellar (e.g. /opt/homebrew/Cellar) has that
+    // path compiled in, so refuse before downloading rather than pour a keg
+    // that can't work.
+    if (!bottle_pours_into(*best, archive, config.store)) {
+        throw UserError(
+            fixed_cellar_refusal(pkg, *best, required_bottle_cellar(*best, archive), config.store));
+    }
 
     // 🎯T42/T64: independent trust cross-check BEFORE we download or extract.
     //
@@ -413,6 +423,8 @@ std::optional<fs::path> prefetch_bottle(const Config& config, const Package& pkg
     if (!best)
         return std::nullopt;
     const auto& archive = pkg.archives.at(*best);
+    if (!bottle_pours_into(*best, archive, config.store))
+        return std::nullopt; // install_one refuses it; don't download it
     auto cache_dir = config.cache / "archives";
     fs::create_directories(cache_dir);
     if (archive.url.find("ghcr.io") != std::string::npos || archive.url.empty())

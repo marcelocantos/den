@@ -6,6 +6,7 @@
 #include "../core/error.h"
 #include "../env/manifest.h"
 #include "../settings/settings.h"
+#include "../store/store.h"
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -532,6 +533,50 @@ MigrationSummary migrate_from_homebrew(const Config& config, const std::vector<s
     // (read_manifest) so we never replace it with a partial import.
     const Manifest current = read_manifest(config.den_home, kRootEnv);
     Settings settings = read_settings(config.den_home);
+
+    // --- Store targeting (store isolation / 🎯T49) ---
+    // Migration is metadata-only: kegs stay in Homebrew's Cellar. So once
+    // formulae are adopted, den's store *must* be Homebrew's Cellar, and
+    // that has to be explicit — a fresh DEN_HOME otherwise gets a private
+    // prefix. Pin store.prefix in config.json to Homebrew's prefix. Refuse
+    // when den is explicitly pointed elsewhere (DEN_PREFIX / store.prefix)
+    // or already owns kegs in its private store: switching stores would
+    // orphan them.
+    std::optional<std::string> pin_prefix;
+    if (!kegs.empty() && !config.shares_homebrew_cellar()) {
+        const fs::path brew_prefix = config.homebrew_cellar.parent_path();
+        std::string refusal;
+        if (config.prefix_source == PrefixSource::EnvDenPrefix ||
+            config.prefix_source == PrefixSource::Settings) {
+            refusal = std::string("den's prefix is explicitly set to ") + config.prefix.string() +
+                      " (" + to_string(config.prefix_source) +
+                      "), but migrate adopts kegs in place in Homebrew's Cellar " +
+                      config.homebrew_cellar.string() + ". Unset it (or point it at " +
+                      brew_prefix.string() + ") to migrate.";
+        } else if (!list_installed(config.store).empty()) {
+            refusal = "den already has packages in its private store " + config.store.string() +
+                      "; migrating would switch den's store to Homebrew's Cellar " +
+                      config.homebrew_cellar.string() +
+                      " and orphan them. Use a fresh DEN_HOME, or `den uninstall` them first.";
+        } else if (config.homebrew_cellar.filename() != "Cellar") {
+            refusal = "Homebrew's Cellar " + config.homebrew_cellar.string() +
+                      " is not <prefix>/Cellar; set DEN_PREFIX to Homebrew's prefix explicitly.";
+        }
+        if (!refusal.empty()) {
+            if (!opts.dry_run) {
+                throw UserError("cannot migrate: " + refusal);
+            }
+            std::cout << "==> [dry-run] warning: a real migrate would refuse: " << refusal << "\n";
+        } else {
+            pin_prefix = brew_prefix.string();
+            std::cout << (opts.dry_run ? "==> [dry-run] Would pin" : "==> Pinning")
+                      << " den's prefix to Homebrew's: store.prefix = " << brew_prefix.string()
+                      << "\n";
+        }
+    } else if (!kegs.empty() && config.prefix_source == PrefixSource::LegacyShared) {
+        // Pre-isolation home already sharing the Cellar: make it explicit.
+        pin_prefix = config.prefix.string();
+    }
     const fs::path services_path = migrated_services_path(config.den_home);
     ServiceRecords service_records = load_migrated_services(services_path);
     std::set<std::string> svc_set = service_names(service_records.services);
@@ -570,6 +615,10 @@ MigrationSummary migrate_from_homebrew(const Config& config, const std::vector<s
     // Casks live in settings, not the package manifest: they are not Cellar
     // kegs, and `den upgrade` would otherwise try to pour them as bottles.
     bool settings_changed = false;
+    if (pin_prefix && !opts.dry_run && settings.store.prefix != pin_prefix) {
+        settings.store.prefix = pin_prefix;
+        settings_changed = true;
+    }
     {
         std::set<std::string> seen;
         for (const auto& cask : casks) {
@@ -698,6 +747,10 @@ MigrationSummary migrate_from_homebrew(const Config& config, const std::vector<s
         std::cout << "==> Homebrew was not modified; `brew` continues to work.\n";
         std::cout << "    To roll back den's migration, remove "
                   << root_manifest_path(config.den_home).string() << "\n";
+        if (pin_prefix) {
+            std::cout << "    den's store is now Homebrew's Cellar (store.prefix = " << *pin_prefix
+                      << "); remove that key from config.json as well.\n";
+        }
     }
 
     return summary;

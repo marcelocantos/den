@@ -17,6 +17,7 @@
 #include <spdlog/spdlog.h>
 
 #include <csignal>
+#include <cstdlib>
 #include <ctime>
 #include <fcntl.h>
 #include <fstream>
@@ -185,6 +186,13 @@ bool in_maintenance_window(const std::string& window) {
 std::string launchd_plist(const fs::path& den_binary, const fs::path& den_home) {
     std::string bin = xml_escape(den_binary.string());
     std::string home = xml_escape(den_home.string());
+    // Carry an explicit DEN_PREFIX into the agent so the daemon maintains
+    // the same store as the shell that installed it (store isolation).
+    std::string prefix_env;
+    if (const char* dp = std::getenv("DEN_PREFIX"); dp && *dp) {
+        prefix_env =
+            "        <key>DEN_PREFIX</key>\n        <string>" + xml_escape(dp) + "</string>\n";
+    }
 
     std::ostringstream o;
     o << R"(<?xml version="1.0" encoding="UTF-8"?>
@@ -208,7 +216,8 @@ std::string launchd_plist(const fs::path& den_binary, const fs::path& den_home) 
         <key>DEN_HOME</key>
         <string>)"
       << home << R"(</string>
-        <key>PATH</key>
+)" << prefix_env
+      << R"(        <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     </dict>
 
