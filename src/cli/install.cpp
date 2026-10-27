@@ -4,9 +4,11 @@
 #include "install.h"
 
 #include "../activity/activity.h"
+#include "../core/error.h"
 #include "../daemon/daemon.h"
 #include "../env/environment.h"
 #include "../env/manifest.h"
+#include "../store/pins.h"
 
 #include <iostream>
 #include <vector>
@@ -61,6 +63,10 @@ void uninstall_packages(const Config& config, PackageProvider& provider,
             bucket.erase(name);
             auto_bucket.erase(name);
             std::cout << "Removed '" << name << "' from environment '" << active << "'.\n";
+            // brew parity: uninstalling a package drops its pin.
+            if (unpin_package(config.den_home, name)) {
+                std::cout << "Unpinned '" << name << "'.\n";
+            }
         }
     });
 
@@ -73,18 +79,15 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
     auto active = active_env_path(config.den_home);
     auto resolved = resolve(config.den_home, active);
 
-    struct Upgrade {
-        std::string name;
-        std::string installed;
-        std::string available;
-    };
-    std::vector<Upgrade> upgrades;
+    const auto pins = read_pins(config.den_home);
+    std::vector<UpgradeCandidate> candidates;
+    std::vector<std::string> explicitly_pinned;
 
     if (names.empty()) {
         for (const auto& [name, version] : resolved) {
             auto* pkg = idx.find(name);
             if (pkg && pkg->version != version) {
-                upgrades.push_back({name, version, pkg->version});
+                candidates.push_back({name, version, pkg->version});
             }
         }
     } else {
@@ -94,22 +97,43 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
                 std::cerr << "warning: '" << name << "' is not installed\n";
                 continue;
             }
+            if (auto pin = pins.find(name); pin != pins.end()) {
+                // brew: "<name> is pinned. You must unpin it to upgrade it."
+                std::cerr << "error: '" << name << "' is pinned at " << pin->second
+                          << "; run `den unpin " << name << "` to upgrade it\n";
+                explicitly_pinned.push_back(name);
+                continue;
+            }
             auto* pkg = idx.find(name);
             if (!pkg) {
                 std::cerr << "warning: '" << name << "' not in index\n";
                 continue;
             }
             if (pkg->version != it->second) {
-                upgrades.push_back({name, it->second, pkg->version});
+                candidates.push_back({name, it->second, pkg->version});
             } else {
                 std::cout << name << " is already up to date (" << it->second << ").\n";
             }
         }
     }
 
+    auto split = partition_pinned(candidates, pins);
+    const auto& upgrades = split.upgrade;
+    if (!split.held.empty()) {
+        std::cout << "Not upgrading " << split.held.size() << " pinned package(s):\n";
+        for (const auto& h : split.held) {
+            std::cout << "  " << h.name << " " << h.installed << " (pinned; " << h.available
+                      << " available)\n";
+        }
+    }
+
     if (upgrades.empty()) {
-        std::cout << "All packages are up to date.\n";
-        return;
+        if (explicitly_pinned.empty()) {
+            std::cout << "All packages are up to date.\n";
+            return;
+        }
+        throw UserError(std::to_string(explicitly_pinned.size()) +
+                        " requested package(s) are pinned");
     }
 
     std::cout << upgrades.size() << " package(s) to upgrade:\n";
@@ -143,6 +167,10 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
     auto links = materialise(config.den_home, config.store, active, &idx);
     std::cout << "  " << links << " symlinks\n";
     std::cout << "==> " << upgrades.size() << " package(s) upgraded.\n";
+    if (!explicitly_pinned.empty()) {
+        throw UserError(std::to_string(explicitly_pinned.size()) +
+                        " requested package(s) are pinned");
+    }
 }
 
 } // namespace den
