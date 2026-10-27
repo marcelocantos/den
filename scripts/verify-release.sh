@@ -27,7 +27,8 @@
 #   VR_SERVICE_PLIST   service plist to exercise (default: <formula prefix>/{sh.brew,homebrew.mxcl}.den.plist)
 #   VR_LAUNCHD_SECS    how long the agent must stay up (default: 60)
 #   VR_REPLICA_ROOT    install root the trust replica must ship under (default: dirname(DEN_BIN)/..)
-#   VR_DOCTOR_ALLOW    ERE of `den doctor` [error] lines to tolerate (default: none)
+#   VR_DOCTOR_ALLOW    optional ERE of `den doctor` [error] lines to tolerate (default:
+#                      none; a clean release needs no allowlist)
 #   VR_KEEP            1 = keep the scratch root (default: kept only on failure)
 #
 # Steps: version brew-test isolation update bottle opt-link trust pin upgrade
@@ -247,6 +248,12 @@ s_doctor() {
     doc=$(den doctor 2>&1) || rc=$?
     echo "$doc"; [ "$rc" -eq 0 ] || { echo "doctor exit $rc"; return 1; }
     errs=$(echo "$doc" | grep '\[error\]' || true)
+    # den writes config.json 0600 and doctor agrees on that mode (octal output).
+    local cfg="$DEN_HOME/config.json" mode
+    if [ -f "$cfg" ]; then
+        mode=$(stat -f %Lp "$cfg" 2>/dev/null || stat -c %a "$cfg")
+        [ "$mode" = 600 ] || { echo "config.json mode $mode (expected 600)"; return 1; }
+    fi
     [ -n "${VR_DOCTOR_ALLOW:-}" ] && errs=$(echo "$errs" | grep -Ev "$VR_DOCTOR_ALLOW" || true)
     [ -z "$errs" ] || { echo "doctor errors:"; echo "$errs"; return 1; }
 }
