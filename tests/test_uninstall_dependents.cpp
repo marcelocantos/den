@@ -8,8 +8,11 @@
 #include <doctest.h>
 
 #include "cli/uninstall_deps.h"
+#include "env/environment.h"
 #include "env/manifest.h"
 #include "index/index.h"
+#include "store/prefix_link.h"
+#include "store/store.h"
 
 #include <array>
 #include <chrono>
@@ -232,6 +235,55 @@ TEST_SUITE("uninstall::dependents::cli") {
         INFO(r.out);
         CHECK(r.code == 0);
         CHECK(read_manifest(fx.cfg.den_home, "/").packages["homebrew"].count("libfoo") == 0);
+    }
+
+    TEST_CASE("a refused uninstall leaves prefix links, link records and opt untouched") {
+        if (!fs::exists("./den")) {
+            MESSAGE("den binary not in cwd — skipping");
+            return;
+        }
+        DepsFx fx;
+        const auto prefix = fx.tmp.path / "prefix";
+        fx.pkg("libfoo");
+        fx.pkg("app", {"libfoo"});
+        save_index(fx.idx, fx.cfg.cache / "index.json");
+        for (const auto& n : {"libfoo", "app"}) {
+            const auto keg = fx.cfg.store / n / "1.0";
+            fs::create_directories(keg / "bin");
+            std::ofstream(keg / "bin" / n) << "#!/bin/sh\n";
+            fs::permissions(keg / "bin" / n, fs::perms::owner_all, fs::perm_options::add);
+            mark_keg_owned(keg, n, "1.0");
+        }
+        fx.env("/", {"libfoo", "app"});
+        materialise(fx.cfg.den_home, fx.cfg.store, "/");
+
+        const auto bin = prefix / "bin" / "libfoo";
+        const auto opt = prefix / "opt" / "libfoo";
+        const auto ctx = make_prefix_link_context(fx.cfg.den_home, fx.cfg.store);
+        REQUIRE(fs::is_symlink(bin));
+        REQUIRE(fs::is_symlink(opt));
+        REQUIRE(prefix_linked_version(ctx, "libfoo"));
+        const auto bin_target = fs::read_symlink(bin);
+        const auto opt_target = fs::read_symlink(opt);
+
+        auto r = run_den("uninstall libfoo", fx.tmp.path);
+        INFO(r.out);
+        REQUIRE(r.code != 0);
+        CHECK(r.out.find("Refusing to uninstall libfoo") != std::string::npos);
+        CHECK(fs::is_symlink(bin));
+        CHECK(fs::read_symlink(bin) == bin_target);
+        CHECK(fs::is_symlink(opt));
+        CHECK(fs::read_symlink(opt) == opt_target);
+        CHECK(prefix_linked_version(ctx, "libfoo") == std::optional<std::string>("1.0"));
+        CHECK(read_manifest(fx.cfg.den_home, "/").packages["homebrew"].count("libfoo") == 1);
+
+        // The override then goes through #85's unlink and #84's opt release.
+        r = run_den("uninstall --ignore-dependencies libfoo", fx.tmp.path);
+        INFO(r.out);
+        CHECK(r.code == 0);
+        CHECK_FALSE(fs::is_symlink(bin));
+        CHECK_FALSE(fs::is_symlink(opt));
+        CHECK_FALSE(prefix_linked_version(ctx, "libfoo"));
     }
 }
 
