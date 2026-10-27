@@ -350,6 +350,57 @@ TEST_SUITE("build::bundled_ruby_env") {
         }
     }
 
+    // Same fixture, but with the formula's sha256 replaced.
+    std::string formula_with_sha(const std::string& klass, const std::string& version,
+                                 const fs::path& tarball, const std::string& sha) {
+        auto text = formula(klass, version, tarball);
+        auto real = hash_file(tarball);
+        auto at = text.find(real);
+        REQUIRE(at != std::string::npos);
+        return text.replace(at, real.size(), sha);
+    }
+
+    TEST_CASE("e2e: -s refuses a source tarball whose sha256 does not match") {
+        Scratch s(false);
+        auto tarball = make_source(s.tmp.path, "rbtool", "1.2");
+        const std::string wrong(64, 'a');
+        write(s.tmp.path / "tap/Formula/rbtool.rb",
+              formula_with_sha("Rbtool", "1.2", tarball, wrong));
+        auto tap = s.den("tap add test/rbtap --url " + (s.tmp.path / "tap").string());
+        INFO(tap);
+        auto out = s.den("install -s test/rbtap/rbtool");
+        INFO(out);
+        // The bundled Ruby refused it (its message names both digests)...
+        CHECK(out.find("SHA256 mismatch for rbtool source tarball") != std::string::npos);
+        CHECK(out.find("expected: " + wrong) != std::string::npos);
+        CHECK(out.find("actual:   " + hash_file(tarball)) != std::string::npos);
+        CHECK(out.find("==> Built rbtool") == std::string::npos);
+        CHECK(out.find("==> Building\n") == std::string::npos);
+        // ...and nothing was built, installed or kept in the source cache.
+        CHECK_FALSE(fs::exists(s.prefix() / "Cellar/rbtool"));
+        CHECK_FALSE(fs::exists(s.prefix() / "bin/rbtool"));
+        auto sources = s.home / "cache/sources";
+        CHECK_FALSE(fs::exists(sources / "rbtool-1.2.tar.gz"));
+        CHECK_FALSE(fs::exists(sources / "rbtool-1.2.tar.gz.download"));
+    }
+
+    TEST_CASE("e2e: -s replaces a cached source tarball that no longer matches") {
+        Scratch s(false);
+        auto tarball = make_source(s.tmp.path, "rbtool", "1.2");
+        write(s.tmp.path / "tap/Formula/rbtool.rb", formula("Rbtool", "1.2", tarball));
+        auto cached = s.home / "cache/sources/rbtool-1.2.tar.gz";
+        write(cached, "not the real tarball\n");
+        auto tap = s.den("tap add test/rbtap --url " + (s.tmp.path / "tap").string());
+        INFO(tap);
+        auto out = s.den("install -s test/rbtap/rbtool");
+        INFO(out);
+        CHECK(out.find("bundled ruby build failed") == std::string::npos);
+        CHECK(out.find("==> Built rbtool 1.2") != std::string::npos);
+        CHECK(run((s.prefix() / "Cellar/rbtool/1.2/bin/rbtool").string()) == "rbtool 1.2\n");
+        REQUIRE(fs::exists(cached));
+        CHECK(hash_file(cached) == hash_file(tarball));
+    }
+
     TEST_CASE("core-shaped formula: build_from_source in a scratch prefix via bundled Ruby") {
         TempDir t;
         auto den_home = t.path / "den";

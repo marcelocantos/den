@@ -158,15 +158,40 @@ ENV["PATH"] = (bin_paths + [ENV["PATH"]].compact).join(":")
 
 # --- Download and extract source ---
 
-url = api_formula&.stable&.url || klass.stable&.url rescue nil
+# Take the URL and its checksum from the same spec so they always match.
+stable = (api_formula&.stable&.url ? api_formula.stable : klass.stable) rescue nil
+url = stable&.url
 abort "error: no source URL for #{name}" unless url
+checksum = stable.checksum rescue nil
+expected_sha256 = (checksum.respond_to?(:hexdigest) ? checksum.hexdigest : checksum).to_s.downcase
+unless expected_sha256.match?(/\A[0-9a-f]{64}\z/)
+  abort "error: no sha256 for #{name} source; refusing to build an unverified tarball"
+end
+
+require "digest"
+sha256_of = ->(path) { Digest::SHA256.file(path.to_s).hexdigest }
 
 tarball = den_home / "cache" / "sources" / "#{name}-#{version}.tar.gz"
 tarball.dirname.mkpath
 
+# A cached tarball is only reused if it still matches; otherwise fetch again.
+if tarball.exist? && sha256_of.call(tarball) != expected_sha256
+  $stderr.puts "==> Cached source for #{name} does not match its sha256; downloading again"
+  tarball.delete
+end
+
 unless tarball.exist?
   $stderr.puts "==> Downloading #{url}"
-  system("curl", "-fsSL", "-o", tarball.to_s, url) or abort "download failed"
+  partial = Pathname.new("#{tarball}.download")
+  partial.delete if partial.exist?
+  system("curl", "-fsSL", "-o", partial.to_s, url) or abort "download failed"
+  actual = sha256_of.call(partial)
+  if actual != expected_sha256
+    partial.delete
+    abort "error: SHA256 mismatch for #{name} source tarball\n" \
+          "  expected: #{expected_sha256}\n  actual:   #{actual}\n  url:      #{url}"
+  end
+  partial.rename(tarball)
 end
 
 build_dir = den_home / "cache" / "build" / "#{name}-#{version}"
