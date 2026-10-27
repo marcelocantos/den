@@ -23,8 +23,11 @@
 #include "provider/exec.h"
 
 using den::expand_homebrew_placeholders;
+using den::homebrew_java_path;
+using den::homebrew_perl_path;
 using den::relocate_bottle;
 using den::relocate_text_placeholders;
+using den::RelocationOptions;
 namespace fs = std::filesystem;
 
 TEST_SUITE("relocate") {
@@ -73,6 +76,167 @@ TEST_SUITE("relocate") {
 
         fs::remove_all(tmp);
     }
+
+    TEST_CASE("homebrew_java_path follows the openjdk dependency") {
+#ifdef __APPLE__
+        const std::string home = "/libexec/openjdk.jdk/Contents/Home";
+#else
+        const std::string home = "/libexec";
+#endif
+        CHECK(homebrew_java_path("/opt/homebrew", {"openjdk"}) ==
+              "/opt/homebrew/opt/openjdk" + home);
+        CHECK(homebrew_java_path("/opt/homebrew", {"zstd", "openjdk@21"}) ==
+              "/opt/homebrew/opt/openjdk@21" + home);
+        CHECK(homebrew_java_path("/opt/homebrew", {"openjdk@1.8"}) ==
+              "/opt/homebrew/opt/openjdk@1.8" + home);
+        // Not an openjdk formula — fall back to plain openjdk.
+        CHECK(homebrew_java_path("/opt/homebrew", {"openjdk-tools", "node"}) ==
+              "/opt/homebrew/opt/openjdk" + home);
+        CHECK(homebrew_java_path("/opt/homebrew", {}) == "/opt/homebrew/opt/openjdk" + home);
+    }
+
+    TEST_CASE("homebrew_perl_path matches brew's brewed/system perl choice") {
+        CHECK(homebrew_perl_path("/opt/homebrew", "perl", {}) == "/opt/homebrew/opt/perl/bin/perl");
+        CHECK(homebrew_perl_path("/opt/homebrew", "exiftool", {"perl"}) ==
+              "/opt/homebrew/opt/perl/bin/perl");
+#ifdef __APPLE__
+        // No declared perl dependency: system perl, never the brewed one.
+        auto sys = homebrew_perl_path("/opt/homebrew", "automake", {"autoconf"});
+        CHECK(sys.rfind("/usr/bin/perl", 0) == 0);
+        CHECK(fs::exists(sys));
+#else
+        CHECK(homebrew_perl_path("/opt/homebrew", "automake", {"autoconf"}) ==
+              "/opt/homebrew/opt/perl/bin/perl");
+#endif
+    }
+
+    TEST_CASE("relocate_text_placeholders expands JAVA and PERL when given") {
+        auto tmp = fs::temp_directory_path() / ("den-relocate-jp-" + std::to_string(::getpid()));
+        fs::create_directories(tmp / "bin");
+        {
+            std::ofstream out(tmp / "bin" / "tool");
+            out << "#!@@HOMEBREW_PERL@@ -w\n"
+                << "JAVA_HOME=\"${JAVA_HOME:-@@HOMEBREW_JAVA@@}\"\n";
+        }
+        auto n = relocate_text_placeholders(tmp, "/p", "/p/Cellar", "/p/opt/openjdk/libexec",
+                                            "/usr/bin/perl5.34");
+        CHECK(n == 1);
+        std::ifstream in(tmp / "bin" / "tool");
+        std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        CHECK(content == "#!/usr/bin/perl5.34 -w\n"
+                         "JAVA_HOME=\"${JAVA_HOME:-/p/opt/openjdk/libexec}\"\n");
+        fs::remove_all(tmp);
+    }
+
+    TEST_CASE("relocate_bottle with skip_linkage still expands every text placeholder") {
+        // :any_skip_relocation bottles (automake, gradle, apktool, yarn, ...)
+        // carry @@HOMEBREW_*@@ in scripts; brew expands them on pour.
+        auto tmp =
+            fs::temp_directory_path() / ("den-relocate-portable-" + std::to_string(::getpid()));
+        auto keg = tmp / "Cellar" / "apktool" / "3.0.3";
+        fs::create_directories(keg / "bin");
+        {
+            std::ofstream out(keg / "bin" / "apktool");
+            out << "#!/bin/bash\n"
+                << "export JAVA_HOME=\"${JAVA_HOME:-@@HOMEBREW_JAVA@@}\"\n"
+                << "exec \"@@HOMEBREW_CELLAR@@/apktool/3.0.3/libexec/run\" \"$@\"\n";
+        }
+        {
+            std::ofstream out(keg / "bin" / "aclocal");
+            out << "#!@@HOMEBREW_PERL@@\nmy $p = '@@HOMEBREW_PREFIX@@/share';\n";
+        }
+
+        RelocationOptions opts;
+        opts.dependencies = {"openjdk"};
+        opts.skip_linkage = true;
+        relocate_bottle(keg, "apktool", "3.0.3", tmp / "Cellar", opts);
+
+        auto read = [](const fs::path& f) {
+            std::ifstream in(f);
+            return std::string((std::istreambuf_iterator<char>(in)),
+                               std::istreambuf_iterator<char>());
+        };
+        auto apk = read(keg / "bin" / "apktool");
+        auto acl = read(keg / "bin" / "aclocal");
+        CHECK(apk.find("@@HOMEBREW_") == std::string::npos);
+        CHECK(acl.find("@@HOMEBREW_") == std::string::npos);
+        CHECK(apk.find(homebrew_java_path(tmp.string(), {"openjdk"})) != std::string::npos);
+        CHECK(apk.find((tmp / "Cellar" / "apktool" / "3.0.3" / "libexec" / "run").string()) !=
+              std::string::npos);
+        CHECK(acl.find("#!" + homebrew_perl_path(tmp.string(), "apktool", {"openjdk"}) + "\n") ==
+              0);
+        CHECK(acl.find("'" + tmp.string() + "/share'") != std::string::npos);
+        fs::remove_all(tmp);
+    }
+
+#ifdef __APPLE__
+    TEST_CASE("relocate_bottle rewrites Mach-O files whose names look like extensions") {
+        // gawk ships bin/gawk-5.4.1: extension ".1" used to be on a man-page
+        // skip-list, so its @@HOMEBREW_PREFIX@@/opt/<dep> loads were never
+        // rewritten and the pour failed with unresolved placeholders.
+        auto tmp =
+            fs::temp_directory_path() / ("den-relocate-versioned-" + std::to_string(::getpid()));
+        fs::create_directories(tmp / "lib");
+        fs::create_directories(tmp / "bin");
+        auto lib_src = tmp / "lib.c";
+        auto bin_src = tmp / "main.c";
+        auto lib_path = tmp / "lib" / "libprobe.dylib";
+        auto bin_path = tmp / "bin" / "probe-5.4.1";
+        {
+            std::ofstream out(lib_src);
+            out << "int probe_value(void) { return 42; }\n";
+        }
+        {
+            std::ofstream out(bin_src);
+            out << "int probe_value(void);\n"
+                   "int main(void) { return probe_value() == 42 ? 0 : 1; }\n";
+        }
+        const std::string placeholder_id = "@@HOMEBREW_CELLAR@@/probe/5.4.1/lib/libprobe.dylib";
+        auto lib_build = den::run_tool({"clang", "-dynamiclib", lib_src.string(), "-o",
+                                        lib_path.string(), "-install_name", placeholder_id});
+        REQUIRE(lib_build.exit_code == 0);
+        auto bin_build =
+            den::run_tool({"clang", bin_src.string(), lib_path.string(), "-o", bin_path.string()});
+        REQUIRE(bin_build.exit_code == 0);
+        auto change = den::run_tool(
+            {"install_name_tool", "-change", lib_path.string(), placeholder_id, bin_path.string()});
+        REQUIRE(change.exit_code == 0);
+        REQUIRE(fs::path(bin_path).extension() == ".1");
+
+        CHECK_NOTHROW(relocate_bottle(tmp, "probe", "5.4.1", fs::path("/opt/homebrew/Cellar")));
+
+        auto post = den::run_tool({"otool", "-L", bin_path.string()});
+        CHECK(post.output.find("@@HOMEBREW_") == std::string::npos);
+        CHECK(post.output.find("/opt/homebrew/Cellar/probe/5.4.1/lib/libprobe.dylib") !=
+              std::string::npos);
+        auto cs = den::run_tool({"codesign", "--verify", bin_path.string()});
+        CHECK(cs.exit_code == 0);
+        fs::remove_all(tmp);
+    }
+
+    TEST_CASE("relocate_bottle with skip_linkage leaves Mach-O load commands alone") {
+        auto tmp =
+            fs::temp_directory_path() / ("den-relocate-skiplink-" + std::to_string(::getpid()));
+        fs::create_directories(tmp / "lib");
+        auto lib_src = tmp / "lib.c";
+        auto lib_path = tmp / "lib" / "libprobe.dylib";
+        {
+            std::ofstream out(lib_src);
+            out << "int probe_value(void) { return 42; }\n";
+        }
+        const std::string placeholder_id = "@@HOMEBREW_CELLAR@@/probe/1.0/lib/libprobe.dylib";
+        auto lib_build = den::run_tool({"clang", "-dynamiclib", lib_src.string(), "-o",
+                                        lib_path.string(), "-install_name", placeholder_id});
+        REQUIRE(lib_build.exit_code == 0);
+
+        RelocationOptions opts;
+        opts.skip_linkage = true;
+        CHECK_NOTHROW(relocate_bottle(tmp, "probe", "1.0", fs::path("/opt/homebrew/Cellar"), opts));
+        auto post = den::run_tool({"otool", "-D", lib_path.string()});
+        CHECK(post.output.find(placeholder_id) != std::string::npos);
+        fs::remove_all(tmp);
+    }
+#endif
 
 #ifdef __APPLE__
     TEST_CASE("relocate_bottle expands Mach-O install names and yields a runnable binary") {
