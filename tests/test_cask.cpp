@@ -373,6 +373,91 @@ struct UpgradeEnv {
 
 } // namespace
 
+TEST_SUITE("cask::appdir_binary") {
+
+    // Regression: casks such as libreoffice, macdown and openscad declare
+    // `binary "$APPDIR/Foo.app/Contents/..."`. The app is still in staging
+    // when binaries are resolved, so den used to look in the appdir, find
+    // nothing and fail with "binary not found".
+    Package make_appdir_binary_cask(const fs::path& zip, const std::string& version,
+                                    bool binary_first) {
+        Package pkg = make_zip_cask("demo", version, zip, "Demo.app");
+        CaskArtifact bin;
+        bin.kind = CaskArtifactKind::Binary;
+        bin.source = "$APPDIR/Demo.app/Contents/MacOS/AppBin";
+        bin.target = "$HOMEBREW_PREFIX/bin/demo";
+        if (binary_first) {
+            pkg.cask_artifacts.insert(pkg.cask_artifacts.begin(), bin);
+        } else {
+            pkg.cask_artifacts.push_back(bin);
+        }
+        return pkg;
+    }
+
+    TEST_CASE("binary inside a staged app links into the installed app") {
+        for (bool binary_first : {false, true}) {
+            CAPTURE(binary_first);
+            TmpDir tmp;
+            auto cfg = make_cfg(tmp.path);
+            setenv("DEN_APPDIR", cfg.appdir.c_str(), 1);
+            setenv("DEN_HOME", cfg.den_home.c_str(), 1);
+
+            auto zip = make_app_zip(tmp.path / "zip", "Demo.app");
+            install_cask(cfg, make_appdir_binary_cask(zip, "1.0", binary_first));
+
+            const auto link = cfg.den_home / "envs" / "ROOT" / "bin" / "demo";
+            const auto want = cfg.appdir / "Demo.app" / "Contents" / "MacOS" / "AppBin";
+            REQUIRE(fs::is_symlink(link));
+            CHECK(fs::read_symlink(link) == want);
+            CHECK(fs::exists(link)); // resolves now that the app is swapped in
+            CHECK(fs::equivalent(link, want));
+            // Nothing left in staging; the binary was not copied out of the bundle.
+            std::error_code ec;
+            for (const auto& e : fs::directory_iterator(cfg.appdir, ec)) {
+                CHECK(e.path().filename() == "Demo.app");
+            }
+            CHECK_FALSE(fs::exists(cask_version_path(cfg, "demo", "1.0") / "stage" / "demo"));
+
+            auto receipt = read_cask_receipt(cask_version_path(cfg, "demo", "1.0"));
+            REQUIRE(receipt);
+            REQUIRE(receipt->binaries.size() == 1);
+            CHECK(receipt->binaries[0].target == want);
+
+            // Upgrade keeps the link pointing into the (new) app.
+            auto zip2 = make_versioned_zip(tmp.path / "zip2", "v2");
+            install_cask(cfg, make_appdir_binary_cask(zip2, "2.0", binary_first));
+            CHECK(read_marker(cfg.appdir / "Demo.app") == "v2");
+            CHECK(fs::is_symlink(link));
+            CHECK(fs::equivalent(link, want));
+
+            uninstall_cask(cfg, "demo");
+            CHECK_FALSE(fs::exists(cfg.appdir / "Demo.app"));
+            CHECK_FALSE(fs::is_symlink(link));
+
+            unsetenv("DEN_APPDIR");
+            unsetenv("DEN_HOME");
+        }
+    }
+
+    TEST_CASE("missing binary inside a staged app is refused and leaves nothing behind") {
+        TmpDir tmp;
+        auto cfg = make_cfg(tmp.path);
+        setenv("DEN_APPDIR", cfg.appdir.c_str(), 1);
+        setenv("DEN_HOME", cfg.den_home.c_str(), 1);
+        auto zip = make_app_zip(tmp.path / "zip", "Demo.app");
+        auto pkg = make_appdir_binary_cask(zip, "1.0", false);
+        pkg.cask_artifacts.back().source = "$APPDIR/Demo.app/Contents/MacOS/Nope";
+        CHECK_THROWS_AS(install_cask(cfg, pkg), UserError);
+        CHECK_FALSE(fs::exists(cfg.appdir / "Demo.app"));
+        CHECK_FALSE(is_cask_installed(cfg, "demo"));
+        CHECK_FALSE(fs::is_symlink(cfg.den_home / "envs" / "ROOT" / "bin" / "demo"));
+        std::error_code ec;
+        CHECK(fs::is_empty(cfg.appdir, ec));
+        unsetenv("DEN_APPDIR");
+        unsetenv("DEN_HOME");
+    }
+}
+
 TEST_SUITE("cask::upgrade_safety") {
 
     TEST_CASE("upgrade succeeds and replaces the den-owned app") {

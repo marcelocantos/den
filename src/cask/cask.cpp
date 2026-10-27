@@ -212,6 +212,17 @@ std::string expand_wrapper_script(std::string script, const std::string& token,
     return script;
 }
 
+/// If `source` is an "$APPDIR/<App>.app/..." reference, return the part after
+/// "$APPDIR/"; otherwise nullopt.
+std::optional<std::string> appdir_relative(const std::string& source) {
+    for (const char* prefix : {"$APPDIR/", "$appdir/"}) {
+        if (source.starts_with(prefix)) {
+            return source.substr(std::string_view(prefix).size());
+        }
+    }
+    return std::nullopt;
+}
+
 /// Basename of the link den should create for a binary artifact.
 std::string binary_link_name(const CaskArtifact& art) {
     if (!art.target.empty()) {
@@ -726,6 +737,12 @@ InstallResult install_cask(const Config& config, const Package& pkg) {
         // Determine artifacts. If the index carried none, fall back to "any
         // .app in the stage" so simple casks still install after a partial index.
         std::vector<CaskArtifact> artifacts = pkg.cask_artifacts;
+        // Apps are staged before anything else so a binary that points into
+        // one ("$APPDIR/Foo.app/...") can be resolved against the staged copy
+        // regardless of the order the index lists the artifacts in.
+        std::stable_partition(artifacts.begin(), artifacts.end(), [](const CaskArtifact& a) {
+            return a.kind == CaskArtifactKind::App;
+        });
         if (artifacts.empty()) {
             for (auto it = fs::recursive_directory_iterator(
                      stage, fs::directory_options::skip_permission_denied, ec);
@@ -780,13 +797,49 @@ InstallResult install_cask(const Config& config, const Package& pkg) {
                 receipt.apps.push_back(dest);
                 placed_anything = true;
             } else if (art.kind == CaskArtifactKind::Binary) {
-                const fs::path src = resolve_binary_source(stage, appdir, art.source);
-                if (!fs::exists(src)) {
-                    throw UserError("cask '" + token + "': binary not found: " + art.source);
-                }
                 const std::string link_name = binary_link_name(art);
                 if (link_name.empty() || link_name.find('/') != std::string::npos) {
                     throw UserError("cask '" + token + "': unsafe binary name");
+                }
+                // "$APPDIR/Foo.app/..." inside an app this cask is installing:
+                // the app is still in staging, so check the staged copy and
+                // link to where it will live after the swap. The binary stays
+                // inside the bundle (as Homebrew does) so bundle-relative
+                // resources keep working.
+                if (const auto rel = appdir_relative(art.source)) {
+                    const fs::path rel_path = fs::path(*rel).lexically_normal();
+                    const auto first = rel_path.begin();
+                    if (first != rel_path.end() && *first != ".." && rel_path.is_relative()) {
+                        const auto sa = std::find_if(
+                            staged_apps.begin(), staged_apps.end(),
+                            [&](const StagedApp& s) { return s.dest.filename() == *first; });
+                        if (sa != staged_apps.end()) {
+                            const fs::path inner = rel_path.lexically_relative(*first);
+                            const fs::path staged_src = sa->staged / inner;
+                            if (!fs::exists(staged_src)) {
+                                throw UserError("cask '" + token +
+                                                "': binary not found: " + art.source);
+                            }
+                            fs::permissions(staged_src,
+                                            fs::perms::owner_exec | fs::perms::group_exec |
+                                                fs::perms::others_exec,
+                                            fs::perm_options::add, ec);
+                            const fs::path final_target = sa->dest / inner;
+                            const fs::path link = bin_dir / link_name;
+                            if (!fs::is_symlink(link, ec) && fs::exists(link, ec)) {
+                                throw UserError("refusing to overwrite binary '" + link.string() +
+                                                "'");
+                            }
+                            planned_links.push_back({link, final_target});
+                            receipt.binaries.push_back(CaskBinaryLink{link, final_target});
+                            placed_anything = true;
+                            continue;
+                        }
+                    }
+                }
+                const fs::path src = resolve_binary_source(stage, appdir, art.source);
+                if (!fs::exists(src)) {
+                    throw UserError("cask '" + token + "': binary not found: " + art.source);
                 }
                 // Keep a durable copy under the stage so env rebuilds can relink.
                 fs::path staged_bin = stage / link_name;
