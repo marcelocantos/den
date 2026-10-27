@@ -25,6 +25,7 @@ enum class CaskArtifactKind {
     App,    // .app bundle → appdir (/Applications or DEN_APPDIR)
     Binary, // bare executable → env bin symlink
     Pkg,    // macOS installer package
+    Font,   // font file → user font dir (~/Library/Fonts or DEN_FONTDIR)
 };
 
 /// One installable artifact declared by a Homebrew cask.

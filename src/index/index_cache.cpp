@@ -29,7 +29,8 @@ constexpr std::array<char, 8> kMagic = {'D', 'E', 'N', 'I', 'D', 'X', '\0', '\0'
 // v2: records carry Package::cask_uninstall (🎯T12 uninstall stanzas).
 // v3: records carry Package::revision (Homebrew formula revision).
 // v4: archives carry Package::Archive::cellar (fixed-cellar bottles).
-constexpr uint32_t kFormatVersion = 4;
+// v5: cask artifacts may be CaskArtifactKind::Font.
+constexpr uint32_t kFormatVersion = 5;
 constexpr uint32_t kEndianTag = 0x01020304;
 constexpr size_t kHeaderSize = 80;
 constexpr size_t kEntrySize = 24;
@@ -437,7 +438,7 @@ Package decode_package(const char* data, size_t len) {
     auto n_arts = r.num<uint32_t>();
     for (uint32_t i = 0; i < n_arts; ++i) {
         CaskArtifact a;
-        a.kind = static_cast<CaskArtifactKind>(r.enum_byte(2));
+        a.kind = static_cast<CaskArtifactKind>(r.enum_byte(3));
         a.source = r.str();
         a.target = r.str();
         pkg.cask_artifacts.push_back(std::move(a));

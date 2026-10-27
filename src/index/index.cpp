@@ -192,7 +192,7 @@ Package transform_formula(const json& f) {
     return pkg;
 }
 
-/// Parse cask artifacts of kinds den can install (app, binary, pkg).
+/// Parse cask artifacts of kinds den can install (app, binary, pkg, font).
 /// Unsupported kinds (installer scripts, preflight, zap-only, …) are ignored;
 /// install_cask will error if nothing supported remains.
 void parse_cask_artifacts(const json& arts, std::vector<CaskArtifact>& out) {
@@ -240,6 +240,23 @@ void parse_cask_artifacts(const json& arts, std::vector<CaskArtifact>& out) {
                 if (art.target.empty()) {
                     art.target = a["target"].get<std::string>();
                 }
+            }
+            if (!art.source.empty()) {
+                out.push_back(std::move(art));
+            }
+        }
+        if (a.contains("font")) {
+            // {"font": ["ttf/Hack-Bold.ttf"], "target": "/$HOME/Library/Fonts/Hack-Bold.ttf"}
+            CaskArtifact art;
+            art.kind = CaskArtifactKind::Font;
+            const auto& font = a["font"];
+            if (font.is_array() && !font.empty() && font[0].is_string()) {
+                art.source = font[0].get<std::string>();
+            } else if (font.is_string()) {
+                art.source = font.get<std::string>();
+            }
+            if (a.contains("target") && a["target"].is_string()) {
+                art.target = a["target"].get<std::string>();
             }
             if (!art.source.empty()) {
                 out.push_back(std::move(art));
@@ -385,6 +402,9 @@ json package_to_json(const Package& pkg) {
             case CaskArtifactKind::Pkg:
                 aj["kind"] = "pkg";
                 break;
+            case CaskArtifactKind::Font:
+                aj["kind"] = "font";
+                break;
             }
             aj["source"] = a.source;
             if (!a.target.empty()) {
@@ -463,6 +483,8 @@ Package package_from_json(const json& j) {
                 a.kind = CaskArtifactKind::Binary;
             } else if (kind == "pkg") {
                 a.kind = CaskArtifactKind::Pkg;
+            } else if (kind == "font") {
+                a.kind = CaskArtifactKind::Font;
             } else {
                 a.kind = CaskArtifactKind::App;
             }

@@ -10,6 +10,8 @@
 #include "cask/cask.h"
 #include "core/config.h"
 #include "core/error.h"
+#include "index/index.h"
+#include "index/index_cache.h"
 #include "index/package.h"
 #include "platform/platform.h"
 #include "settings/settings.h"
@@ -456,6 +458,160 @@ TEST_SUITE("cask::linux") {
         ar.url = "https://example.com/demo.zip";
         pkg.archives["default"] = ar;
         CHECK_THROWS_AS(install_cask(cfg, pkg), UserError);
+    }
+}
+
+#endif
+
+// Font casks (font-hack, the nerd fonts, …) declare `font` artifacts, which
+// den used to drop, failing with "has no supported artifacts".
+TEST_SUITE("cask::fonts") {
+
+    TEST_CASE("index keeps font artifacts through json and the lookup cache") {
+        json casks = json::array({{
+            {"token", "font-hack"},
+            {"name", json::array({"Hack"})},
+            {"version", "3.003"},
+            {"url", "https://example.com/Hack-v3.003-ttf.zip"},
+            {"sha256", std::string(64, 'a')},
+            {"artifacts", json::array({
+                              {{"font", json::array({"ttf/Hack-Bold.ttf"})},
+                               {"target", "/$HOME/Library/Fonts/Hack-Bold.ttf"}},
+                              {{"font", json::array({"ttf/Hack-Regular.ttf"})},
+                               {"target", "/$HOME/Library/Fonts/Hack-Regular.ttf"}},
+                              {{"zap", json::array()}},
+                          })},
+        }});
+        auto idx = transform_homebrew("[]", casks.dump());
+        const auto* p = idx.find("font-hack");
+        REQUIRE(p != nullptr);
+        REQUIRE(p->cask_artifacts.size() == 2);
+        CHECK(p->cask_artifacts[0].kind == CaskArtifactKind::Font);
+        CHECK(p->cask_artifacts[0].source == "ttf/Hack-Bold.ttf");
+        CHECK(p->cask_artifacts[0].target == "/$HOME/Library/Fonts/Hack-Bold.ttf");
+
+        TmpDir tmp;
+        const auto path = tmp.path / "index.json";
+        save_index(idx, path);
+        for (auto loaded : {load_index(path), load_index_json(path)}) {
+            const auto* q = loaded.find("font-hack");
+            REQUIRE(q != nullptr);
+            REQUIRE(q->cask_artifacts.size() == 2);
+            CHECK(q->cask_artifacts[1].kind == CaskArtifactKind::Font);
+            CHECK(q->cask_artifacts[1].source == "ttf/Hack-Regular.ttf");
+        }
+        auto enc = index_cache::encode_package(*p);
+        auto dec = index_cache::decode_package(enc.data(), enc.size());
+        REQUIRE(dec.cask_artifacts.size() == 2);
+        CHECK(dec.cask_artifacts[0].kind == CaskArtifactKind::Font);
+    }
+}
+
+#ifdef __APPLE__
+
+namespace {
+
+/// A font-only cask whose zip holds ttf/<name> for each font.
+Package make_font_cask(const fs::path& dir, const std::string& version,
+                       const std::vector<std::pair<std::string, std::string>>& fonts) {
+    const fs::path content = dir / "content";
+    fs::create_directories(content);
+    for (const auto& [name, body] : fonts) {
+        write_file(content / "ttf" / name, body);
+    }
+    auto zip = make_app_zip(dir, "Unused.app");
+    auto pkg = make_zip_cask("font-test", version, zip, "Unused.app");
+    pkg.cask_artifacts.clear();
+    for (const auto& [name, body] : fonts) {
+        (void)body;
+        CaskArtifact a;
+        a.kind = CaskArtifactKind::Font;
+        a.source = "ttf/" + name;
+        a.target = "/$HOME/Library/Fonts/" + name;
+        pkg.cask_artifacts.push_back(a);
+    }
+    return pkg;
+}
+
+std::string slurp_file(const fs::path& p) {
+    std::ifstream in(p, std::ios::binary);
+    return {std::istreambuf_iterator<char>(in), {}};
+}
+
+struct FontEnv {
+    TmpDir tmp;
+    Config cfg = make_cfg(tmp.path);
+    fs::path fontdir = tmp.path / "Fonts";
+    FontEnv() {
+        setenv("DEN_APPDIR", cfg.appdir.c_str(), 1);
+        setenv("DEN_HOME", cfg.den_home.c_str(), 1);
+        setenv("DEN_FONTDIR", fontdir.c_str(), 1);
+    }
+    ~FontEnv() {
+        unsetenv("DEN_APPDIR");
+        unsetenv("DEN_HOME");
+        unsetenv("DEN_FONTDIR");
+    }
+};
+
+} // namespace
+
+TEST_SUITE("cask::fonts") {
+
+    TEST_CASE("a font-only cask installs its fonts and uninstall removes them") {
+        FontEnv env;
+        auto pkg = make_font_cask(env.tmp.path / "v1", "1.0",
+                                  {{"A-Regular.ttf", "regular"}, {"A-Bold.ttf", "bold"}});
+        install_cask(env.cfg, pkg);
+
+        CHECK(cask_fontdir(env.cfg) == env.fontdir);
+        CHECK(slurp_file(env.fontdir / "A-Regular.ttf") == "regular");
+        CHECK(slurp_file(env.fontdir / "A-Bold.ttf") == "bold");
+        CHECK(font_owned_by_den(env.cfg, env.fontdir / "A-Bold.ttf"));
+        auto receipt = read_cask_receipt(cask_version_path(env.cfg, "font-test", "1.0"));
+        REQUIRE(receipt);
+        CHECK(receipt->fonts.size() == 2);
+        CHECK(receipt->apps.empty());
+        CHECK(fs::is_empty(env.cfg.appdir));
+        // No staging/backup leftovers beside the fonts.
+        size_t entries = 0;
+        for ([[maybe_unused]] const auto& e : fs::directory_iterator(env.fontdir))
+            ++entries;
+        CHECK(entries == 2);
+
+        uninstall_cask(env.cfg, "font-test");
+        CHECK_FALSE(fs::exists(env.fontdir / "A-Regular.ttf"));
+        CHECK_FALSE(fs::exists(env.fontdir / "A-Bold.ttf"));
+        CHECK_FALSE(is_cask_installed(env.cfg, "font-test"));
+    }
+
+    TEST_CASE("refuses to overwrite a font den did not install") {
+        FontEnv env;
+        write_file(env.fontdir / "A-Bold.ttf", "user's own");
+        auto pkg = make_font_cask(env.tmp.path / "v1", "1.0",
+                                  {{"A-Regular.ttf", "regular"}, {"A-Bold.ttf", "bold"}});
+        CHECK_THROWS_AS(install_cask(env.cfg, pkg), UserError);
+        CHECK(slurp_file(env.fontdir / "A-Bold.ttf") == "user's own");
+        CHECK_FALSE(fs::exists(env.fontdir / "A-Regular.ttf"));
+        CHECK_FALSE(is_cask_installed(env.cfg, "font-test"));
+    }
+
+    TEST_CASE("upgrade replaces den's fonts and drops ones the new version lacks") {
+        FontEnv env;
+        install_cask(env.cfg, make_font_cask(env.tmp.path / "v1", "1.0",
+                                             {{"A-Regular.ttf", "r1"}, {"A-Old.ttf", "old"}}));
+        install_cask(env.cfg, make_font_cask(env.tmp.path / "v2", "2.0",
+                                             {{"A-Regular.ttf", "r2"}, {"A-New.ttf", "new"}}));
+        CHECK(slurp_file(env.fontdir / "A-Regular.ttf") == "r2");
+        CHECK(slurp_file(env.fontdir / "A-New.ttf") == "new");
+        CHECK_FALSE(fs::exists(env.fontdir / "A-Old.ttf"));
+        CHECK(installed_cask_version(env.cfg, "font-test") == "2.0");
+        size_t entries = 0;
+        for ([[maybe_unused]] const auto& e : fs::directory_iterator(env.fontdir))
+            ++entries;
+        CHECK(entries == 2);
+        uninstall_cask(env.cfg, "font-test");
+        CHECK(fs::is_empty(env.fontdir));
     }
 }
 
