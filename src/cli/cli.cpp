@@ -45,6 +45,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <string>
@@ -297,8 +298,8 @@ void Cli::M::setup() {
         // Merge third-party taps (🎯T67) so tapped formulae resolve by both
         // their bare and "user/repo/name" forms before any provider runs.
         merge_taps_into_index(cfg, idx);
-        // "user/repo/name" installs under the bare formula name (the keg,
-        // opt link and manifest entry all use it).
+        // "user/repo/name" is recorded qualified in the manifest; the keg
+        // and links use the bare name.
         for (auto& name : install_names)
             name = resolve_tap_install_name(idx, name);
 
@@ -361,6 +362,26 @@ void Cli::M::setup() {
         auto active = active_env_path(cfg.den_home);
         auto manifest = read_manifest(cfg.den_home, active);
 
+        // Map each name onto the manifest key it means, so bare, qualified
+        // and user/homebrew-repo forms of a tap formula all find its entry.
+        std::optional<PackageIndex> idx;
+        auto index = [&]() -> const PackageIndex& {
+            if (!idx) {
+                idx = load_index(cfg.cache / "index.json");
+                merge_taps_into_index(cfg, *idx);
+            }
+            return *idx;
+        };
+        for (auto& name : uninstall_names) {
+            bool listed = false;
+            for (const auto& [_, bucket] : manifest.packages) {
+                listed = listed || bucket.count(name) > 0;
+            }
+            if (!listed) {
+                name = resolve_uninstall_name(index(), manifest, name);
+            }
+        }
+
         std::map<PackageProvider*, std::vector<std::string>> by_provider;
         for (const auto& name : uninstall_names) {
             auto& provider = resolve_provider(registry, name, manifest, this->uninstall_provider);
@@ -378,9 +399,7 @@ void Cli::M::setup() {
                 }
             }
             if (!brew_names.empty()) {
-                auto idx = load_index(cfg.cache / "index.json");
-                merge_taps_into_index(cfg, idx);
-                auto dependents = find_runtime_dependents(cfg, idx, active, brew_names);
+                auto dependents = find_runtime_dependents(cfg, index(), active, brew_names);
                 if (!dependents.empty()) {
                     std::cerr << format_dependents_refusal(dependents);
                     std::exit(1);
@@ -404,6 +423,8 @@ void Cli::M::setup() {
     upgrade->callback([this] {
         auto cfg = Config::detect();
         auto idx = load_index(cfg.cache / "index.json");
+        // Manifest entries may be tap-qualified ("user/repo/name").
+        merge_taps_into_index(cfg, idx);
         if (idx.empty()) {
             SPDLOG_ERROR("package index is empty — run `den update` first");
             return;

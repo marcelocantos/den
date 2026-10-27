@@ -7,6 +7,7 @@
 
 #include "../src/core/error.h"
 #include "../src/download/sha256.h"
+#include "../src/store/store.h"
 #include "../src/tap/tap.h"
 #include "../src/tap/url_formula.h"
 
@@ -413,7 +414,8 @@ end
         }
     }
 
-    TEST_CASE("user/repo/name resolves to the bare name, and wins over a shadowed core formula") {
+    TEST_CASE("user/repo/name resolves to the canonical qualified name, even when core "
+              "shadows it") {
         PackageIndex idx;
         Package core;
         core.name = "tool";
@@ -422,16 +424,20 @@ end
         Package tap;
         tap.name = "test/urltap/tool";
         tap.version = "1.0";
-        tap.ruby_source_path = "/taps/test/homebrew-urltap/Formula/tool.rb";
+        tap.ruby_source_path = "/taps/test/urltap/Formula/tool.rb";
         idx.packages["tool"] = core;
         idx.packages["test/urltap/tool"] = tap;
 
         CHECK(resolve_tap_install_name(idx, "ripgrep") == "ripgrep");
-        CHECK(resolve_tap_install_name(idx, "test/urltap/tool") == "tool");
-        REQUIRE(idx.find("tool") != nullptr);
-        CHECK(idx.find("tool")->version == "1.0");
-        CHECK(idx.find("tool")->name == "tool");
-        CHECK(idx.find("tool")->ruby_source_path == tap.ruby_source_path);
+        CHECK(resolve_tap_install_name(idx, "tool") == "tool");
+        CHECK(resolve_tap_install_name(idx, "test/urltap/tool") == "test/urltap/tool");
+        CHECK(resolve_tap_install_name(idx, "test/homebrew-urltap/tool") == "test/urltap/tool");
+        CHECK(resolve_tap_install_name(idx, "nobody/tap/tool") == "nobody/tap/tool");
+        // The core entry is untouched.
+        CHECK(idx.find("tool")->version == "9.9");
+        CHECK(keg_name("test/urltap/tool") == "tool");
+        CHECK(keg_name("tool") == "tool");
+        CHECK(keg_name("cask/firefox") == "cask/firefox");
     }
 
     // ── end to end through the CLI (offline, file:// download) ──────────────
@@ -517,7 +523,7 @@ end
         CHECK(out.find("not found") == std::string::npos);
         // -s builds from the formula source (the build itself is out of scope
         // here); what matters is that it found the tap formula.
-        CHECK(out.find("read tap formula source for 'tool' from") != std::string::npos);
+        CHECK(out.find("read tap formula source for 'test/urltap/tool' from") != std::string::npos);
         CHECK(out.find("taps/test/urltap/Formula/tool.rb") != std::string::npos);
     }
 }

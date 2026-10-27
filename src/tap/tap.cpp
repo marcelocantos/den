@@ -301,24 +301,16 @@ void merge_taps_into_index(const Config& config, PackageIndex& idx) {
         }
     }
     // Tap formulae name tap dependencies in qualified form
-    // ("marcelocantos/tap/blurter"); point them at the bare name when that
-    // entry is the same tap formula. (A dependency shadowed by a core formula
-    // stays qualified and does not resolve.)
+    // ("marcelocantos/tap/blurter"). Keep them qualified, so a dependency
+    // whose bare name is also a core formula still resolves to the tap one,
+    // and canonicalise "user/homebrew-repo/name" to "user/repo/name".
     for (auto& [name, pkg] : idx.packages) {
         // Only tap entries: they record an absolute formula path, core
         // entries a repo-relative one ("Formula/t/tree.rb").
         if (!pkg.ruby_source_path || !pkg.ruby_source_path->starts_with("/"))
             continue;
-        for (auto& dep : pkg.dependencies) {
-            if (std::count(dep.begin(), dep.end(), '/') != 2)
-                continue;
+        for (auto& dep : pkg.dependencies)
             dep = canonical_formula_ref(dep);
-            auto q = idx.packages.find(dep);
-            auto b = idx.packages.find(dep.substr(dep.rfind('/') + 1));
-            if (q != idx.packages.end() && b != idx.packages.end() &&
-                q->second.ruby_source_path == b->second.ruby_source_path)
-                dep = b->first;
-        }
     }
 }
 
@@ -329,26 +321,15 @@ std::string canonical_formula_ref(const std::string& name) {
     return canonical_tap_name(name.substr(0, last)) + name.substr(last);
 }
 
-std::string resolve_tap_install_name(PackageIndex& idx, const std::string& requested) {
+std::string resolve_tap_install_name(const PackageIndex& idx, const std::string& requested) {
     if (std::count(requested.begin(), requested.end(), '/') != 2)
         return requested;
     // "user/homebrew-repo/name" and "user/repo/name" name the same formula.
     const std::string name = canonical_formula_ref(requested);
     const auto* q = idx.find(name);
-    if (!q || !q->ruby_source_path)
-        return name;
-    const std::string bare = name.substr(name.rfind('/') + 1);
-    const auto* b = idx.find(bare);
-    if (!b || b->ruby_source_path != q->ruby_source_path) {
-        if (b) {
-            std::cerr << "note: " << name << " shadows the core formula '" << bare
-                      << "'; installing the tap formula as " << bare << "\n";
-        }
-        Package pkg = *q;
-        pkg.name = bare;
-        idx.packages[bare] = std::move(pkg);
-    }
-    return bare;
+    if (!q || !q->ruby_source_path || !q->ruby_source_path->starts_with("/"))
+        return requested;
+    return name;
 }
 
 } // namespace den

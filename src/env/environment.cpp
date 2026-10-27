@@ -262,8 +262,8 @@ uint32_t materialise_root(const fs::path& den_home, const fs::path& store, const
     std::set<std::string> manifest_names;
 
     for (const auto& [provider_name, pkgs] : per_provider) {
-        for (const auto& [name, _] : pkgs) {
-            manifest_names.insert(name);
+        for (const auto& [entry, _] : pkgs) {
+            manifest_names.insert(keg_name(entry));
         }
         auto* provider = registry.find(provider_name);
         if (!provider) {
@@ -273,7 +273,11 @@ uint32_t materialise_root(const fs::path& den_home, const fs::path& store, const
             continue;
         }
 
-        for (const auto& [name, version] : pkgs) {
+        for (const auto& [entry, version] : pkgs) {
+            // A tap-qualified entry ("user/repo/name") is looked up in the
+            // index by its qualified form; its keg, prefix links and ledger
+            // records all use the bare keg name.
+            const std::string name = keg_name(entry);
             auto pkg_path = provider->package_root(cfg, name, version);
             if (!fs::exists(pkg_path)) {
                 SPDLOG_WARN("package {}@{} not in store, skipping", name, version);
@@ -283,9 +287,9 @@ uint32_t materialise_root(const fs::path& den_home, const fs::path& store, const
             auto subdirs = subdirs_from(provider->binary_paths(cfg, installed));
             auto current = prefix_linked_version(ctx, name);
 
-            bool opt_only = skip_versioned.count(name) > 0;
+            bool opt_only = skip_versioned.count(entry) > 0 || skip_versioned.count(name) > 0;
             if (provider_name == "homebrew" && idx) {
-                if (const auto* info = idx->find(name); info && info->keg_only) {
+                if (const auto* info = idx->find(entry); info && info->keg_only) {
                     opt_only = true;
                 }
             }
@@ -311,7 +315,8 @@ uint32_t materialise_root(const fs::path& den_home, const fs::path& store, const
             }
 
             auto result =
-                link_into_prefix(ctx, pkg_path, name, subdirs, opts.overwrite.count(name));
+                link_into_prefix(ctx, pkg_path, name, subdirs,
+                                 opts.overwrite.count(name) > 0 || opts.overwrite.count(entry) > 0);
             if (!result.conflicts.empty()) {
                 for (auto& path : result.conflicts) {
                     conflicts.push_back({name, std::move(path)});
@@ -380,7 +385,10 @@ uint32_t materialise_one(const fs::path& den_home, const fs::path& store,
             continue;
         }
 
-        for (const auto& [name, version] : pkgs) {
+        for (const auto& [entry, version] : pkgs) {
+            // A tap-qualified entry ("user/repo/name") is looked up in the
+            // index by its qualified form but linked under its keg name.
+            const std::string name = keg_name(entry);
             auto pkg_path = provider->package_root(cfg, name, version);
             if (!fs::exists(pkg_path)) {
                 SPDLOG_WARN("package {}@{} not in store, skipping", name, version);
@@ -392,14 +400,14 @@ uint32_t materialise_one(const fs::path& den_home, const fs::path& store,
             auto subdirs = subdirs_from(exposed);
 
             // Versioned-family loser: only opt/ link.
-            if (skip_versioned.count(name)) {
+            if (skip_versioned.count(entry) || skip_versioned.count(name)) {
                 total += link_opt_only(pkg_path, dir, name, version);
                 continue;
             }
 
             // Keg-only (Homebrew, index-driven): only opt/ link.
             if (provider_name == "homebrew" && idx) {
-                if (const auto* pkg_info = idx->find(name); pkg_info && pkg_info->keg_only) {
+                if (const auto* pkg_info = idx->find(entry); pkg_info && pkg_info->keg_only) {
                     auto added = link_opt_only(pkg_path, dir, name, version);
                     if (added) {
                         SPDLOG_INFO("{}@{} is keg-only, linked opt/ only", name, version);
@@ -434,7 +442,7 @@ uint32_t materialise_one(const fs::path& den_home, const fs::path& store,
     std::set<std::string> manifest_names;
     for (const auto& [pn, pkgs] : per_provider) {
         for (const auto& [name, _] : pkgs) {
-            manifest_names.insert(name);
+            manifest_names.insert(keg_name(name));
         }
     }
 

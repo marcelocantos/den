@@ -67,6 +67,17 @@ fs::path find_bottle_keg_dir(const fs::path& extract_root, const std::string& na
 
 namespace {
 
+bool install_one(const Config& config, const Package& pkg);
+
+// Tap-qualified packages ("user/repo/name") install into Cellar/<name>.
+bool install_one_qualified(const Config& config, const Package& pkg) {
+    if (keg_name(pkg.name) == pkg.name)
+        return install_one(config, pkg);
+    Package keg = pkg;
+    keg.name = keg_name(pkg.name);
+    return install_one(config, keg);
+}
+
 bool install_one(const Config& config, const Package& pkg) {
     // Cask / app packages take a completely different path from Cellar bottles.
     // Dispatch before any bottle-tag / GHCR logic so "default" archives and
@@ -348,11 +359,11 @@ InstallResult HomebrewProvider::install(const Config& config, std::string_view n
         const bool is_cask = p->artifact_type == ArtifactType::App || !p->cask_artifacts.empty();
         if (is_cask) {
             install_one(config, *p);
-        } else if (::den::is_installed(config.store, p->name, p->version)) {
+        } else if (::den::is_installed(config.store, keg_name(p->name), p->version)) {
             // Already present in the shared Cellar — skip the download/extract.
             SPDLOG_DEBUG("{} {} already installed", p->name, p->version);
         } else {
-            install_one(config, *p);
+            install_one_qualified(config, *p);
         }
         if (p->name != name_str) {
             result.auto_deps.push_back(p->name);
@@ -395,8 +406,8 @@ fs::path HomebrewProvider::package_root(const Config& config, std::string_view n
     if (fs::exists(cask_path)) {
         return cask_path;
     }
-    // Cellar layout: <store>/<name>/<version>/
-    return config.store / std::string(name) / std::string(version);
+    // Cellar layout: <store>/<name>/<version>/ (bare name for "user/repo/name").
+    return config.store / keg_name(name) / std::string(version);
 }
 
 std::vector<fs::path> HomebrewProvider::binary_paths(const Config& /*config*/,

@@ -17,6 +17,12 @@
 
 namespace den {
 
+std::string keg_name(std::string_view name) {
+    if (std::count(name.begin(), name.end(), '/') != 2)
+        return std::string(name);
+    return std::string(name.substr(name.rfind('/') + 1));
+}
+
 fs::path package_path(const fs::path& store, const std::string& name, const std::string& version) {
     return store / name / version;
 }
@@ -141,7 +147,7 @@ std::vector<KegInfo> inspect_cellar(const fs::path& store, const fs::path& den_h
     for (const auto& env_path : list_all(den_home)) {
         auto resolved = resolve(den_home, env_path);
         for (const auto& [name, version] : resolved) {
-            refs[name + "@" + version].insert(env_path);
+            refs[keg_name(name) + "@" + version].insert(env_path);
         }
     }
 
@@ -279,7 +285,7 @@ CleanupReport cleanup_kegs(const fs::path& store, const fs::path& den_home, cons
     std::set<std::string> referenced;
     for (const auto& env_path : list_all(den_home)) {
         for (const auto& [name, version] : resolve(den_home, env_path)) {
-            referenced.insert(name + "/" + version);
+            referenced.insert(keg_name(name) + "/" + version);
         }
     }
 
@@ -375,9 +381,10 @@ OptReleaseAction release_prefix_opt_link(const fs::path& store, const fs::path& 
     // Versions of this formula any environment still resolves to.
     std::set<std::string> referenced;
     for (const auto& env_path : list_all(den_home)) {
-        const auto resolved = resolve(den_home, env_path);
-        if (auto it = resolved.find(name); it != resolved.end()) {
-            referenced.insert(it->second);
+        // Entries may be tap-qualified ("user/repo/name"); they share the keg.
+        for (const auto& [entry, version] : resolve(den_home, env_path)) {
+            if (keg_name(entry) == name)
+                referenced.insert(version);
         }
     }
     if (referenced.count(current.filename().string())) {

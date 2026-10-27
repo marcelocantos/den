@@ -81,7 +81,7 @@ void uninstall_packages(const Config& config, PackageProvider& provider,
     if (pname == "homebrew") {
         for (const auto& name : removed) {
             std::string to;
-            switch (release_prefix_opt_link(config.store, config.den_home, name, &to)) {
+            switch (release_prefix_opt_link(config.store, config.den_home, keg_name(name), &to)) {
             case OptReleaseAction::HandedOff:
                 std::cout << "Pointed opt/" << name << " at " << name << " " << to << ".\n";
                 break;
