@@ -5,6 +5,7 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace den {
 
@@ -15,6 +16,14 @@ namespace fs = std::filesystem;
 /// exists in the cache with the correct hash, the download is skipped.
 fs::path fetch_archive(const std::string& url, const std::string& sha256,
                        const fs::path& cache_dir);
+
+/// Stream `url` to `<cached>.download`, verify it against `sha256`, and only
+/// then publish it at `cached`. The body is never held in memory and is
+/// subject to kMaxArchiveDownloadBytes. On a mismatch or transfer error
+/// nothing is left behind. `headers` are extra request headers. An empty or
+/// "no_check" sha256 skips verification. Throws DownloadError.
+void fetch_verified_to(const std::string& url, const std::string& sha256, const fs::path& cached,
+                       const std::vector<std::string>& headers = {});
 
 /// Fetch a blob from GHCR (GitHub Container Registry) using the OCI
 /// distribution API.  Performs anonymous token auth against
