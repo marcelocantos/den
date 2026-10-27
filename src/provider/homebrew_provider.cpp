@@ -401,10 +401,11 @@ std::vector<fs::path> HomebrewProvider::binary_paths(const Config& /*config*/,
     if (pkg.path.string().find("/caskroom/") != std::string::npos) {
         return {};
     }
-    // Homebrew kegs expose five standard subdirectories — the materialiser
-    // symlinks the contents of each into the env's matching subdir.
+    // The directories `brew link` links out of a keg — the materialiser
+    // symlinks the contents of each into the env's (or, for the root env,
+    // the prefix's) matching subdir.
     std::vector<fs::path> paths;
-    for (const auto& sub : {"bin", "sbin", "lib", "include", "share"}) {
+    for (const auto& sub : {"bin", "sbin", "lib", "include", "share", "etc", "var", "Frameworks"}) {
         auto p = pkg.path / sub;
         if (fs::is_directory(p)) {
             paths.push_back(p);
