@@ -20,6 +20,9 @@ namespace fs = std::filesystem;
 struct UpgradePassResult {
     std::vector<PendingUpgrade> applied;
     std::vector<DeferredUpgrade> deferred;
+    // Pending upgrades held back by `den pin`. They stay pending (so
+    // `den outdated` still shows them) but are never applied.
+    std::vector<PendingUpgrade> pinned;
 };
 
 // Run one upgrade pass over the pending upgrades recorded in `state`.
@@ -32,6 +35,10 @@ struct UpgradePassResult {
 //
 // `state` is mutated in place so a subsequent pass re-attempts deferrals once
 // the holding process has exited. Returns the per-pass tally.
+//
+// Packages pinned in den_home/pins.json are never applied: they stay in
+// state.pending and are reported in result.pinned. A corrupt pins.json holds
+// every upgrade back (fail closed) and records the error in state.errors.
 //
 // `apply`, when set, performs the physical upgrade (pour + manifest) for a
 // not-in-use package. If it throws, the package stays pending, the error is
