@@ -9,12 +9,15 @@
 
 #include <doctest.h>
 
+#include "cli/install.h"
 #include "cli/shell.h"
 #include "core/config.h"
 #include "core/error.h"
 #include "doctor/doctor.h"
 #include "env/environment.h"
 #include "env/manifest.h"
+#include "provider/homebrew_provider.h"
+#include "provider/stub_provider.h"
 #include "store/prefix_link.h"
 #include "store/store.h"
 
@@ -353,6 +356,113 @@ TEST_CASE("prefix link: shell-env puts <prefix>/bin and sbin first") {
         CHECK(sbin < den_bin);
     }
     CHECK(s.find((env_dir(fx.home, "/") / "bin").string()) == std::string::npos);
+}
+
+TEST_CASE("prefix link: uninstalling a root Cellar keg clears its links, records and opt link") {
+    PrefixFx fx;
+    Config cfg;
+    cfg.den_home = fx.home;
+    cfg.store = fx.store;
+    auto k = fx.keg("tool", "1.0");
+    PrefixFx::write(k / "bin" / "tool", "#!/bin/sh\n", true);
+    fx.want("tool", "1.0");
+    materialise(fx.home, fx.store, "/");
+    REQUIRE(fs::is_symlink(fx.prefix / "bin" / "tool"));
+    REQUIRE(fs::is_symlink(fx.prefix / "opt" / "tool"));
+    // The Cellar opt link is the shared, relative one #84's release logic expects.
+    CHECK(fs::read_symlink(fx.prefix / "opt" / "tool") == fs::path("../Cellar/tool/1.0"));
+    const auto ctx = make_prefix_link_context(fx.home, fx.store);
+
+    HomebrewProvider brew(nullptr);
+    uninstall_packages(cfg, brew, {"tool"});
+    CHECK_FALSE(exists_no_follow(fx.prefix / "bin" / "tool"));
+    CHECK_FALSE(exists_no_follow(fx.prefix / "opt" / "tool"));
+    CHECK_FALSE(prefix_linked_version(ctx, "tool"));
+    CHECK(prefix_linked_names(ctx).empty());
+
+    // Re-materialising does not bring anything back.
+    materialise(fx.home, fx.store, "/");
+    CHECK_FALSE(exists_no_follow(fx.prefix / "opt" / "tool"));
+    CHECK_FALSE(exists_no_follow(fx.prefix / "bin" / "tool"));
+}
+
+TEST_CASE("prefix link: opt hand-off from the root env is stable across re-materialise") {
+    PrefixFx fx;
+    Config cfg;
+    cfg.den_home = fx.home;
+    cfg.store = fx.store;
+    auto v1 = fx.keg("tool", "1.0");
+    PrefixFx::write(v1 / "bin" / "tool", "#!/bin/sh\n", true);
+    auto v2 = fx.keg("tool", "2.0");
+    PrefixFx::write(v2 / "bin" / "tool", "#!/bin/sh\n", true);
+    // Root uses the newer keg, so opt/tool points there; /work keeps 1.0.
+    fx.want("tool", "2.0");
+    fx.want("tool", "1.0", "/work");
+    materialise(fx.home, fx.store, "/work");
+    materialise(fx.home, fx.store, "/");
+    REQUIRE(fs::equivalent(fx.prefix / "opt" / "tool", v2));
+
+    HomebrewProvider brew(nullptr);
+    uninstall_packages(cfg, brew, {"tool"});
+    REQUIRE(fs::is_symlink(fx.prefix / "opt" / "tool"));
+    CHECK(fs::read_symlink(fx.prefix / "opt" / "tool") == fs::path("../Cellar/tool/1.0"));
+    CHECK_FALSE(exists_no_follow(fx.prefix / "bin" / "tool"));
+
+    // Neither env's materialise flips it back (ensure_prefix_opt_link only
+    // repoints to a newer keg; the root's ledger has no claim on opt/tool).
+    materialise(fx.home, fx.store, "/");
+    materialise(fx.home, fx.store, "/work");
+    CHECK(fs::equivalent(fx.prefix / "opt" / "tool", v1));
+    CHECK_FALSE(exists_no_follow(fx.prefix / "bin" / "tool"));
+}
+
+TEST_CASE(
+    "prefix link: uninstalling a non-Cellar root package leaves no stale opt link or record") {
+    PrefixFx fx;
+    Config cfg;
+    cfg.den_home = fx.home;
+    cfg.store = fx.store;
+    StubProvider stub;
+    stub.install(cfg, "demo", "");
+    auto m = read_manifest(fx.home, "/");
+    m.packages["stub"]["demo"] = "0.1.0";
+    write_manifest(fx.home, "/", m);
+    materialise(fx.home, fx.store, "/");
+
+    const auto root = stub.package_root(cfg, "demo", "0.1.0");
+    const auto opt = fx.prefix / "opt" / "demo";
+    REQUIRE(fs::is_symlink(opt));
+    CHECK(fs::read_symlink(opt) == root); // absolute: not a Cellar keg
+    REQUIRE(fs::is_symlink(fx.prefix / "bin" / "demo"));
+    const auto ctx = make_prefix_link_context(fx.home, fx.store);
+    REQUIRE(prefix_linked_version(ctx, "demo"));
+
+    uninstall_packages(cfg, stub, {"demo"});
+    CHECK_FALSE(exists_no_follow(opt));
+    CHECK_FALSE(exists_no_follow(fx.prefix / "bin" / "demo"));
+    CHECK_FALSE(prefix_linked_version(ctx, "demo"));
+    CHECK(prefix_linked_names(ctx).empty());
+}
+
+TEST_CASE("prefix link: a foreign opt link for a non-Cellar package name is left alone") {
+    PrefixFx fx;
+    Config cfg;
+    cfg.den_home = fx.home;
+    cfg.store = fx.store;
+    auto brew_demo = fx.keg("demo", "9.9", /*den_owned=*/false);
+    fx.brew_link(fx.prefix / "opt" / "demo", brew_demo);
+    const auto brew_target = fs::read_symlink(fx.prefix / "opt" / "demo");
+
+    StubProvider stub;
+    stub.install(cfg, "demo", "");
+    auto m = read_manifest(fx.home, "/");
+    m.packages["stub"]["demo"] = "0.1.0";
+    write_manifest(fx.home, "/", m);
+    materialise(fx.home, fx.store, "/");
+    CHECK(fs::read_symlink(fx.prefix / "opt" / "demo") == brew_target);
+
+    uninstall_packages(cfg, stub, {"demo"});
+    CHECK(fs::read_symlink(fx.prefix / "opt" / "demo") == brew_target);
 }
 
 TEST_CASE("doctor: PATH order for the root env") {
