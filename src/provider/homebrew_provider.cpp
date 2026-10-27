@@ -16,6 +16,7 @@
 #include "../platform/platform.h"
 #include "../store/link.h"
 #include "../store/store.h"
+#include "../tap/url_formula.h"
 #include "../trust/trust_model.h"
 
 #include <spdlog/spdlog.h>
@@ -86,6 +87,12 @@ bool install_one(const Config& config, const Package& pkg) {
         ensure_prefix_opt_link(config.store, pkg.name,
                                package_path(config.store, pkg.name, pkg.version));
         return false;
+    }
+
+    // Tap formulae that ship a prebuilt download instead of a bottle.
+    if (pkg.archives.empty() && pkg.url_install) {
+        install_url_formula(config, pkg);
+        return true;
     }
 
     std::vector<std::string> available_tags;

@@ -291,6 +291,10 @@ void Cli::M::setup() {
         // Merge third-party taps (🎯T67) so tapped formulae resolve by both
         // their bare and "user/repo/name" forms before any provider runs.
         merge_taps_into_index(cfg, idx);
+        // "user/repo/name" installs under the bare formula name (the keg,
+        // opt link and manifest entry all use it).
+        for (auto& name : install_names)
+            name = resolve_tap_install_name(idx, name);
 
         if (this->build_from_source) {
             // Source builds are Homebrew-only — the Ruby DSL belongs to the

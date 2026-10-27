@@ -5,6 +5,7 @@
 
 #include "../core/error.h"
 #include "../settings/settings.h"
+#include "url_formula.h"
 
 #include <spdlog/spdlog.h>
 
@@ -114,7 +115,8 @@ std::string derive_version(const std::string& src) {
 
 // Add a parsed formula file to the index under both its bare and qualified
 // names. Never overwrites an existing core entry for the bare name.
-void index_formula(PackageIndex& idx, const std::string& tap_name, const fs::path& rb_file) {
+void index_formula(PackageIndex& idx, const std::string& tap_name, const fs::path& rb_file,
+                   const TapPlatform& platform) {
     std::ifstream f(rb_file);
     if (!f) {
         SPDLOG_WARN("tap: cannot read formula {}", rb_file.string());
@@ -136,6 +138,14 @@ void index_formula(PackageIndex& idx, const std::string& tap_name, const fs::pat
     pkg.license = extract_field(src, "license");
     pkg.source_url = extract_field(src, "url");
     pkg.ruby_source_path = fs::absolute(rb_file).string();
+
+    // Prebuilt-download formulae: this platform's url/sha256, runtime
+    // dependencies and `def install` recipe (see url_formula.h).
+    auto parsed = parse_tap_formula(src, platform);
+    if (!parsed.version.empty())
+        pkg.version = parsed.version;
+    pkg.dependencies = parsed.dependencies;
+    pkg.url_install = parsed.url_install;
 
     // Qualified name is always added (tap-owned).
     Package qualified = pkg;
@@ -239,6 +249,7 @@ void tap_remove(const Config& config, const std::string& name) {
 }
 
 void merge_taps_into_index(const Config& config, PackageIndex& idx) {
+    const auto platform = host_tap_platform(config);
     for (const auto& tap : tap_list(config)) {
         auto formula_dir = tap.path / "Formula";
         std::error_code ec;
@@ -258,10 +269,41 @@ void merge_taps_into_index(const Config& config, PackageIndex& idx) {
             }
             const auto& entry = *it;
             if (entry.is_regular_file(ec) && entry.path().extension() == ".rb") {
-                index_formula(idx, tap.name, entry.path());
+                index_formula(idx, tap.name, entry.path(), platform);
             }
         }
     }
+    // Tap formulae name tap dependencies in qualified form
+    // ("marcelocantos/tap/blurter"); resolve them to the bare keg name.
+    for (auto& [name, pkg] : idx.packages) {
+        // Only tap entries: they record an absolute formula path, core
+        // entries a repo-relative one ("Formula/t/tree.rb").
+        if (!pkg.ruby_source_path || !pkg.ruby_source_path->starts_with("/"))
+            continue;
+        for (auto& dep : pkg.dependencies) {
+            try {
+                dep = resolve_tap_install_name(idx, dep);
+            } catch (const UserError&) {
+                // Shadowed by core; leave qualified so the failure names it.
+            }
+        }
+    }
+}
+
+std::string resolve_tap_install_name(const PackageIndex& idx, const std::string& name) {
+    if (std::count(name.begin(), name.end(), '/') != 2)
+        return name;
+    const auto* q = idx.find(name);
+    if (!q || !q->ruby_source_path)
+        return name;
+    const std::string bare = name.substr(name.rfind('/') + 1);
+    const auto* b = idx.find(bare);
+    if (b && b->ruby_source_path == q->ruby_source_path)
+        return bare;
+    throw UserError("cannot install " + name + ": the core formula '" + bare +
+                    "' has the same name, and den installs both into the same Cellar "
+                    "directory (" +
+                    bare + "/<version>); uninstall or avoid one of them");
 }
 
 } // namespace den
