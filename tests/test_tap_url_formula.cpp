@@ -504,6 +504,22 @@ end
         INFO(out);
         CHECK(out.find("invalid package name") == std::string::npos);
     }
+
+    TEST_CASE("e2e: -s user/homebrew-repo/name resolves through canonical_tap_name") {
+        CHECK(canonical_formula_ref("marcelocantos/homebrew-tap/sysinfo-mcp") ==
+              "marcelocantos/tap/sysinfo-mcp");
+        CHECK(canonical_formula_ref("sysinfo-mcp") == "sysinfo-mcp");
+        Env env;
+        env.make_tap("bin.install \"tool\"");
+        auto out = env.den("install -s test/homebrew-urltap/tool");
+        INFO(out);
+        CHECK(out.find("invalid package name") == std::string::npos);
+        CHECK(out.find("not found") == std::string::npos);
+        // -s builds from the formula source (the build itself is out of scope
+        // here); what matters is that it found the tap formula.
+        CHECK(out.find("read tap formula source for 'tool' from") != std::string::npos);
+        CHECK(out.find("taps/test/urltap/Formula/tool.rb") != std::string::npos);
+    }
 }
 
 } // namespace tap_url_formula_test

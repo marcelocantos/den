@@ -72,6 +72,10 @@ void tap_remove(const Config& config, const std::string& name);
 // never overwritten.
 void merge_taps_into_index(const Config& config, PackageIndex& idx);
 
+/// "user/homebrew-repo/name" → "user/repo/name" (canonical_tap_name on the
+/// tap part). Names without exactly two slashes are returned unchanged.
+std::string canonical_formula_ref(const std::string& name);
+
 /// The name to install a requested package under. A tap-qualified request
 /// ("user/repo/name") maps to the bare name, which kegs, opt links and the
 /// manifest use (as Homebrew's Cellar does). When a core formula of the same
