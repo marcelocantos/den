@@ -235,13 +235,14 @@ uint32_t fix_macho_placeholders(const fs::path& dir, const std::string& prefix,
     uint32_t count = 0;
     std::error_code ec;
     for (const auto& entry : fs::recursive_directory_iterator(dir, ec)) {
-        if (!entry.is_regular_file()) {
+        if (entry.is_symlink() || !entry.is_regular_file()) {
             continue;
         }
-        // Skip obvious non-binaries quickly; still verify Mach-O magic.
+        // Skip obvious non-binaries quickly; still verify Mach-O magic. (No
+        // ".1"/".3" here: those are often version suffixes, e.g. tclsh9.1.)
         auto ext = entry.path().extension().string();
         if (ext == ".h" || ext == ".pc" || ext == ".cmake" || ext == ".rb" || ext == ".txt" ||
-            ext == ".md" || ext == ".json" || ext == ".1" || ext == ".3") {
+            ext == ".md" || ext == ".json") {
             continue;
         }
         if (!is_macho_file(entry.path())) {
@@ -328,7 +329,7 @@ std::vector<std::string> unresolved_macho_placeholders(const fs::path& dir) {
     std::vector<std::string> bad;
     std::error_code ec;
     for (const auto& entry : fs::recursive_directory_iterator(dir, ec)) {
-        if (!entry.is_regular_file() || !is_macho_file(entry.path())) {
+        if (entry.is_symlink() || !entry.is_regular_file() || !is_macho_file(entry.path())) {
             continue;
         }
         auto r = run_tool({macho_tool("otool"), "-L", entry.path().string()});
@@ -404,12 +405,12 @@ uint32_t fix_elf_placeholders(const fs::path& dir, const std::string& prefix,
     bool patchelf_ok = false;
     std::error_code ec;
     for (const auto& entry : fs::recursive_directory_iterator(dir, ec)) {
-        if (!entry.is_regular_file()) {
+        if (entry.is_symlink() || !entry.is_regular_file()) {
             continue;
         }
         auto ext = entry.path().extension().string();
         if (ext == ".h" || ext == ".pc" || ext == ".cmake" || ext == ".rb" || ext == ".txt" ||
-            ext == ".md" || ext == ".json" || ext == ".1" || ext == ".3" || ext == ".a") {
+            ext == ".md" || ext == ".json" || ext == ".a") {
             continue;
         }
         if (!is_elf_file(entry.path())) {
@@ -571,7 +572,7 @@ uint32_t relocate_text_placeholders(const fs::path& dir, const std::string& pref
     uint32_t count = 0;
     std::error_code ec;
     for (const auto& entry : fs::recursive_directory_iterator(dir, ec)) {
-        if (!entry.is_regular_file())
+        if (entry.is_symlink() || !entry.is_regular_file())
             continue;
 
         // Skip binary files.
@@ -605,16 +606,25 @@ uint32_t relocate_text_placeholders(const fs::path& dir, const std::string& pref
     return count;
 }
 
+namespace {
+/// True for extensions like ".1" or ".3" that are really version suffixes
+/// (tclsh9.1, emacs-31.1, gforth-0.7.3).
+bool is_version_suffix(const std::string& ext) {
+    return ext.size() > 1 && ext.find_first_not_of("0123456789", 1) == std::string::npos;
+}
+} // namespace
+
 uint32_t relocate_binary_paths(const fs::path& dir, const std::string& old_path,
                                const std::string& new_path) {
     uint32_t count = 0;
     std::error_code ec;
     for (const auto& entry : fs::recursive_directory_iterator(dir, ec)) {
-        if (!entry.is_regular_file())
+        if (entry.is_symlink() || !entry.is_regular_file())
             continue;
 
         auto ext = entry.path().extension().string();
-        if (ext != ".dylib" && ext != ".so" && ext != ".bundle" && ext != "")
+        if (ext != ".dylib" && ext != ".so" && ext != ".bundle" && ext != "" &&
+            !is_version_suffix(ext))
             continue;
 
         // Only process binary files.
