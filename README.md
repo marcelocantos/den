@@ -5,8 +5,11 @@ everything — not just Python, but every package on your system.
 
 ## What den does
 
-- **Shared Cellar** — den uses `/opt/homebrew/Cellar` directly, so
-  Homebrew and den kegs coexist. Bottles still carry Homebrew
+- **Isolated store by default** — den pours kegs into its own Cellar at
+  `$DEN_HOME/prefix/Cellar` (default `~/.den/prefix/Cellar`) and never
+  writes to `/opt/homebrew` unless you point it there (`den migrate`
+  pins the shared Homebrew Cellar; see
+  [Store location](#store-location-and-env-precedence)). Bottles still carry Homebrew
   placeholders, which den rewrites on pour: on macOS it rewrites Mach-O
   install names with `otool`/`install_name_tool` and pins `opt/<dep>`
   references to the exact dependency keg; on Linux it patches ELF paths
@@ -100,8 +103,10 @@ through a pluggable `PackageProvider`. Pip, npm, cargo, and go providers
 are available via `--provider <name>` without changes to the CLI,
 manifest, or environment-composition layers.
 
-- **Shared Cellar** (`/opt/homebrew/Cellar/`) holds Homebrew-installed
-  package versions, shared with Homebrew. Den rewrites bottle
+- **The store** (`<prefix>/Cellar/`, by default `~/.den/prefix/Cellar/`)
+  holds den-installed package versions. After `den migrate` the prefix
+  is pinned to Homebrew's, so the store *is* the shared Homebrew Cellar
+  (🎯T49) and brew/den kegs coexist. Den rewrites bottle
   placeholders on pour (Mach-O deps pinned to exact kegs on macOS,
   patchelf on Linux) and does not touch Homebrew's shared `opt/` links
   on macOS. Other providers keep their own storage areas.
@@ -116,13 +121,12 @@ manifest, or environment-composition layers.
   active environment.
 
 ```
-/opt/homebrew/Cellar/         # shared package store
-├── tree/2.3.2/              # each version in its own directory
-├── ffmpeg/7.1.1/
-└── python@3.13/3.13.2/
-
 ~/.den/
 ├── bin/den                  # the binary
+├── prefix/                  # den's prefix (unless pinned elsewhere)
+│   └── Cellar/              # package store
+│       ├── tree/2.3.2/      # each version in its own directory
+│       └── ffmpeg/7.1.1/
 ├── config.json              # settings
 ├── manifests/               # environment definitions
 │   ├── ROOT/
@@ -152,6 +156,40 @@ den set daemon.auto_upgrade true         # auto-apply upgrades
 den set daemon.upgrade_window "3:00-5:00"  # when to apply
 den settings                             # show all settings
 ```
+
+### Store location and env precedence
+
+den's *prefix* decides where kegs are poured (`<prefix>/Cellar`). It is
+resolved in this order — the first match wins:
+
+1. **`DEN_PREFIX`** environment variable.
+2. **`store.prefix`** in `$DEN_HOME/config.json` (`den set store.prefix
+   /path`; `den migrate` writes this to pin Homebrew's prefix).
+3. **`$DEN_HOME/prefix`**, if `$DEN_HOME/prefix/Cellar` already exists.
+4. **Legacy shared Cellar** — a den home created before store isolation
+   (no `$DEN_HOME/prefix/Cellar` yet) whose manifests list packages that
+   Homebrew's Cellar has keeps using that Cellar (detected read-only;
+   nothing is written to decide this). Run `den migrate` or
+   `den set store.prefix …` to make the choice explicit.
+5. **`$DEN_HOME/prefix`** (default).
+
+`DEN_HOME` (default `~/.den`) holds manifests, envs, cache, caskroom and
+config. So setting **`DEN_HOME` alone gives a fully isolated den** — its
+own prefix and Cellar — even in a shell where `brew shellenv` has
+exported `HOMEBREW_PREFIX`/`HOMEBREW_CELLAR`.
+
+`HOMEBREW_PREFIX`, `HOMEBREW_CELLAR` and `HOMEBREW_CASKROOM` (or the
+platform default `/opt/homebrew`, `/usr/local`, `/home/linuxbrew/.linuxbrew`)
+only tell den **where Homebrew is**: `den migrate` reads brew's Cellar and
+Caskroom from them, and diagnostics report them. They never choose den's
+store. `den migrate` is the explicit step that points den at Homebrew's
+prefix: it records `store.prefix = <brew prefix>` (or refuses if den
+already has private kegs or `DEN_PREFIX`/`store.prefix` names somewhere
+else). `den config` prints the resolved `prefix`, `prefix_source`,
+whether it `shares_brew_cellar`, and this precedence.
+
+The daemon's launchd plist carries `DEN_HOME` and (when set) `DEN_PREFIX`
+so background upgrades use the same store.
 
 ## Commands
 

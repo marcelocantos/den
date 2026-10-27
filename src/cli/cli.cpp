@@ -867,10 +867,17 @@ void Cli::M::setup() {
         auto na = [](const std::optional<std::string>& v) { return v ? *v : std::string("n/a"); };
 
         std::cout << "den_home:          " << cfg.den_home.string() << "\n"
+                  << "prefix:            " << cfg.prefix.string() << "\n"
+                  << "prefix_source:     " << to_string(cfg.prefix_source) << "\n"
                   << "store:             " << cfg.store.string() << "\n"
                   << "cache:             " << cfg.cache.string() << "\n"
                   << "homebrew_prefix:   " << cfg.homebrew_prefix.string() << "\n"
                   << "homebrew_cellar:   " << cfg.homebrew_cellar.string() << "\n"
+                  << "shares_brew_cellar: " << (cfg.shares_homebrew_cellar() ? "yes" : "no") << "\n"
+                  << "prefix_precedence: DEN_PREFIX > config.json store.prefix > "
+                     "DEN_HOME/prefix (if populated) > legacy shared Cellar > DEN_HOME/prefix\n"
+                  << "                   (HOMEBREW_PREFIX/HOMEBREW_CELLAR only locate Homebrew "
+                     "for `den migrate`; they never choose den's store)\n"
                   << "arch:              " << to_string(cfg.arch) << "\n"
                   << "macos_version:     "
                   << (cfg.macos_version ? cfg.macos_version->to_string() : "n/a") << "\n";
@@ -1620,7 +1627,7 @@ void Cli::M::setup() {
         auto smoke_home = fs::temp_directory_path() / "den-smoke-test";
         fs::create_directories(smoke_home);
         cfg.den_home = smoke_home;
-        cfg.store = smoke_home / "store";
+        cfg.set_prefix(smoke_home / "prefix", PrefixSource::DenHome);
         cfg.cache = smoke_home / "cache";
 
         // Copy the index cache so we don't re-fetch.

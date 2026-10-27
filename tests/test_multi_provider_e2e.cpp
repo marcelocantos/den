@@ -77,8 +77,9 @@ struct TempDir {
 static std::pair<int, std::string> run_den(const std::string& args, const fs::path& den_home) {
     const std::string prefix = den_home.string() + "/brew";
     const std::string cellar = prefix + "/Cellar";
-    std::string cmd = "DEN_HOME=" + den_home.string() + " HOMEBREW_PREFIX=" + prefix +
-                      " HOMEBREW_CELLAR=" + cellar + " ./den " + args + " 2>&1";
+    std::string cmd = "DEN_HOME=" + den_home.string() + " DEN_PREFIX=" + prefix +
+                      " HOMEBREW_PREFIX=" + prefix + " HOMEBREW_CELLAR=" + cellar + " ./den " +
+                      args + " 2>&1";
 
     FILE* pipe = ::popen(cmd.c_str(), "r");
     if (!pipe) {
