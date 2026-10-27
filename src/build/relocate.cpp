@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <map>
+#include <regex>
 #include <sstream>
 #include <string_view>
 #include <vector>
@@ -238,12 +239,9 @@ uint32_t fix_macho_placeholders(const fs::path& dir, const std::string& prefix,
         if (!entry.is_regular_file()) {
             continue;
         }
-        // Skip obvious non-binaries quickly; still verify Mach-O magic.
-        auto ext = entry.path().extension().string();
-        if (ext == ".h" || ext == ".pc" || ext == ".cmake" || ext == ".rb" || ext == ".txt" ||
-            ext == ".md" || ext == ".json" || ext == ".1" || ext == ".3") {
-            continue;
-        }
+        // Decide by magic only. An extension skip-list misfires on versioned
+        // executables: gawk ships bin/gawk-5.4.1 (extension ".1"), which was
+        // skipped and left with @@HOMEBREW_PREFIX@@ load commands.
         if (!is_macho_file(entry.path())) {
             continue;
         }
@@ -407,11 +405,8 @@ uint32_t fix_elf_placeholders(const fs::path& dir, const std::string& prefix,
         if (!entry.is_regular_file()) {
             continue;
         }
-        auto ext = entry.path().extension().string();
-        if (ext == ".h" || ext == ".pc" || ext == ".cmake" || ext == ".rb" || ext == ".txt" ||
-            ext == ".md" || ext == ".json" || ext == ".1" || ext == ".3" || ext == ".a") {
-            continue;
-        }
+        // Magic check only (see fix_macho_placeholders): versioned names such
+        // as bin/gawk-5.4.1 or libfoo.so.1 must not be skipped by extension.
         if (!is_elf_file(entry.path())) {
             continue;
         }
@@ -566,8 +561,50 @@ std::string expand_homebrew_placeholders(std::string path, const std::string& pr
     return path;
 }
 
+std::string homebrew_perl_path(const std::string& prefix, const std::string& name,
+                               const std::vector<std::string>& deps) {
+    const std::string brewed = prefix + "/opt/perl/bin/perl";
+#ifdef __APPLE__
+    // extend/os/mac/keg_relocate.rb: brewed perl only when declared directly.
+    if (name == "perl" || std::find(deps.begin(), deps.end(), "perl") != deps.end()) {
+        return brewed;
+    }
+    // Otherwise MacOS.preferred_perl_version (5.34 on Sonoma+, 5.30 before).
+    // Den has no bottle tab (built_on.preferred_perl), so probe what exists.
+    for (const char* candidate : {"/usr/bin/perl5.34", "/usr/bin/perl5.30"}) {
+        std::error_code ec;
+        if (fs::exists(candidate, ec)) {
+            return candidate;
+        }
+    }
+    return "/usr/bin/perl";
+#else
+    (void)name;
+    (void)deps;
+    return brewed;
+#endif
+}
+
+std::string homebrew_java_path(const std::string& prefix, const std::vector<std::string>& deps) {
+    // Keg#openjdk_dep_name_if_applicable: first dep matching ^openjdk(@\d[\d.]*)?$.
+    static const std::regex openjdk_re(R"(^openjdk(@\d[\d.]*)?$)");
+    std::string jdk = "openjdk";
+    for (const auto& d : deps) {
+        if (std::regex_match(d, openjdk_re)) {
+            jdk = d;
+            break;
+        }
+    }
+#ifdef __APPLE__
+    return prefix + "/opt/" + jdk + "/libexec/openjdk.jdk/Contents/Home";
+#else
+    return prefix + "/opt/" + jdk + "/libexec";
+#endif
+}
+
 uint32_t relocate_text_placeholders(const fs::path& dir, const std::string& prefix,
-                                    const std::string& cellar) {
+                                    const std::string& cellar, const std::string& java,
+                                    const std::string& perl) {
     uint32_t count = 0;
     std::error_code ec;
     for (const auto& entry : fs::recursive_directory_iterator(dir, ec)) {
@@ -596,6 +633,12 @@ uint32_t relocate_text_placeholders(const fs::path& dir, const std::string& pref
 
         auto content = read_file(entry.path());
         auto expanded = expand_homebrew_placeholders(content, prefix, cellar);
+        if (!java.empty()) {
+            replace_all(expanded, "@@HOMEBREW_JAVA@@", java);
+        }
+        if (!perl.empty()) {
+            replace_all(expanded, "@@HOMEBREW_PERL@@", perl);
+        }
         if (expanded != content) {
             write_file(entry.path(), expanded);
             ++count;
@@ -763,7 +806,8 @@ std::string macho_tool(const std::string& tool) {
 }
 
 void relocate_bottle(const fs::path& package_dir, const std::string& name,
-                     const std::string& version, const fs::path& store) {
+                     const std::string& version, const fs::path& store,
+                     const RelocationOptions& options) {
     (void)version;
     // @@HOMEBREW_CELLAR@@ in bottles is followed by /<name>/<version>,
     // so we replace it with the store path (not including name/version).
@@ -779,7 +823,18 @@ void relocate_bottle(const fs::path& package_dir, const std::string& name,
     auto cellar_path = store.string();
     auto prefix_path = store.parent_path().string(); // /opt/homebrew or linuxbrew prefix
 
-    auto text_count = relocate_text_placeholders(package_dir, prefix_path, cellar_path);
+    auto text_count =
+        relocate_text_placeholders(package_dir, prefix_path, cellar_path,
+                                   homebrew_java_path(prefix_path, options.dependencies),
+                                   homebrew_perl_path(prefix_path, name, options.dependencies));
+    if (options.skip_linkage) {
+        // :any_skip_relocation — brew replaces text placeholders (scripts,
+        // .pm/.pc files, launchers) but never touches dynamic linkage.
+        if (text_count > 0) {
+            SPDLOG_INFO("relocated {}: {} text files (linkage skipped)", name, text_count);
+        }
+        return;
+    }
 #ifdef __APPLE__
     auto macho_count = fix_macho_placeholders(package_dir, prefix_path, cellar_path, name);
     if (auto bad = unresolved_macho_placeholders(package_dir); !bad.empty()) {
