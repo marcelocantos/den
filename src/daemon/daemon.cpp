@@ -9,6 +9,7 @@
 #include "../index/index.h"
 #include "../provider/homebrew_provider.h"
 #include "../provider/registry.h"
+#include "../store/pins.h"
 #include "upgrade_pass.h"
 
 #include <algorithm>
@@ -413,7 +414,29 @@ MaintenanceReport run_maintenance_cycle(const fs::path& cellar, const fs::path& 
     log_daemon(den_home, std::to_string(report.pending) + " package(s) outdated");
 
     if (settings.auto_download && hooks.prefetch) {
+        // A pinned package is never upgraded (the upgrade pass and `den
+        // upgrade` both hold it), so pre-downloading its bottle only wastes
+        // bandwidth and cache space. Pins are read like the upgrade pass
+        // reads them: an unreadable pins.json fails closed and skips every
+        // pre-download rather than treating everything as unpinned.
+        PinMap pins;
+        bool pins_ok = true;
+        try {
+            pins = read_pins(den_home);
+        } catch (const std::exception& e) {
+            pins_ok = false;
+            state.errors.push_back(
+                std::string("download: pins unreadable, skipping pre-download: ") + e.what());
+            log_daemon(den_home,
+                       std::string("pins unreadable, skipping pre-download: ") + e.what());
+        }
+        std::size_t wanted = 0;
         for (const auto& pu : state.pending) {
+            if (!pins_ok || pins.count(pu.name)) {
+                ++report.skipped_pinned;
+                continue;
+            }
+            ++wanted;
             try {
                 hooks.prefetch(pu);
                 ++report.downloaded;
@@ -421,9 +444,13 @@ MaintenanceReport run_maintenance_cycle(const fs::path& cellar, const fs::path& 
                 state.errors.push_back("download " + pu.name + ": " + e.what());
             }
         }
-        if (!state.pending.empty())
-            log_daemon(den_home, "pre-downloaded " + std::to_string(report.downloaded) + "/" +
-                                     std::to_string(state.pending.size()) + " upgrade(s)");
+        if (!state.pending.empty()) {
+            std::string msg = "pre-downloaded " + std::to_string(report.downloaded) + "/" +
+                              std::to_string(wanted) + " upgrade(s)";
+            if (report.skipped_pinned > 0)
+                msg += ", skipped " + std::to_string(report.skipped_pinned) + " pinned";
+            log_daemon(den_home, msg);
+        }
     }
 
     if (settings.auto_upgrade && !state.pending.empty()) {
@@ -545,8 +572,9 @@ void run_daemon(const Config& config, bool once) {
                 state.errors.push_back(std::string("materialise: ") + e.what());
             }
         }
-        SPDLOG_INFO("daemon: cycle done (pending {}, downloaded {}, applied {}, deferred {})",
-                    rep.pending, rep.downloaded, rep.applied, rep.deferred);
+        SPDLOG_INFO("daemon: cycle done (pending {}, downloaded {}, skipped pinned {}, applied {}, "
+                    "deferred {})",
+                    rep.pending, rep.downloaded, rep.skipped_pinned, rep.applied, rep.deferred);
 
         write_daemon_state(den_home, state);
         log_daemon(den_home, "maintenance cycle complete");
