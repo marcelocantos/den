@@ -54,7 +54,10 @@ std::string fetch_url(const std::string& url) {
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
     curl_easy_cleanup(curl);
 
-    if (http_code < 200 || http_code >= 300) {
+    // file:// URLs (local taps, offline tests) have no HTTP status; a
+    // missing file already failed above with CURLE_FILE_COULDNT_READ_FILE.
+    const bool is_file = url.starts_with("file://");
+    if (!is_file && (http_code < 200 || http_code >= 300)) {
         throw DownloadError("HTTP " + std::to_string(http_code) + " fetching " + url);
     }
 

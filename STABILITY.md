@@ -17,9 +17,10 @@ Snapshot as of v0.10.0.
 | Command | Stability | Notes |
 |---|---|---|
 | `den install [-s] <names...>` | Stable | Unified model — no --cask flag |
+| `den install --overwrite <names...>` | Needs review | Replaces prefix paths that conflict with the named packages (brew's `link --overwrite`) |
 | `den uninstall <names...> [--ignore-dependencies]` | Stable | Refuses (non-zero exit, dependents listed) while installed Homebrew packages in any environment need the package at runtime, unless their environment still gets it elsewhere; build-only dependencies don't count; `--ignore-dependencies` overrides. Drops from the active environment; keg kept until `den cleanup`. If no environment still uses that version, den hands its own `opt/<name>` link to another installed den-owned, still-used version, or removes it. Never touches an `opt/` link to a keg den did not install. Does not autoremove dependencies |
 | `den upgrade [names...]` | Stable | |
-| `den update` | Stable | Fetches Homebrew formula + cask index |
+| `den update` | Stable | Fetches Homebrew formula + cask index; migrates an old `envs/ROOT` layout into the prefix once |
 | `den list` | Stable | |
 | `den info <name>` | Stable | |
 | `den search <text>` | Stable | |
@@ -98,7 +99,8 @@ Snapshot as of v0.10.0.
 |---|---|---|
 | `bin/` | Stable | den binary |
 | `manifests/` | Stable | Environment manifest files |
-| `envs/` | Stable | Materialised environment directories |
+| `envs/` | Stable | Materialised named environment directories |
+| `envs/ROOT/` | Needs review | Compat shim: `bin`, `sbin`, `lib`, … are symlinks to the prefix's own dirs; `.den/` holds the root env's link ledgers |
 | `cache/archives/` | Stable | Content-addressed archive cache |
 | `config.json` | Stable | Settings |
 | `daemon.pid` | Stable | Daemon PID file |
@@ -111,6 +113,26 @@ Snapshot as of v0.10.0.
 |---|---|---|
 | `<prefix>/Cellar/<name>/<version>/` | Stable | den's store. `<prefix>` resolves as `DEN_PREFIX` > `config.json` `store.prefix` > `$DEN_HOME/prefix` (if populated) > legacy shared Homebrew Cellar > `$DEN_HOME/prefix` (default `~/.den/prefix`). `HOMEBREW_*` env vars never select it. |
 | `/opt/homebrew/Cellar/<name>/<version>/` | Stable | Shared Cellar with Homebrew (🎯T49) — opt-in: `den migrate` pins `store.prefix` to Homebrew's prefix, after which den and brew coexist and den tracks what it manages via `~/.den/` manifests. Pre-isolation den homes with kegs there keep using it. |
+
+## Behaviour changes
+
+- **Root environment linked into the prefix.** The root environment (`/`)
+  is now linked into the prefix itself (`<prefix>/bin`, `sbin`, `lib`,
+  `include`, `share`, `etc`, `var`, `Frameworks`, plus `opt`), the way
+  `brew link` does, instead of into `~/.den/envs/ROOT/`. Tools that derive
+  paths from their own prefix (automake's `aclocal --print-ac-dir`,
+  findutils' `locate` database, ...) now find what other packages
+  installed. `den shell-env` puts `<prefix>/bin:<prefix>/sbin` first on
+  PATH, and `lib`, `include`, `pkgconfig`, `man` and `info` come from the
+  prefix. Link conflicts follow brew: a link into a den-managed keg is
+  replaced; any other link or real file blocks that package's link with a
+  list of the conflicting paths, and only `den install --overwrite <pkg>`
+  replaces them. Uninstall removes only links den recorded. Existing
+  config files under `etc` and `var` are kept. `envs/ROOT/{bin,lib,...}`
+  remain as symlinks to the prefix dirs, so scripts that use them keep
+  working. Existing installs are migrated once by `den update`; `den
+  doctor` reports a pending migration and a PATH that does not lead with
+  the prefix. Named environments are unchanged.
 
 ## Gaps and prerequisites for 1.0
 

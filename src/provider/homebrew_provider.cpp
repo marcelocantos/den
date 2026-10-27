@@ -16,6 +16,7 @@
 #include "../platform/platform.h"
 #include "../store/link.h"
 #include "../store/store.h"
+#include "../tap/url_formula.h"
 #include "../trust/trust_model.h"
 
 #include <spdlog/spdlog.h>
@@ -86,6 +87,12 @@ bool install_one(const Config& config, const Package& pkg) {
         ensure_prefix_opt_link(config.store, pkg.name,
                                package_path(config.store, pkg.name, pkg.version));
         return false;
+    }
+
+    // Tap formulae that ship a prebuilt download instead of a bottle.
+    if (pkg.archives.empty() && pkg.url_install) {
+        install_url_formula(config, pkg);
+        return true;
     }
 
     std::vector<std::string> available_tags;
@@ -401,10 +408,11 @@ std::vector<fs::path> HomebrewProvider::binary_paths(const Config& /*config*/,
     if (pkg.path.string().find("/caskroom/") != std::string::npos) {
         return {};
     }
-    // Homebrew kegs expose five standard subdirectories — the materialiser
-    // symlinks the contents of each into the env's matching subdir.
+    // The directories `brew link` links out of a keg — the materialiser
+    // symlinks the contents of each into the env's (or, for the root env,
+    // the prefix's) matching subdir.
     std::vector<fs::path> paths;
-    for (const auto& sub : {"bin", "sbin", "lib", "include", "share"}) {
+    for (const auto& sub : {"bin", "sbin", "lib", "include", "share", "etc", "var", "Frameworks"}) {
         auto p = pkg.path / sub;
         if (fs::is_directory(p)) {
             paths.push_back(p);

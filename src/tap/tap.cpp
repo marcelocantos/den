@@ -5,6 +5,7 @@
 
 #include "../core/error.h"
 #include "../settings/settings.h"
+#include "url_formula.h"
 
 #include <spdlog/spdlog.h>
 
@@ -13,6 +14,7 @@
 #include <cctype>
 #include <cstdio>
 #include <fstream>
+#include <iostream>
 #include <regex>
 #include <sstream>
 #include <string_view>
@@ -114,7 +116,8 @@ std::string derive_version(const std::string& src) {
 
 // Add a parsed formula file to the index under both its bare and qualified
 // names. Never overwrites an existing core entry for the bare name.
-void index_formula(PackageIndex& idx, const std::string& tap_name, const fs::path& rb_file) {
+void index_formula(PackageIndex& idx, const std::string& tap_name, const fs::path& rb_file,
+                   const TapPlatform& platform) {
     std::ifstream f(rb_file);
     if (!f) {
         SPDLOG_WARN("tap: cannot read formula {}", rb_file.string());
@@ -136,6 +139,14 @@ void index_formula(PackageIndex& idx, const std::string& tap_name, const fs::pat
     pkg.license = extract_field(src, "license");
     pkg.source_url = extract_field(src, "url");
     pkg.ruby_source_path = fs::absolute(rb_file).string();
+
+    // Prebuilt-download formulae: this platform's url/sha256, runtime
+    // dependencies and `def install` recipe (see url_formula.h).
+    auto parsed = parse_tap_formula(src, platform);
+    if (!parsed.version.empty())
+        pkg.version = parsed.version;
+    pkg.dependencies = parsed.dependencies;
+    pkg.url_install = parsed.url_install;
 
     // Qualified name is always added (tap-owned).
     Package qualified = pkg;
@@ -265,6 +276,7 @@ void tap_remove(const Config& config, const std::string& raw_name) {
 }
 
 void merge_taps_into_index(const Config& config, PackageIndex& idx) {
+    const auto platform = host_tap_platform(config);
     for (const auto& tap : tap_list(config)) {
         auto formula_dir = tap.path / "Formula";
         std::error_code ec;
@@ -284,10 +296,59 @@ void merge_taps_into_index(const Config& config, PackageIndex& idx) {
             }
             const auto& entry = *it;
             if (entry.is_regular_file(ec) && entry.path().extension() == ".rb") {
-                index_formula(idx, tap.name, entry.path());
+                index_formula(idx, tap.name, entry.path(), platform);
             }
         }
     }
+    // Tap formulae name tap dependencies in qualified form
+    // ("marcelocantos/tap/blurter"); point them at the bare name when that
+    // entry is the same tap formula. (A dependency shadowed by a core formula
+    // stays qualified and does not resolve.)
+    for (auto& [name, pkg] : idx.packages) {
+        // Only tap entries: they record an absolute formula path, core
+        // entries a repo-relative one ("Formula/t/tree.rb").
+        if (!pkg.ruby_source_path || !pkg.ruby_source_path->starts_with("/"))
+            continue;
+        for (auto& dep : pkg.dependencies) {
+            if (std::count(dep.begin(), dep.end(), '/') != 2)
+                continue;
+            dep = canonical_formula_ref(dep);
+            auto q = idx.packages.find(dep);
+            auto b = idx.packages.find(dep.substr(dep.rfind('/') + 1));
+            if (q != idx.packages.end() && b != idx.packages.end() &&
+                q->second.ruby_source_path == b->second.ruby_source_path)
+                dep = b->first;
+        }
+    }
+}
+
+std::string canonical_formula_ref(const std::string& name) {
+    if (std::count(name.begin(), name.end(), '/') != 2)
+        return name;
+    const auto last = name.rfind('/');
+    return canonical_tap_name(name.substr(0, last)) + name.substr(last);
+}
+
+std::string resolve_tap_install_name(PackageIndex& idx, const std::string& requested) {
+    if (std::count(requested.begin(), requested.end(), '/') != 2)
+        return requested;
+    // "user/homebrew-repo/name" and "user/repo/name" name the same formula.
+    const std::string name = canonical_formula_ref(requested);
+    const auto* q = idx.find(name);
+    if (!q || !q->ruby_source_path)
+        return name;
+    const std::string bare = name.substr(name.rfind('/') + 1);
+    const auto* b = idx.find(bare);
+    if (!b || b->ruby_source_path != q->ruby_source_path) {
+        if (b) {
+            std::cerr << "note: " << name << " shadows the core formula '" << bare
+                      << "'; installing the tap formula as " << bare << "\n";
+        }
+        Package pkg = *q;
+        pkg.name = bare;
+        idx.packages[bare] = std::move(pkg);
+    }
+    return bare;
 }
 
 } // namespace den
