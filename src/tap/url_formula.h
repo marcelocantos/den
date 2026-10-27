@@ -54,8 +54,12 @@ ParsedTapFormula parse_tap_formula(const std::string& src, const TapPlatform& pl
 
 // One whitelisted `def install` step.
 struct InstallStep {
-    enum class Kind { Install, Symlink, Write, Chmod };
+    enum class Kind { Install, Symlink, Write, Chmod, Mkdir };
     Kind kind = Kind::Install;
+    // Stage-relative working directory the step runs in ("" = the stage
+    // root). Set by enclosing `mkdir "d" do ... end` / `cd "d" do ... end`
+    // blocks; Install sources, globs and if_exists resolve against it.
+    std::string cwd;
     std::string dir;                                        // keg-relative target dir
     std::vector<std::pair<std::string, std::string>> items; // Install: src -> new name ("" keeps)
     bool glob = false;                                      // Install: items[0].first is a glob
@@ -64,10 +68,16 @@ struct InstallStep {
     std::string name;      // Symlink/Write/Chmod: file name inside dir
     std::string content;   // Write: heredoc body (interpolations not yet expanded)
     unsigned mode = 0;     // Chmod
+    bool create = false;   // Mkdir: create cwd/name (mkdir) or require it (cd)
 };
 
 // Parse the joined `def install` statements. On the first statement outside
 // the whitelist, returns nullopt and sets `refusal` to the reason.
+//
+// `mkdir "d" do ... end` (and `cd "d" do ... end`) blocks are flattened: the
+// block emits a Mkdir step (name = "d", relative to the enclosing cwd), and
+// every step inside gets cwd = enclosing cwd + "/d". Blocks may nest; "d"
+// must be a plain relative path without "..".
 std::optional<std::vector<InstallStep>> parse_install_steps(const std::vector<std::string>& lines,
                                                             const std::string& formula_name,
                                                             std::string& refusal);

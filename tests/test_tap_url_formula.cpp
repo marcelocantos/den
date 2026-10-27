@@ -381,6 +381,141 @@ end
         CHECK(slurp(s.keg / "bin/vellum-bin") == "bin");
     }
 
+    // ── mkdir/cd blocks ───────────────────────────────────────────────────
+
+    TEST_CASE("mkdir block: flattens to a Mkdir step and sets cwd on the steps inside") {
+        auto steps = steps_of("mkdir \"generated\" do\n"
+                              "bash_completion.install \"tool.bash\"\n"
+                              "zsh_completion.install \"_tool\"\n"
+                              "end\n"
+                              "bin.install \"tool\"");
+        REQUIRE(steps.size() == 4);
+        CHECK(steps[0].kind == InstallStep::Kind::Mkdir);
+        CHECK(steps[0].name == "generated");
+        CHECK(steps[0].create);
+        CHECK(steps[0].cwd.empty());
+        CHECK(steps[1].kind == InstallStep::Kind::Install);
+        CHECK(steps[1].cwd == "generated");
+        CHECK(steps[1].dir == "etc/bash_completion.d");
+        CHECK(steps[2].cwd == "generated");
+        CHECK(steps[3].cwd.empty());
+    }
+
+    TEST_CASE("mkdir block: nesting, parentheses and cd blocks") {
+        auto steps = steps_of("mkdir(\"out\") do\n"
+                              "cd \"sub/dir\" do\n"
+                              "bin.install \"x\"\n"
+                              "end\n"
+                              "end");
+        REQUIRE(steps.size() == 3);
+        CHECK(steps[0].name == "out");
+        CHECK(steps[1].kind == InstallStep::Kind::Mkdir);
+        CHECK_FALSE(steps[1].create);
+        CHECK(steps[1].cwd == "out");
+        CHECK(steps[1].name == "sub/dir");
+        CHECK(steps[2].cwd == "out/sub/dir");
+    }
+
+    TEST_CASE("mkdir block: unsafe or unbalanced forms are refused") {
+        for (const char* line : {
+                 "mkdir \"../up\" do",
+                 "mkdir \"/abs\" do",
+                 "mkdir \"#{buildpath}/x\" do",
+                 "mkdir \"x\" do |d|",
+                 "mkdir \"x\"",
+                 "mkdir_p \"x\" do",
+                 "cd buildpath do",
+                 "end",
+             }) {
+            INFO(line);
+            CHECK(refusal_of(line) == std::string("unsupported install step: `") + line + "`");
+        }
+        std::string why;
+        CHECK_FALSE(parse_install_steps({"mkdir \"x\" do", "bin.install \"t\""}, "tool", why));
+        CHECK(why == "unterminated `mkdir`/`cd` block in `def install`");
+        // An unsupported step inside the block is reported, not the block.
+        CHECK_FALSE(parse_install_steps({"mkdir \"x\" do", "inreplace \"a\", \"b\", \"c\"", "end"},
+                                        "tool", why));
+        CHECK(why == "unsupported install step: `inreplace \"a\", \"b\", \"c\"`");
+    }
+
+    TEST_CASE("mkdir block: creates the dir and installs from it") {
+        Stage s;
+        write(s.stage / "tool", "bin");
+        s.apply("mkdir \"generated\" do\n"
+                "end");
+        CHECK(fs::is_directory(s.stage / "generated"));
+        write(s.stage / "generated/tool.bash", "complete");
+        write(s.stage / "generated/_tool", "zsh");
+        write(s.stage / "generated/a.1", "man");
+        s.apply("mkdir \"generated\" do\n"
+                "bash_completion.install \"tool.bash\"\n"
+                "zsh_completion.install \"_tool\" if File.exist?(\"_tool\")\n"
+                "man1.install Dir[\"*.1\"]\n"
+                "end\n"
+                "bin.install \"tool\"");
+        CHECK(slurp(s.keg / "etc/bash_completion.d/tool.bash") == "complete");
+        CHECK(slurp(s.keg / "share/zsh/site-functions/_tool") == "zsh");
+        CHECK(slurp(s.keg / "share/man/man1/a.1") == "man");
+        CHECK(slurp(s.keg / "bin/tool") == "bin");
+    }
+
+    TEST_CASE("mkdir block: missing sources name the block path; cd needs an existing dir") {
+        Stage s;
+        try {
+            s.apply("mkdir \"gen\" do\nbin.install \"nope\"\nend");
+            FAIL("expected UserError");
+        } catch (const UserError& e) {
+            CHECK(
+                std::string(e.what()) ==
+                "cannot install tool: install step names 'gen/nope', which is not in the download");
+        }
+        try {
+            s.apply("cd \"missing\" do\nend");
+            FAIL("expected UserError");
+        } catch (const UserError& e) {
+            CHECK(std::string(e.what()).find("not a directory in the download") !=
+                  std::string::npos);
+        }
+    }
+
+    TEST_CASE("mkdir block: a staged symlink cannot redirect the dir outside the download") {
+        Stage s;
+        fs::create_directories(s.tmp.path / "outside");
+        fs::create_symlink(s.tmp.path / "outside", s.stage / "generated");
+        try {
+            s.apply("mkdir \"generated/sub\" do\nend");
+            FAIL("expected UserError");
+        } catch (const UserError& e) {
+            CHECK(std::string(e.what()).find("resolves outside the download") != std::string::npos);
+        }
+        CHECK_FALSE(fs::exists(s.tmp.path / "outside/sub"));
+    }
+
+    TEST_CASE("mkdir block: the mutagen formula gets past the block to its next step") {
+        const char* src = R"RB(class Mutagen < Formula
+  url "https://example.com/mutagen_darwin_arm64_v0.18.1.tar.gz"
+  sha256 "54b239359dbf9dc9b3a25e41a372eafb1de6c3131fe7fed37da53da77189b600"
+
+  def install
+    # Generate and install shell completion scripts.
+    mkdir "generated" do
+      system "../mutagen", "generate",
+        "--bash-completion-script=mutagen.bash"
+      bash_completion.install "mutagen.bash"
+    end
+
+    bin.install "mutagen"
+  end
+end
+)RB";
+        auto parsed = parse_tap_formula(src, kMacArm);
+        REQUIRE(parsed.url_install.has_value());
+        std::string why;
+        CHECK_FALSE(parse_install_steps(parsed.url_install->install_lines, "mutagen", why));
+        CHECK(why.starts_with("unsupported install step: `system \"../mutagen\""));
+    }
+
     // ── clean refusals ────────────────────────────────────────────────────
 
     TEST_CASE("refuses anything outside the whitelist, naming the step") {
@@ -453,9 +588,12 @@ end
                        " HOMEBREW_CELLAR=" + (brew / "Cellar").string() + " ./den " + args);
         }
         // A tap with one formula whose download is a local tarball.
-        void make_tap(const std::string& install_body, const std::string& sha_override = "") {
+        void make_tap(const std::string& install_body, const std::string& sha_override = "",
+                      const std::vector<std::pair<std::string, std::string>>& extra = {}) {
             auto src = tmp.path / "src" / "tool-1.0";
             write(src / "tool", "#!/bin/sh\necho tool 1.0\n");
+            for (const auto& [rel, body] : extra)
+                write(src / rel, body);
             fs::permissions(src / "tool", static_cast<fs::perms>(0755));
             auto tarball = tmp.path / "tool-1.0.tar.gz";
             run("tar -czf " + tarball.string() + " -C " + (tmp.path / "src").string() +
@@ -501,6 +639,22 @@ end
         CHECK(out.find("cannot install tool 1.0: unsupported install step: `system \"make\", "
                        "\"install\"`") != std::string::npos);
         CHECK_FALSE(fs::exists(env.prefix / "Cellar/tool"));
+    }
+
+    TEST_CASE("e2e: mkdir and cd blocks install from their directories") {
+        Env env;
+        env.make_tap("mkdir \"generated\" do\n"
+                     "    end\n"
+                     "    cd \"extras\" do\n"
+                     "      bash_completion.install \"tool.bash\"\n"
+                     "    end\n"
+                     "    bin.install \"tool\"",
+                     "", {{"extras/tool.bash", "complete -F _tool tool\n"}});
+        auto out = env.den("install test/urltap/tool");
+        INFO(out);
+        auto keg = env.prefix / "Cellar/tool/1.0";
+        CHECK(slurp(keg / "etc/bash_completion.d/tool.bash") == "complete -F _tool tool\n");
+        CHECK(slurp(keg / "bin/tool") == "#!/bin/sh\necho tool 1.0\n");
     }
 
     TEST_CASE("e2e: -s accepts user/repo/name") {

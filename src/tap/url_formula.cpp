@@ -616,20 +616,69 @@ std::optional<InstallStep> parse_step(const std::string& stmt, const std::string
     return std::nullopt;
 }
 
+// `mkdir "d" do` / `cd "d" do` (optionally `mkdir("d") do`): the block's
+// directory, and whether it is created (mkdir) or must already exist (cd).
+std::optional<std::pair<std::string, bool>> parse_dir_block(const std::string& text) {
+    if (text.find('\n') != std::string::npos)
+        return std::nullopt;
+    bool create;
+    if (starts_with_word(text, "mkdir") || text.starts_with("mkdir("))
+        create = true;
+    else if (starts_with_word(text, "cd") || text.starts_with("cd("))
+        create = false;
+    else
+        return std::nullopt;
+    Cursor c{text};
+    c.eat(create ? "mkdir" : "cd");
+    bool paren = c.eat("(");
+    auto d = c.str();
+    if (!d || !safe_relative(*d))
+        return std::nullopt;
+    if (paren && !c.eat(")"))
+        return std::nullopt;
+    if (!c.eat("do") || !c.done())
+        return std::nullopt;
+    return std::pair{*d, create};
+}
+
 } // namespace
 
 std::optional<std::vector<InstallStep>> parse_install_steps(const std::vector<std::string>& lines,
                                                             const std::string& formula_name,
                                                             std::string& refusal) {
     std::vector<InstallStep> steps;
+    std::vector<std::string> cwds; // open mkdir/cd blocks, innermost last
+    auto unsupported = [&](const std::string& l) {
+        refusal = "unsupported install step: `" + l.substr(0, l.find('\n')) + "`";
+        return std::nullopt;
+    };
     for (const auto& l : lines) {
-        auto step = parse_step(l, formula_name);
-        if (!step) {
-            auto first = l.substr(0, l.find('\n'));
-            refusal = "unsupported install step: `" + first + "`";
-            return std::nullopt;
+        const std::string cwd = cwds.empty() ? std::string{} : cwds.back();
+        if (l == "end") {
+            if (cwds.empty())
+                return unsupported(l);
+            cwds.pop_back();
+            continue;
         }
+        if (auto blk = parse_dir_block(l)) {
+            InstallStep step;
+            step.kind = InstallStep::Kind::Mkdir;
+            step.cwd = cwd;
+            step.name = blk->first;
+            step.create = blk->second;
+            steps.push_back(std::move(step));
+            cwds.push_back(join_rel(cwd, blk->first));
+            continue;
+        }
+        auto step = parse_step(l, formula_name);
+        if (!step)
+            return unsupported(l);
+        step->cwd = cwd;
         steps.push_back(std::move(*step));
+    }
+    if (!cwds.empty()) {
+        refusal = "unterminated `mkdir`/`cd` block in `def install`";
+        return std::nullopt;
     }
     if (steps.empty()) {
         refusal = "empty `def install` block";
@@ -682,6 +731,19 @@ std::string expand(const std::string& text, const InstallPaths& p) {
     return out;
 }
 
+// True when `p` (resolved through symlinks) lies inside `root`.
+bool inside(const fs::path& p, const fs::path& root) {
+    std::error_code ec;
+    auto rp = fs::weakly_canonical(p, ec);
+    if (ec)
+        return false;
+    auto rr = fs::weakly_canonical(root, ec);
+    if (ec)
+        return false;
+    auto [ri, pi] = std::mismatch(rr.begin(), rr.end(), rp.begin(), rp.end());
+    return ri == rr.end();
+}
+
 void move_into(const fs::path& src, const fs::path& dst) {
     fs::create_directories(dst.parent_path());
     if (fs::exists(fs::symlink_status(dst)))
@@ -706,14 +768,32 @@ void apply_install_steps(const std::vector<InstallStep>& steps, const fs::path& 
     };
     for (const auto& s : steps) {
         const fs::path dir = s.dir.empty() ? keg : keg / s.dir;
+        const fs::path cwd = s.cwd.empty() ? stage : stage / s.cwd;
         switch (s.kind) {
+        case InstallStep::Kind::Mkdir: {
+            auto d = cwd / s.name;
+            const auto shown = join_rel(s.cwd, s.name);
+            if (!inside(d, stage))
+                fail("`" + std::string(s.create ? "mkdir" : "cd") + " \"" + s.name +
+                     "\"` resolves outside the download");
+            if (s.create) {
+                std::error_code ec;
+                fs::create_directories(d, ec);
+                if (ec)
+                    fail("cannot create directory '" + shown + "': " + ec.message());
+            } else if (!fs::is_directory(d)) {
+                fail("`cd \"" + s.name + "\"` names '" + shown +
+                     "', which is not a directory in the download");
+            }
+            break;
+        }
         case InstallStep::Kind::Install: {
-            if (!s.if_exists.empty() && !fs::exists(fs::symlink_status(stage / s.if_exists)))
+            if (!s.if_exists.empty() && !fs::exists(fs::symlink_status(cwd / s.if_exists)))
                 break;
             if (s.glob) {
                 const auto& pat = s.items.front().first;
                 std::vector<fs::path> matches;
-                for (const auto& e : fs::directory_iterator(stage)) {
+                for (const auto& e : fs::directory_iterator(cwd)) {
                     auto fname = e.path().filename().string();
                     if (fname.starts_with(".") && !pat.starts_with("."))
                         continue;
@@ -726,9 +806,10 @@ void apply_install_steps(const std::vector<InstallStep>& steps, const fs::path& 
                 break;
             }
             for (const auto& [src, dst] : s.items) {
-                auto from = stage / src;
+                auto from = cwd / src;
                 if (!fs::exists(fs::symlink_status(from)))
-                    fail("install step names '" + src + "', which is not in the download");
+                    fail("install step names '" + join_rel(s.cwd, src) +
+                         "', which is not in the download");
                 move_into(from, dir / (dst.empty() ? fs::path(src).filename() : fs::path(dst)));
             }
             break;
