@@ -29,6 +29,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace den {
 
@@ -73,11 +74,51 @@ std::string replica_key(const std::string& formula, const std::string& version,
 /// a corrupt replica must not silently degrade to "no replica").
 std::map<std::string, std::string> parse_replica_document(const std::string& json_text);
 
+/// Where the local replica snapshot comes from.
+struct ReplicaSource {
+    enum class Kind {
+        File,     ///< an on-disk known_hashes.json (path is set)
+        Embedded, ///< the snapshot compiled into the binary
+        None,     ///< nothing available (replica source inactive)
+    };
+    Kind kind = Kind::None;
+    fs::path path; ///< set when kind == File
+
+    /// Human-readable description for diagnostics ("embedded snapshot" or the path).
+    std::string describe() const;
+};
+
+/// The replica snapshot compiled into the binary from data/known_hashes.json
+/// at build time (generated source; see CMakeLists.txt).
+std::string_view embedded_replica_json();
+
+/// Locate the local replica snapshot. Search order (first existing wins):
+///   1. <den_home>/trust/known_hashes.json      — user-synced override.
+///   2. <exe_dir>/../share/den/known_hashes.json — packaged with the binary
+///      (release tarball via install.sh, `cmake --install`, Homebrew). Tried
+///      for the executable path as reported and its symlink-resolved target.
+///   3. <exe_dir>/share/den/known_hashes.json   — an unpacked release tarball.
+///   4. <exe_dir>/../data/known_hashes.json     — dev build at <repo>/build/den.
+///   5. the embedded snapshot (when non-empty).
+/// Nothing is resolved relative to the current working directory. `exe` is
+/// the running executable (nullopt = unknown; only 1 and 5 apply).
+ReplicaSource locate_local_replica(const Config& config, const std::optional<fs::path>& exe,
+                                   std::string_view embedded);
+
+/// locate_local_replica for the running executable and the embedded snapshot.
+ReplicaSource locate_local_replica(const Config& config);
+
+/// Load a replica from a located source. Empty map for Kind::None; throws
+/// UserError (fail closed) on a corrupt file or embedded document.
+std::map<std::string, std::string> load_replica(const ReplicaSource& source,
+                                                std::string_view embedded);
+
 /// Load the bundled replica snapshot shipped alongside den.  Returns an empty
 /// map if the snapshot is absent (treated as "replica source inactive").
 std::map<std::string, std::string> load_local_replica(const Config& config);
 
-/// Path to the local replica snapshot (known_hashes.json) shipped with den.
+/// Path to the on-disk local replica snapshot, or the canonical den_home
+/// location (for diagnostics) when only the embedded snapshot is available.
 fs::path local_replica_path(const Config& config);
 
 /// Look up a single bottle hash in a replica map.  nullopt = not present.
