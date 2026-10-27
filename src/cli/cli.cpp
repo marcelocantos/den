@@ -1696,6 +1696,9 @@ void Cli::M::setup() {
                          "Print the latest available version without downloading or applying it");
     selfupdate->callback([this] {
         auto cfg = Config::detect();
+        // A brew-installed den is upgraded by brew, never in place.
+        const auto exe = running_exe_path();
+        const bool brew_managed = exe && brew_keg_for_exe(*exe).has_value();
         if (selfupdate_check) {
             auto latest = resolve_latest_version();
             if (latest.empty()) {
@@ -1709,9 +1712,14 @@ void Cli::M::setup() {
             } else {
                 std::cout << "den " << latest << " is available (current: " << DEN_VERSION
                           << ").\n";
+                if (brew_managed)
+                    std::cout << "Installed by Homebrew: run `" << kBrewUpgradeCommand
+                              << "` to update.\n";
             }
             return;
         }
+        if (brew_managed)
+            refuse_self_update_if_brew_managed(*exe);
         auto info = check_for_update(cfg);
         if (!info) {
             std::cout << "den " << DEN_VERSION << " is up to date.\n";
