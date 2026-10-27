@@ -29,7 +29,8 @@ constexpr std::array<char, 8> kMagic = {'D', 'E', 'N', 'I', 'D', 'X', '\0', '\0'
 // v2: records carry Package::cask_uninstall (🎯T12 uninstall stanzas).
 // v3: records carry Package::revision (Homebrew formula revision).
 // v4: archives carry Package::Archive::cellar (fixed-cellar bottles).
-constexpr uint32_t kFormatVersion = 4;
+// v5: records carry Package::old_names (renamed casks/formulae).
+constexpr uint32_t kFormatVersion = 5;
 constexpr uint32_t kEndianTag = 0x01020304;
 constexpr size_t kHeaderSize = 80;
 constexpr size_t kEntrySize = 24;
@@ -403,6 +404,7 @@ std::string encode_package(const Package& pkg) {
     put_opt(b, pkg.source_url);
     put_opt(b, pkg.source_sha256);
     put_opt(b, pkg.ruby_source_path);
+    put_strs(b, pkg.old_names);
     return b;
 }
 
@@ -459,6 +461,7 @@ Package decode_package(const char* data, size_t len) {
     pkg.source_url = r.opt();
     pkg.source_sha256 = r.opt();
     pkg.ruby_source_path = r.opt();
+    pkg.old_names = r.strs();
     if (!r.done()) {
         throw CorruptCache("trailing bytes in record");
     }

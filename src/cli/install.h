@@ -8,10 +8,20 @@
 #include "../index/package.h"
 #include "../provider/package_provider.h"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
 namespace den {
+
+/// True when every name is a den-installed cask ("cask/" prefix allowed).
+/// Casks link their own binaries (each reported as "==> Linked <name>"),
+/// so materialise has nothing of theirs to count.
+bool cask_only(const Config& config, const std::vector<std::string>& names);
+
+/// Whether to print the post-materialise symlink count. A 0 after a
+/// cask-only operation is noise ("Materialised: 0 symlinks"), not news.
+bool report_link_count(uint32_t links, bool casks_only);
 
 /// Install packages by name. Dispatches each install through `provider`,
 /// then updates the active env's manifest with the provider-reported

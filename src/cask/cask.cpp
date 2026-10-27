@@ -25,6 +25,7 @@
 #include <iostream>
 #include <optional>
 #include <sstream>
+#include <string_view>
 #include <system_error>
 
 namespace den {
@@ -154,13 +155,39 @@ void write_receipt(const fs::path& version_dir, const CaskReceipt& receipt) {
     }
 }
 
+/// For a source under this cask's own Caskroom version directory
+/// ("$HOMEBREW_PREFIX/Caskroom/<token>/<version>/<rel>", Homebrew's
+/// staged_path), return <rel>. den stages that content in its own stage
+/// directory instead. Returns nullopt for anything else, including another
+/// cask's or version's Caskroom path.
+std::optional<fs::path> caskroom_relative(const std::string& source, const std::string& token,
+                                          const std::string& version) {
+    static constexpr std::string_view kCaskroom = "$HOMEBREW_PREFIX/Caskroom/";
+    if (!source.starts_with(kCaskroom))
+        return std::nullopt;
+    const std::string own = std::string(kCaskroom) + token + "/" + version + "/";
+    if (token.empty() || version.empty() || !source.starts_with(own))
+        return std::nullopt;
+    fs::path rel = fs::path(source.substr(own.size())).lexically_normal();
+    if (rel.empty() || rel.is_absolute() || *rel.begin() == "..")
+        return std::nullopt;
+    return rel;
+}
+
 /// Resolve the binary artifact source path inside a stage directory.
-/// Handles bare names, nested paths, and "$APPDIR/Foo.app/..." references
-/// once apps have been installed.
+/// Handles bare names, nested paths, "$APPDIR/Foo.app/..." references once
+/// apps have been installed, and this cask's own Caskroom paths.
 fs::path resolve_binary_source(const fs::path& stage, const fs::path& appdir,
-                               const std::string& source) {
+                               const std::string& source, const std::string& token,
+                               const std::string& version) {
     if (source.starts_with("$APPDIR/") || source.starts_with("$appdir/")) {
         return appdir / source.substr(std::string("$APPDIR/").size());
+    }
+    if (source.starts_with("$HOMEBREW_PREFIX/Caskroom/")) {
+        // Never fall through to the literal string: it is not a real path.
+        if (auto rel = caskroom_relative(source, token, version))
+            return stage / *rel;
+        return stage / ".den-unresolved-caskroom-path";
     }
     if (!source.empty() && source[0] == '/') {
         return fs::path(source);
@@ -183,6 +210,12 @@ fs::path resolve_binary_source(const fs::path& stage, const fs::path& appdir,
         }
     }
     return candidate;
+}
+
+/// True when `p` is `dir` or lies beneath it (lexically, after normalising).
+bool path_within(const fs::path& p, const fs::path& dir) {
+    const fs::path rel = p.lexically_normal().lexically_relative(dir.lexically_normal());
+    return !rel.empty() && *rel.begin() != "..";
 }
 
 /// If `source` is an "$APPDIR/<App>.app/..." reference, return the part after
@@ -810,18 +843,28 @@ InstallResult install_cask(const Config& config, const Package& pkg) {
                         }
                     }
                 }
-                const fs::path src = resolve_binary_source(stage, appdir, art.source);
+                const fs::path src =
+                    resolve_binary_source(stage, appdir, art.source, token, pkg.version);
                 if (!fs::exists(src)) {
                     throw UserError("cask '" + token + "': binary not found: " + art.source);
                 }
-                // Keep a durable copy under the stage so env rebuilds can relink.
-                fs::path staged_bin = stage / link_name;
-                if (src.string().find(stage.string()) == 0) {
-                    if (!fs::exists(staged_bin)) {
-                        staged_bin = src;
+                // Link straight to a source inside the stage: it is already
+                // durable. Only a source outside the stage gets a durable
+                // copy, and that copy must not land on an unrelated stage
+                // entry of the same name (flutter's "flutter/bin/flutter"
+                // binary vs its "flutter/" top-level directory).
+                fs::path staged_bin;
+                if (path_within(src, stage)) {
+                    staged_bin = src;
+                } else {
+                    staged_bin = stage / link_name;
+                    if (fs::exists(staged_bin, ec) && !fs::is_regular_file(staged_bin, ec)) {
+                        staged_bin = stage / ".den-bin" / link_name;
+                        fs::create_directories(staged_bin.parent_path());
                     }
-                } else if (!fs::exists(staged_bin)) {
-                    fs::copy_file(src, staged_bin, fs::copy_options::overwrite_existing);
+                    if (!fs::exists(staged_bin, ec)) {
+                        fs::copy_file(src, staged_bin, fs::copy_options::overwrite_existing);
+                    }
                 }
                 fs::permissions(staged_bin,
                                 fs::perms::owner_exec | fs::perms::group_exec |

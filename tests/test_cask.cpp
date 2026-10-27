@@ -371,6 +371,97 @@ struct UpgradeEnv {
 
 } // namespace
 
+namespace {
+
+/// A binary-only cask shaped like android-platform-tools: the zip unpacks a
+/// platform-tools/ directory and the binaries are declared by their Homebrew
+/// staged path, "$HOMEBREW_PREFIX/Caskroom/<token>/<version>/...".
+Package make_caskroom_binary_cask(const fs::path& dir, const std::string& token,
+                                  const std::string& version,
+                                  const std::vector<std::string>& sources) {
+    const fs::path tools = dir / "content" / "platform-tools";
+    write_file(tools / "adb", "#!/bin/sh\necho adb " + version + "\n");
+    write_file(tools / "fastboot", "#!/bin/sh\necho fastboot\n");
+    write_file(tools / "lib64" / "libc++.dylib", "sibling\n");
+    // make_app_zip always adds an app bundle; this cask declares no app, so
+    // it is never installed.
+    auto zip = make_app_zip(dir, "Unused.app");
+    Package pkg = make_zip_cask(token, version, zip, "Unused.app");
+    pkg.cask_artifacts.clear();
+    for (const auto& src : sources) {
+        CaskArtifact bin;
+        bin.kind = CaskArtifactKind::Binary;
+        bin.source = src;
+        pkg.cask_artifacts.push_back(bin);
+    }
+    return pkg;
+}
+
+} // namespace
+
+TEST_SUITE("cask::caskroom_binary") {
+
+    TEST_CASE("binaries under the cask's own Caskroom path link into the stage") {
+        TmpDir tmp;
+        auto cfg = make_cfg(tmp.path);
+        setenv("DEN_APPDIR", cfg.appdir.c_str(), 1);
+        setenv("DEN_HOME", cfg.den_home.c_str(), 1);
+        const std::string root = "$HOMEBREW_PREFIX/Caskroom/demo-tools/37.0.1/platform-tools/";
+        auto pkg = make_caskroom_binary_cask(tmp.path / "z", "demo-tools", "37.0.1",
+                                             {root + "adb", root + "fastboot"});
+        auto result = install_cask(cfg, pkg);
+        CHECK(result.resolved_version == "37.0.1");
+
+        const auto bin = cfg.den_home / "envs" / "ROOT" / "bin";
+        const auto stage = cask_version_path(cfg, "demo-tools", "37.0.1") / "stage";
+        for (const char* name : {"adb", "fastboot"}) {
+            INFO(name);
+            const auto link = bin / name;
+            REQUIRE(fs::is_symlink(link));
+            // Linked in place inside the unpacked tree, so siblings resolve.
+            CHECK(fs::equivalent(link, stage / "platform-tools" / name));
+            CHECK_FALSE(fs::exists(stage / name)); // no copy out of the tree
+        }
+        CHECK(fs::exists(fs::path(fs::read_symlink(bin / "adb")).parent_path() / "lib64" /
+                         "libc++.dylib"));
+        CHECK(fs::is_empty(cfg.homebrew_caskroom));
+        CHECK(fs::is_empty(cfg.appdir)); // the stray app is not an artifact
+
+        uninstall_cask(cfg, "demo-tools");
+        CHECK_FALSE(fs::exists(bin / "adb"));
+        CHECK_FALSE(fs::exists(bin / "fastboot"));
+        CHECK_FALSE(is_cask_installed(cfg, "demo-tools"));
+        unsetenv("DEN_APPDIR");
+        unsetenv("DEN_HOME");
+    }
+
+    TEST_CASE("another cask's or version's Caskroom path is refused") {
+        TmpDir tmp;
+        auto cfg = make_cfg(tmp.path);
+        setenv("DEN_APPDIR", cfg.appdir.c_str(), 1);
+        setenv("DEN_HOME", cfg.den_home.c_str(), 1);
+        int n = 0;
+        for (const std::string src :
+             {"$HOMEBREW_PREFIX/Caskroom/other/37.0.1/platform-tools/adb",
+              "$HOMEBREW_PREFIX/Caskroom/demo-tools/36.0.0/platform-tools/adb",
+              "$HOMEBREW_PREFIX/Caskroom/demo-tools/37.0.1/../../other/37.0.1/platform-tools/adb",
+              "$HOMEBREW_PREFIX/Caskroom/demo-tools/37.0.1/"}) {
+            INFO(src);
+            auto pkg = make_caskroom_binary_cask(tmp.path / ("z" + std::to_string(n++)),
+                                                 "demo-tools", "37.0.1", {src});
+            // A bare Caskroom directory has no file name to link, so it is
+            // rejected by the name check before resolution.
+            const char* why = src.ends_with("/") ? "unsafe binary name" : "binary not found";
+            CHECK_THROWS_WITH_AS(install_cask(cfg, pkg), doctest::Contains(why), UserError);
+            CHECK_FALSE(is_cask_installed(cfg, "demo-tools"));
+            CHECK(fs::is_empty(cfg.den_home / "envs" / "ROOT" / "bin"));
+        }
+        CHECK(fs::is_empty(cfg.homebrew_caskroom));
+        unsetenv("DEN_APPDIR");
+        unsetenv("DEN_HOME");
+    }
+}
+
 TEST_SUITE("cask::appdir_binary") {
 
     // Regression: casks such as libreoffice, macdown and openscad declare
@@ -541,6 +632,68 @@ TEST_SUITE("cask::linux") {
         ar.url = "https://example.com/demo.zip";
         pkg.archives["default"] = ar;
         CHECK_THROWS_AS(install_cask(cfg, pkg), UserError);
+    }
+}
+
+#endif
+
+#ifdef __APPLE__
+
+TEST_SUITE("cask::binary_dir_collision") {
+
+    // flutter ships "flutter/bin/flutter" and links it as "flutter", which is
+    // also the name of the archive's top-level directory. den used to point
+    // the link at stage/flutter (the directory) instead of the binary.
+    TEST_CASE("a binary named like a top-level stage directory links to the binary") {
+        TmpDir tmp;
+        auto cfg = make_cfg(tmp.path);
+        setenv("DEN_APPDIR", cfg.appdir.c_str(), 1);
+        setenv("DEN_HOME", cfg.den_home.c_str(), 1);
+
+        auto zip = make_app_zip(tmp.path / "zip", "Tool.app", "tool/bin/tool");
+        auto pkg = make_zip_cask("tool", "1.0", zip, "Tool.app", "tool/bin/tool");
+        pkg.cask_artifacts.back().target = "$HOMEBREW_PREFIX/bin/tool";
+        install_cask(cfg, pkg);
+
+        const auto link = cfg.den_home / "envs" / "ROOT" / "bin" / "tool";
+        REQUIRE(fs::is_symlink(link));
+        CHECK(fs::is_regular_file(link));
+        CHECK(fs::path(fs::read_symlink(link)).filename() == "tool");
+        CHECK(fs::read_symlink(link).parent_path().filename() == "bin");
+        std::ifstream in(link);
+        std::string body((std::istreambuf_iterator<char>(in)), {});
+        CHECK(body.find("echo bin") != std::string::npos);
+
+        uninstall_cask(cfg, "tool");
+        CHECK_FALSE(fs::exists(link));
+        unsetenv("DEN_APPDIR");
+        unsetenv("DEN_HOME");
+    }
+
+    TEST_CASE("a copied out-of-stage binary never lands on a same-named stage directory") {
+        TmpDir tmp;
+        auto cfg = make_cfg(tmp.path);
+        setenv("DEN_APPDIR", cfg.appdir.c_str(), 1);
+        setenv("DEN_HOME", cfg.den_home.c_str(), 1);
+
+        const fs::path outside = tmp.path / "outside" / "tool";
+        write_file(outside, "#!/bin/sh\necho outside\n");
+        // The archive has a top-level "tool/" directory.
+        auto zip = make_app_zip(tmp.path / "zip", "Tool.app", "tool/README");
+        auto pkg = make_zip_cask("tool", "1.0", zip, "Tool.app", outside.string());
+        pkg.cask_artifacts.back().target = "$HOMEBREW_PREFIX/bin/tool";
+        install_cask(cfg, pkg);
+
+        const auto link = cfg.den_home / "envs" / "ROOT" / "bin" / "tool";
+        REQUIRE(fs::is_symlink(link));
+        REQUIRE(fs::is_regular_file(link));
+        std::ifstream in(link);
+        std::string body((std::istreambuf_iterator<char>(in)), {});
+        CHECK(body.find("echo outside") != std::string::npos);
+
+        uninstall_cask(cfg, "tool");
+        unsetenv("DEN_APPDIR");
+        unsetenv("DEN_HOME");
     }
 }
 
