@@ -4,6 +4,7 @@
 #pragma once
 
 #include "../core/config.h"
+#include "../env/environment.h"
 #include "../index/package.h"
 #include "../provider/package_provider.h"
 
@@ -14,9 +15,11 @@ namespace den {
 
 /// Install packages by name. Dispatches each install through `provider`,
 /// then updates the active env's manifest with the provider-reported
-/// resolved version + auto-deps, and re-materialises the env.
+/// resolved version + auto-deps, and re-materialises the env. `link_opts`
+/// carries `--overwrite` through to the root env's prefix linking.
 void install_packages(const Config& config, PackageProvider& provider, const PackageIndex& idx,
-                      const std::vector<std::string>& names);
+                      const std::vector<std::string>& names,
+                      const MaterialiseOptions& link_opts = {});
 
 /// Uninstall packages by name. Dispatches each uninstall through `provider`
 /// (Homebrew keeps files in the shared Cellar; other providers may reclaim),

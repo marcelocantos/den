@@ -4,6 +4,7 @@
 #include "doctor.h"
 
 #include "../core/error.h"
+#include "../env/environment.h"
 #include "../env/manifest.h"
 #include "../index/bottle_cellar.h"
 #include "../index/index.h"
@@ -14,8 +15,10 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <sys/stat.h>
 #include <vector>
@@ -184,6 +187,30 @@ void check_env_materialisation(const Config& config, std::vector<Finding>& findi
 }
 
 // ---------------------------------------------------------------------------
+// Check 4b: root env layout. The root env is linked into the prefix; an
+// install from before that change still has envs/ROOT/{bin,lib,...} as real
+// directories until `den update` migrates it. With shell integration active,
+// <prefix>/bin and <prefix>/sbin must also lead PATH.
+// ---------------------------------------------------------------------------
+void check_root_prefix_layout(const Config& config, std::vector<Finding>& findings) {
+    SPDLOG_DEBUG("check: root env prefix layout");
+    if (root_env_needs_migration(config.den_home)) {
+        warn(findings, "the root environment still uses the old envs/ROOT link layout; run "
+                       "`den update` to link it into " +
+                           config.store.parent_path().string());
+    }
+    if (active_env_path(config.den_home) != "/" || !std::getenv("DEN_ENV")) {
+        return;
+    }
+    const char* path = std::getenv("PATH");
+    auto problem = root_path_order_problem(path ? path : "", config.store.parent_path(),
+                                           config.den_home / "bin");
+    if (!problem.empty()) {
+        warn(findings, problem);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Check 5: broken symlinks in env directories
 // ---------------------------------------------------------------------------
 void check_broken_symlinks(const Config& config, std::vector<Finding>& findings) {
@@ -290,7 +317,7 @@ void check_file_permissions(const Config& config, std::vector<Finding>& findings
     for (const auto& p : sensitive) {
         if (!fs::exists(p))
             continue;
-        struct stat st {};
+        struct stat st{};
         if (::stat(p.c_str(), &st) != 0) {
             warn(findings, "cannot stat " + p.string() + ": " + std::strerror(errno));
             continue;
@@ -404,6 +431,31 @@ std::vector<std::string> kegs_with_mismatched_cellar(const fs::path& store, cons
 // Public API
 // ---------------------------------------------------------------------------
 
+std::string root_path_order_problem(const std::string& path_env, const fs::path& prefix,
+                                    const fs::path& den_bin) {
+    const auto bin = (prefix / "bin").lexically_normal();
+    const auto sbin = (prefix / "sbin").lexically_normal();
+    std::vector<fs::path> lead;
+    std::stringstream ss(path_env);
+    std::string entry;
+    while (std::getline(ss, entry, ':') && lead.size() < 2) {
+        if (entry.empty()) {
+            continue;
+        }
+        auto p = fs::path(entry).lexically_normal();
+        if (p == den_bin.lexically_normal()) {
+            continue;
+        }
+        lead.push_back(p);
+    }
+    if (lead.size() == 2 && lead[0] == bin && lead[1] == sbin) {
+        return {};
+    }
+    return "PATH should start with " + bin.string() + ":" + sbin.string() +
+           " (the root environment is linked into the prefix); run `eval \"$(den shell-env)\"` "
+           "or restart your shell";
+}
+
 std::vector<Finding> doctor(const Config& config) {
     std::vector<Finding> findings;
     std::vector<std::string> notes;
@@ -413,6 +465,7 @@ std::vector<Finding> doctor(const Config& config) {
     check_prefix_header_space(config, findings, notes);
     check_manifest(config, findings);
     check_env_materialisation(config, findings);
+    check_root_prefix_layout(config, findings);
     check_broken_symlinks(config, findings);
     check_missing_packages(config, findings);
     check_file_permissions(config, findings);
