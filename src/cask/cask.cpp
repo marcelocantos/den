@@ -128,6 +128,12 @@ void write_receipt(const fs::path& version_dir, const CaskReceipt& receipt) {
         });
     }
     j["pkgs"] = receipt.pkgs;
+    if (!receipt.fonts.empty()) {
+        j["fonts"] = json::array();
+        for (const auto& f : receipt.fonts) {
+            j["fonts"].push_back(f.string());
+        }
+    }
     if (!receipt.uninstall.empty()) {
         j["uninstall"] = uninstall_to_json(receipt.uninstall);
     }
@@ -216,6 +222,33 @@ fs::path resolve_binary_source(const fs::path& stage, const fs::path& appdir,
 bool path_within(const fs::path& p, const fs::path& dir) {
     const fs::path rel = p.lexically_normal().lexically_relative(dir.lexically_normal());
     return !rel.empty() && *rel.begin() != "..";
+}
+
+/// Replace every occurrence of `from` in s with `to`.
+void replace_all(std::string& s, const std::string& from, const std::string& to) {
+    for (size_t pos = s.find(from); pos != std::string::npos; pos = s.find(from, pos + to.size())) {
+        s.replace(pos, from.size(), to);
+    }
+}
+
+/// Fill in a command_wrapper script template. Homebrew's
+/// $HOMEBREW_PREFIX/Caskroom/<token>/<version> is where den staged the cask;
+/// other $HOMEBREW_PREFIX paths map to den's prefix and $APPDIR to the
+/// cask appdir. Substituted paths land inside single quotes, so a path
+/// containing one is refused.
+std::string expand_wrapper_script(std::string script, const std::string& token,
+                                  const std::string& version, const fs::path& stage,
+                                  const fs::path& appdir, const fs::path& prefix) {
+    for (const auto* p : {&stage, &appdir, &prefix}) {
+        if (p->string().find('\'') != std::string::npos) {
+            throw UserError("cask '" + token + "': cannot write a command wrapper for path " +
+                            p->string());
+        }
+    }
+    replace_all(script, "$HOMEBREW_PREFIX/Caskroom/" + token + "/" + version, stage.string());
+    replace_all(script, "$APPDIR", appdir.string());
+    replace_all(script, "$HOMEBREW_PREFIX", prefix.string());
+    return script;
 }
 
 /// If `source` is an "$APPDIR/<App>.app/..." reference, return the part after
@@ -510,6 +543,13 @@ std::optional<CaskReceipt> read_cask_receipt(const fs::path& version_dir) {
                 }
             }
         }
+        if (j.contains("fonts") && j["fonts"].is_array()) {
+            for (const auto& f : j["fonts"]) {
+                if (f.is_string()) {
+                    r.fonts.push_back(f.get<std::string>());
+                }
+            }
+        }
         if (j.contains("uninstall")) {
             merge_uninstall_directives(j["uninstall"], r.uninstall);
         }
@@ -529,7 +569,11 @@ std::optional<CaskReceipt> read_cask_receipt(const fs::path& version_dir) {
     }
 }
 
-bool app_owned_by_den(const Config& config, const fs::path& app_path) {
+namespace {
+
+/// True when `path` is listed in `field` of any den cask receipt.
+bool listed_in_den_receipt(const Config& config, const fs::path& app_path,
+                           std::vector<fs::path> CaskReceipt::* field) {
     const auto room = den_caskroom(config);
     std::error_code ec;
     if (!fs::is_directory(room, ec) || ec) {
@@ -551,7 +595,7 @@ bool app_owned_by_den(const Config& config, const fs::path& app_path) {
             if (!receipt) {
                 continue;
             }
-            for (const auto& a : receipt->apps) {
+            for (const auto& a : (*receipt).*field) {
                 std::error_code ec2;
                 fs::path have = fs::weakly_canonical(a, ec2);
                 if (ec2) {
@@ -564,6 +608,27 @@ bool app_owned_by_den(const Config& config, const fs::path& app_path) {
         }
     }
     return false;
+}
+
+} // namespace
+
+bool app_owned_by_den(const Config& config, const fs::path& app_path) {
+    return listed_in_den_receipt(config, app_path, &CaskReceipt::apps);
+}
+
+bool font_owned_by_den(const Config& config, const fs::path& font_path) {
+    return listed_in_den_receipt(config, font_path, &CaskReceipt::fonts);
+}
+
+fs::path cask_fontdir(const Config& config) {
+    (void)config;
+    if (const char* env = std::getenv("DEN_FONTDIR")) {
+        if (env[0] != '\0') {
+            return fs::path(env);
+        }
+    }
+    const char* home = std::getenv("HOME");
+    return fs::path(home && home[0] != '\0' ? home : "/") / "Library" / "Fonts";
 }
 
 bool is_cask_installed(const Config& config, std::string_view token) {
@@ -694,8 +759,14 @@ InstallResult install_cask(const Config& config, const Package& pkg) {
         fs::path link;
         fs::path target;
     };
+    struct PlannedFont {
+        fs::path source; // inside the stage
+        fs::path dest;
+    };
     std::vector<StagedApp> staged_apps;
     std::vector<PlannedLink> planned_links;
+    std::vector<PlannedFont> planned_fonts;
+    const fs::path fontdir = cask_fontdir(config);
 
     CaskReceipt receipt;
     receipt.token = token;
@@ -878,6 +949,61 @@ InstallResult install_cask(const Config& config, const Package& pkg) {
                 planned_links.push_back({link, staged_bin});
                 receipt.binaries.push_back(CaskBinaryLink{link, staged_bin});
                 placed_anything = true;
+            } else if (art.kind == CaskArtifactKind::Font) {
+                const fs::path src = find_app_in_stage(stage, art.source);
+                if (!fs::exists(src)) {
+                    throw UserError("cask '" + token +
+                                    "': font not found in archive: " + art.source);
+                }
+                // Homebrew's target is "/$HOME/Library/Fonts/<name>"; only the
+                // basename matters, the directory is cask_fontdir.
+                const std::string font_name = art.target.empty()
+                                                  ? src.filename().string()
+                                                  : fs::path(art.target).filename().string();
+                if (font_name.empty() || font_name == "." ||
+                    font_name.find('/') != std::string::npos ||
+                    font_name.find("..") != std::string::npos) {
+                    throw UserError("cask '" + token + "': unsafe font name: " + font_name);
+                }
+                const fs::path dest = fontdir / font_name;
+                if ((fs::exists(dest, ec) || fs::is_symlink(dest, ec)) &&
+                    !font_owned_by_den(config, dest)) {
+                    throw UserError("refusing to overwrite '" + dest.string() +
+                                    "': not installed by den. "
+                                    "Remove it manually or choose a different DEN_FONTDIR.");
+                }
+                planned_fonts.push_back({src, dest});
+                receipt.fonts.push_back(dest);
+                placed_anything = true;
+            } else if (art.kind == CaskArtifactKind::Wrapper) {
+                const std::string link_name = binary_link_name(art);
+                if (link_name.empty() || link_name.find('/') != std::string::npos ||
+                    link_name == "." || link_name == "..") {
+                    throw UserError("cask '" + token + "': unsafe command wrapper name");
+                }
+                // The script lives with the staged cask so env rebuilds can relink.
+                const fs::path script = stage / ".den-bin" / link_name;
+                fs::create_directories(script.parent_path());
+                {
+                    std::ofstream out(script, std::ios::binary | std::ios::trunc);
+                    out << expand_wrapper_script(art.source, token, pkg.version, stage, appdir,
+                                                 config.prefix);
+                    if (!out) {
+                        throw Error("failed to write command wrapper " + script.string());
+                    }
+                }
+                fs::permissions(script,
+                                fs::perms::owner_all | fs::perms::group_read |
+                                    fs::perms::group_exec | fs::perms::others_read |
+                                    fs::perms::others_exec,
+                                fs::perm_options::replace);
+                const fs::path link = bin_dir / link_name;
+                if (!fs::is_symlink(link, ec) && fs::exists(link, ec)) {
+                    throw UserError("refusing to overwrite binary '" + link.string() + "'");
+                }
+                planned_links.push_back({link, script});
+                receipt.binaries.push_back(CaskBinaryLink{link, script});
+                placed_anything = true;
             } else if (art.kind == CaskArtifactKind::Pkg) {
                 fs::path pkg_file = stage / art.source;
                 if (!fs::exists(pkg_file)) {
@@ -926,7 +1052,7 @@ InstallResult install_cask(const Config& config, const Package& pkg) {
 
         if (!placed_anything) {
             throw UserError("cask '" + token +
-                            "' has no supported artifacts (need app, binary, or pkg). "
+                            "' has no supported artifacts (need app, binary, font, or pkg). "
                             "Complex casks (installer scripts, preflight) are not supported yet.");
         }
     } catch (...) {
@@ -962,10 +1088,26 @@ InstallResult install_cask(const Config& config, const Package& pkg) {
     };
     std::vector<MovedApp> moved;
     std::vector<ReplacedLink> relinked;
+    std::vector<MovedApp> placed_fonts;
     const fs::path backup_dir = appdir / (".den-backup-" + token + "-" + pkg.version);
+    // Same directory as the fonts, so backing up an old den font is a rename.
+    const fs::path font_backup_dir = fontdir / (".den-backup-" + token + "-" + pkg.version);
 
     auto rollback = [&]() {
         std::error_code rec;
+        for (auto it = placed_fonts.rbegin(); it != placed_fonts.rend(); ++it) {
+            if (it->placed) {
+                fs::remove_all(it->dest, rec);
+            }
+            if (!it->backup.empty()) {
+                fs::rename(it->backup, it->dest, rec);
+                if (rec) {
+                    std::cerr << "error: could not restore " << it->dest.string() << " from "
+                              << it->backup.string() << ": " << rec.message() << "\n";
+                }
+            }
+        }
+        fs::remove_all(font_backup_dir, rec);
         for (auto it = relinked.rbegin(); it != relinked.rend(); ++it) {
             if (!it->replaced) {
                 continue;
@@ -1017,6 +1159,30 @@ InstallResult install_cask(const Config& config, const Package& pkg) {
             relinked.back().replaced = true;
             std::cout << "==> Linked " << pl.link.filename().string() << "\n";
         }
+        for (const auto& pf : planned_fonts) {
+            fs::create_directories(pf.dest.parent_path());
+            MovedApp m{pf.dest, {}, false};
+            if (fs::exists(pf.dest) || fs::is_symlink(pf.dest)) {
+                fs::create_directories(font_backup_dir);
+                m.backup = font_backup_dir / pf.dest.filename();
+                fs::rename(pf.dest, m.backup);
+            }
+            placed_fonts.push_back(m);
+            // Copy beside the destination, then rename, so a font never
+            // appears half-written.
+            const fs::path tmp =
+                pf.dest.parent_path() / (".den-tmp-" + pf.dest.filename().string());
+            fs::remove_all(tmp);
+            fs::copy(pf.source, tmp, fs::copy_options::recursive);
+            clear_quarantine(tmp);
+            fs::rename(tmp, pf.dest);
+            placed_fonts.back().placed = true;
+        }
+        if (!planned_fonts.empty()) {
+            std::cout << "==> Installed " << planned_fonts.size()
+                      << (planned_fonts.size() == 1 ? " font" : " fonts") << " in "
+                      << fontdir.string() << "\n";
+        }
         receipt.quarantine_cleared = true;
         maybe_inject_fault("receipt");
         write_receipt(version_dir, receipt);
@@ -1028,8 +1194,17 @@ InstallResult install_cask(const Config& config, const Package& pkg) {
 
     // ---- Commit: new version is live; retire the old one. ----
     fs::remove_all(backup_dir, ec);
+    fs::remove_all(font_backup_dir, ec);
     fs::remove_all(app_staging, ec);
     if (old_receipt) {
+        for (const auto& font : old_receipt->fonts) {
+            const bool still_used =
+                std::find(receipt.fonts.begin(), receipt.fonts.end(), font) != receipt.fonts.end();
+            if (!still_used && !fs::is_symlink(font, ec) && fs::exists(font, ec) &&
+                font_owned_by_den(config, font)) {
+                fs::remove_all(font, ec);
+            }
+        }
         for (const auto& app : old_receipt->apps) {
             const bool still_used =
                 std::find(receipt.apps.begin(), receipt.apps.end(), app) != receipt.apps.end();
@@ -1118,6 +1293,24 @@ void uninstall_cask(const Config& config, std::string_view token_sv) {
                 std::cerr << "warning: leaving '" << b.link.string() << "' (not a den symlink)\n";
             }
         }
+    }
+
+    for (const auto& font : receipt->fonts) {
+        if (fs::is_symlink(font, ec)) {
+            std::cerr << "warning: leaving '" << font.string() << "' (not a den font)\n";
+            continue;
+        }
+        if (!fs::exists(font, ec)) {
+            continue;
+        }
+        fs::remove_all(font, ec);
+        if (ec) {
+            throw Error("failed to remove " + font.string() + ": " + ec.message());
+        }
+    }
+    if (!receipt->fonts.empty()) {
+        std::cout << "==> Removed " << receipt->fonts.size()
+                  << (receipt->fonts.size() == 1 ? " font" : " fonts") << "\n";
     }
 
     if (!receipt->uninstall.empty()) {

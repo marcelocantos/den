@@ -35,6 +35,7 @@ struct CaskReceipt {
     std::vector<fs::path> apps; // Absolute .app paths den placed.
     std::vector<CaskBinaryLink> binaries;
     std::vector<std::string> pkgs; // pkgutil package IDs den installed, if any.
+    std::vector<fs::path> fonts;   // Absolute font file paths den placed.
     bool quarantine_cleared = false;
     /// The cask's `uninstall` stanza at install time, so uninstall/upgrade
     /// do not depend on the current index. Includes unsupported directive
@@ -52,6 +53,14 @@ fs::path cask_version_path(const Config& config, const std::string& token,
 /// Directory where .app bundles are installed. Override with DEN_APPDIR
 /// (tests use a temp dir so /Applications is never touched).
 fs::path cask_appdir(const Config& config);
+
+/// Directory where cask fonts are installed: DEN_FONTDIR if set (tests use a
+/// temp dir so the user's fonts are never touched), else ~/Library/Fonts,
+/// Homebrew's default.
+fs::path cask_fontdir(const Config& config);
+
+/// True when `font_path` is listed in a den cask receipt under den's caskroom.
+bool font_owned_by_den(const Config& config, const fs::path& font_path);
 
 /// True when `app_path` is listed in a den cask receipt under den's caskroom.
 /// Missing/malformed receipts never count as ownership.
