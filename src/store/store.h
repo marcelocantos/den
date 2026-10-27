@@ -43,6 +43,11 @@ std::vector<KegInfo> inspect_cellar(const fs::path& store, const fs::path& den_h
 
 /// Return the path for a specific package version in the store.
 /// Layout: store/<name>/<version>/
+/// The Cellar directory name for a manifest/index name. A tap-qualified
+/// formula ("user/repo/name") lives in Cellar/<name>, as Homebrew lays it
+/// out; every other name is returned unchanged.
+std::string keg_name(std::string_view name);
+
 fs::path package_path(const fs::path& store, const std::string& name, const std::string& version);
 
 /// Check whether a package version is installed in the store.

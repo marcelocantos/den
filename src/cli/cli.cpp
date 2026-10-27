@@ -291,8 +291,8 @@ void Cli::M::setup() {
         // Merge third-party taps (🎯T67) so tapped formulae resolve by both
         // their bare and "user/repo/name" forms before any provider runs.
         merge_taps_into_index(cfg, idx);
-        // "user/repo/name" installs under the bare formula name (the keg,
-        // opt link and manifest entry all use it).
+        // "user/repo/name" is recorded qualified in the manifest; the keg
+        // and links use the bare name.
         for (auto& name : install_names)
             name = resolve_tap_install_name(idx, name);
 
@@ -370,6 +370,8 @@ void Cli::M::setup() {
     upgrade->callback([this] {
         auto cfg = Config::detect();
         auto idx = load_index(cfg.cache / "index.json");
+        // Manifest entries may be tap-qualified ("user/repo/name").
+        merge_taps_into_index(cfg, idx);
         if (idx.empty()) {
             SPDLOG_ERROR("package index is empty — run `den update` first");
             return;

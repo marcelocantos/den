@@ -170,7 +170,10 @@ uint32_t materialise_one(const fs::path& den_home, const fs::path& store,
             continue;
         }
 
-        for (const auto& [name, version] : pkgs) {
+        for (const auto& [entry, version] : pkgs) {
+            // A tap-qualified entry ("user/repo/name") is looked up in the
+            // index by its qualified form but linked under its keg name.
+            const std::string name = keg_name(entry);
             auto pkg_path = provider->package_root(cfg, name, version);
             if (!fs::exists(pkg_path)) {
                 SPDLOG_WARN("package {}@{} not in store, skipping", name, version);
@@ -189,7 +192,7 @@ uint32_t materialise_one(const fs::path& den_home, const fs::path& store,
 
             // Keg-only (Homebrew, index-driven): only opt/ link.
             if (provider_name == "homebrew" && idx) {
-                if (const auto* pkg_info = idx->find(name); pkg_info && pkg_info->keg_only) {
+                if (const auto* pkg_info = idx->find(entry); pkg_info && pkg_info->keg_only) {
                     auto added = link_opt_only(pkg_path, dir, name, version);
                     if (added) {
                         SPDLOG_INFO("{}@{} is keg-only, linked opt/ only", name, version);
@@ -224,7 +227,7 @@ uint32_t materialise_one(const fs::path& den_home, const fs::path& store,
     std::set<std::string> manifest_names;
     for (const auto& [pn, pkgs] : per_provider) {
         for (const auto& [name, _] : pkgs) {
-            manifest_names.insert(name);
+            manifest_names.insert(keg_name(name));
         }
     }
 

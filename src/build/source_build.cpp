@@ -206,8 +206,10 @@ BuildRecipe extract_build_recipe(const PackageIndex& idx, const std::string& nam
     return recipe;
 }
 
-fs::path build_from_source(const Config& config, const PackageIndex& idx, const std::string& name,
-                           const std::string& version) {
+fs::path build_from_source(const Config& config, const PackageIndex& idx,
+                           const std::string& requested, const std::string& version) {
+    // "user/repo/name" is looked up qualified and built into Cellar/<name>.
+    const std::string name = keg_name(requested);
     // Validate before any store path, shell, or brew fallback uses the name.
     if (!is_valid_package_name(name)) {
         throw UserError("invalid package name: " + name);
@@ -231,7 +233,7 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx, const 
     std::cout << "==> Building " << name << " " << version << " from source\n";
 
     // Fetch formula source from GitHub (no brew dependency).
-    auto formula_source = fetch_formula_source(idx, name);
+    auto formula_source = fetch_formula_source(idx, requested);
 
     // Path A: Bundled Ruby subprocess.
     if (!formula_source.empty()) {
@@ -302,7 +304,7 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx, const 
     }
 
     // Fallback: text-parser-based build.
-    auto recipe = extract_build_recipe(idx, name);
+    auto recipe = extract_build_recipe(idx, requested);
     if (recipe.source_url.empty())
         throw UserError("no source URL found for " + name);
 

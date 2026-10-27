@@ -76,12 +76,12 @@ void merge_taps_into_index(const Config& config, PackageIndex& idx);
 /// tap part). Names without exactly two slashes are returned unchanged.
 std::string canonical_formula_ref(const std::string& name);
 
-/// The name to install a requested package under. A tap-qualified request
-/// ("user/repo/name") maps to the bare name, which kegs, opt links and the
-/// manifest use (as Homebrew's Cellar does). When a core formula of the same
-/// bare name exists, the tap formula replaces it in `idx` for this run, so
-/// the explicit request wins, as `brew install user/repo/name` does. Other
-/// names are returned unchanged.
-std::string resolve_tap_install_name(PackageIndex& idx, const std::string& name);
+/// The name to install a requested package under and record in the manifest.
+/// A tap-qualified request ("user/repo/name" or "user/homebrew-repo/name")
+/// that names a tapped formula maps to the canonical "user/repo/name", so a
+/// later reinstall or upgrade from the manifest finds the tap formula even
+/// when a core formula has the same bare name. The keg still lives in
+/// Cellar/<name> (see keg_name). Other names are returned unchanged.
+std::string resolve_tap_install_name(const PackageIndex& idx, const std::string& requested);
 
 } // namespace den
