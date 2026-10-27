@@ -23,6 +23,16 @@
 #                        Fail if the geometric mean of the per-op ratio
 #                        changes grew by more than P% (default: 30).
 #
+# Statistic: each op's time is the *median* of its pooled runs (median_s,
+# written by compare-brew.sh since it began pooling RUNS x ROUNDS samples).
+# A GitHub runner stall that hits a few runs drags the mean of 10 runs up by
+# tens of ms (26 Oct run 40317054465: den info 272–450 ms, mean 338 ms) but
+# leaves the median where most runs landed. Snapshots written before median_s
+# existed only carry mean_s; when either side of a comparison lacks medians,
+# both sides use means so the two are never mixed (a median is usually below
+# the mean, which would flatter the newer run). The statistic in use is
+# printed in the report header.
+#
 # Contract checked (🎯T68):
 #   1. den is at least as fast as brew on every measured op.
 #   2. At least one op is "meaningfully" faster (>= MEANINGFUL_FACTOR x).
@@ -156,29 +166,56 @@ fi
 echo ""
 
 # ---------------------------------------------------------------------------
-# Build a map of op -> {den_mean, brew_mean} for measured (non-null) rows.
+# Statistic selection.
 # ---------------------------------------------------------------------------
-# Emits TSV lines: op<TAB>den_mean<TAB>brew_mean   (only ops with both means)
-pair_means() {
-    local file="$1"
-    jq -r '
+# has_medians FILE — true iff every measured row (mean_s non-null) in FILE
+# also carries a median_s.
+has_medians() {
+    jq -e '
         [ .[] | select(.mean_s != null) ] as $rows
+        | ($rows | length) > 0 and all($rows[]; .median_s != null)
+    ' "$1" >/dev/null 2>&1
+}
+
+# runs_note FILE — "N runs" summary of per-row sample counts, if recorded.
+runs_note() {
+    jq -r '
+        [ .[] | select(.mean_s != null) | .runs // empty ] as $r
+        | if ($r | length) == 0 then "runs per op not recorded"
+          else "\($r | min)–\($r | max) runs per op" end
+    ' "$1"
+}
+
+# ---------------------------------------------------------------------------
+# Build a map of op -> {den, brew} for measured (non-null) rows, using STAT
+# ("median" or "mean").
+# ---------------------------------------------------------------------------
+# Emits TSV lines: op<TAB>den_s<TAB>brew_s   (only ops with both values)
+pair_stat() {
+    local file="$1" stat="$2"
+    jq -r --arg k "${stat}_s" '
+        [ .[] | select(.[$k] != null) ] as $rows
         | ($rows | map(.op) | unique) as $ops
         | $ops[]
         | . as $op
-        | ($rows | map(select(.op == $op and (.tool | startswith("den")))) | .[0].mean_s) as $den
-        | ($rows | map(select(.op == $op and (.tool | startswith("brew")))) | .[0].mean_s) as $brew
+        | ($rows | map(select(.op == $op and (.tool | startswith("den")))) | .[0][$k]) as $den
+        | ($rows | map(select(.op == $op and (.tool | startswith("brew")))) | .[0][$k]) as $brew
         | select($den != null and $brew != null)
         | [$op, ($den|tostring), ($brew|tostring)] | @tsv
     ' "${file}"
 }
+
+SNAP_STAT="mean"
+has_medians "${SNAPSHOT}" && SNAP_STAT="median"
+echo "statistic (den vs brew): ${SNAP_STAT}  ($(runs_note "${SNAPSHOT}"))"
+echo ""
 
 PASS=true
 MEANINGFUL_COUNT=0
 MEASURED_COUNT=0
 
 echo "--- den vs brew (per op) ---"
-printf "%-10s %12s %12s %10s   %s\n" "op" "den_ms" "brew_ms" "speedup" "verdict"
+printf "%-10s %12s %12s %10s   %s\n" "op" "den_ms" "brew_ms" "speedup" "verdict (${SNAP_STAT})"
 printf "%-10s %12s %12s %10s   %s\n" "--" "------" "-------" "-------" "-------"
 
 while IFS=$'\t' read -r op den brew; do
@@ -198,7 +235,7 @@ while IFS=$'\t' read -r op den brew; do
         MEANINGFUL_COUNT=$((MEANINGFUL_COUNT + 1))
     fi
     printf "%-10s %12s %12s %9sx   %s\n" "${op}" "${den_ms}" "${brew_ms}" "${speedup}" "${verdict}"
-done < <(pair_means "${SNAPSHOT}")
+done < <(pair_stat "${SNAPSHOT}" "${SNAP_STAT}")
 
 echo ""
 
@@ -226,14 +263,24 @@ fi
 # Contract 3: den/brew ratio regression vs baseline (if available).
 # ---------------------------------------------------------------------------
 if [[ -n "${BASELINE}" && -f "${BASELINE}" ]]; then
+    # Like-for-like: medians only if both snapshots have them.
+    REG_STAT="mean"
+    if [[ "${SNAP_STAT}" == "median" ]] && has_medians "${BASELINE}"; then
+        REG_STAT="median"
+    fi
     echo ""
+    if [[ "${REG_STAT}" == "median" ]]; then
+        echo "regression statistic: median (snapshot $(runs_note "${SNAPSHOT}"); baseline $(runs_note "${BASELINE}"))"
+    else
+        echo "regression statistic: mean (baseline has no per-op medians; snapshot and baseline both compared on means)"
+    fi
     echo "--- regression vs baseline (den/brew ratio; per-op limit +${MAX_REGRESSION_PCT}%, aggregate limit +${MAX_AGG_REGRESSION_PCT}%) ---"
     printf "%-10s %18s %18s %10s %10s   %s\n" "op" "base den/brew" "now den/brew" "ratio_chg" "den_dms" "verdict"
     printf "%-10s %18s %18s %10s %10s   %s\n" "--" "-------------" "------------" "---------" "-------" "-------"
 
     # Baseline op<TAB>den<TAB>brew rows (looked up per op with awk, not an
     # associative array: macOS /bin/bash is 3.2).
-    BASE_PAIRS="$(pair_means "${BASELINE}")"
+    BASE_PAIRS="$(pair_stat "${BASELINE}" "${REG_STAT}")"
 
     LOG_SUM="0"
     CHECKED=0
@@ -274,7 +321,7 @@ if [[ -n "${BASELINE}" && -f "${BASELINE}" ]]; then
             CHECKED=$((CHECKED + 1))
         fi
         printf "%-10s %18s %18s %10s %10s   %s\n" "${op}" "${base_r}" "${now_r}" "${ratio_d}" "${den_d}" "${verdict}"
-    done < <(pair_means "${SNAPSHOT}")
+    done < <(pair_stat "${SNAPSHOT}" "${REG_STAT}")
 
     echo ""
     if [[ "${CHECKED}" -gt 0 ]]; then

@@ -7,7 +7,7 @@ that matter most to a user: `list`, `info`, `search`, `install`, and `upgrade`.
 
 | Tool       | Install                  | Purpose                     |
 |------------|--------------------------|-----------------------------|
-| `hyperfine`| `brew install hyperfine` | Statistical micro-benchmarking |
+| `hyperfine`| `brew install hyperfine` | Statistical micro-benchmarking (1.x or 2.x) |
 | `jq`       | `brew install jq`        | Parsing hyperfine JSON output |
 | `brew`     | https://brew.sh          | Reference baseline           |
 
@@ -31,8 +31,9 @@ scripts/bench/compare-brew.sh --with-install
 # All options:
 scripts/bench/compare-brew.sh \
   --output-dir bench/results   \   # where to write JSON/CSV (default: bench/results/)
-  --runs 10                    \   # hyperfine reps for read-only ops (default: 10)
-  --install-runs 5             \   # hyperfine reps for install/upgrade (default: 3)
+  --runs 10                    \   # hyperfine reps per round, read-only ops (default: 10)
+  --install-runs 5             \   # hyperfine reps per round, install/upgrade (default: 3)
+  --rounds 3                   \   # rounds per op, pooled (default: 3, or $DEN_BENCH_ROUNDS)
   --with-install               \   # enable install + upgrade benchmarks
   --pkg hello                  \   # package used for install/upgrade (default: hello)
   --json                           # (reserved; output is always JSON+CSV)
@@ -69,6 +70,26 @@ they are gated behind `--with-install` and made deterministic as follows:
 - The test package (`hello` by default — tiny, no deps) is uninstalled from
   both tools on exit, restoring the Cellar.
 
+### Rounds and medians
+
+Each op is timed in `--rounds` separate hyperfine invocations (default 3), so
+the CI workflow's `--runs 10 --install-runs 5` gives 30 runs per tool per
+op (15 for install). Rounds alternate which tool goes first (den first on
+odd rounds, brew first on even ones), so a slow patch on the runner hits both
+tools rather than whichever happened to run during it. Install and upgrade
+rounds each reset the package state themselves.
+
+`merge-hyperfine.sh` pools every round's per-run times into one row per tool
+and records the **median** alongside the mean. The regression gate compares
+medians: a few runner stalls (the 26 Oct run had den `info` at 338 ± 65 ms,
+range 272–450 ms) drag a mean of 10 runs a long way, but do not move a median
+of 30 unless nearly half the runs stall. A real regression moves every run,
+so it moves the median too.
+
+hyperfine 2.0 removed `--time-unit` and changed its JSON export
+(`.results[].name`, `.measurements[].time_wall_clock.value`). The script
+detects the installed version and reads both formats.
+
 ## Output
 
 Results land in `bench/results/` as two files per run:
@@ -90,9 +111,17 @@ The JSON schema per entry:
   "stddev_s":  0.003,
   "min_s":     0.039,
   "max_s":     0.051,
+  "median_s":  0.041,
+  "runs":      30,
+  "rounds":    3,
+  "times_s":   [0.041, 0.040, "..."],
   "status":    "ok"
 }
 ```
+
+`median_s`, `runs`, `rounds` and `times_s` (the raw per-run times, so a
+snapshot can be re-analysed later) are absent from snapshots taken before
+the median gate.
 
 `host` is a stable machine class (`Darwin-arm64-local` on a developer
 machine, `gha-macos14-ARM64` on GitHub Actions macos-14). Regression
@@ -152,6 +181,13 @@ The tolerances come from the 13 weekly gha-macos14 runs between 27 Jul and
   noise of raw den ms (sd 18.9%, worst +44%).
 - Replaying all 36 same-era run pairs, the old raw-ms gate fails 12 and the
   ratio gate fails none.
+
+**Statistic:** ratios use per-op medians when both the snapshot and the
+baseline have them. If either lacks them (any snapshot before the median
+gate, including the 12 Oct baseline), both sides are compared on means, and
+the output says so: a median against an old mean would favour the new run.
+The first median snapshot committed to `bench/results/` becomes the first
+median baseline.
 
 Known limit: because the gate is relative to brew, a big brew speedup (like
 7 Sep) shrinks den's lead and can trip it even when den did not change. That
