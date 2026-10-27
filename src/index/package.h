@@ -100,6 +100,18 @@ struct Package {
     // Cask `uninstall` stanza (merged across all uninstall blocks).
     CaskUninstall cask_uninstall;
 
+    // Tap formula that installs a prebuilt download (url + sha256 for this
+    // platform, plus a whitelisted `def install` recipe) instead of a bottle.
+    // Only set for tap formulae, at merge time; never serialised. See
+    // src/tap/url_formula.h.
+    struct UrlInstall {
+        std::string url;
+        std::string sha256;
+        std::vector<std::string> install_lines; // raw `def install` body, joined statements
+        std::string refusal; // non-empty: why den cannot install this formula natively
+    };
+    std::optional<UrlInstall> url_install;
+
     // Source build info.
     std::optional<std::string> source_url;
     std::optional<std::string> source_sha256;
