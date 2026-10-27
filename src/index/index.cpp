@@ -2,18 +2,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "index.h"
+#include "cask_uninstall_json.h"
 
 #include "index_cache.h"
 
 #include "../download/http.h"
 
 #include "../core/error.h"
+#include "../platform/platform.h"
 
 #include <spdlog/spdlog.h>
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <fstream>
+#include <utility>
+#include <vector>
 
 namespace den {
 
@@ -306,6 +311,7 @@ Package transform_cask(const json& c) {
 
     if (c.contains("artifacts")) {
         parse_cask_artifacts(c["artifacts"], pkg.cask_artifacts);
+        parse_cask_uninstall(c["artifacts"], pkg.cask_uninstall);
     }
 
     // Binary-only casks are still ArtifactType::App at the type level today
@@ -370,6 +376,9 @@ json package_to_json(const Package& pkg) {
             arts.push_back(std::move(aj));
         }
         j["cask_artifacts"] = std::move(arts);
+    }
+    if (!pkg.cask_uninstall.empty()) {
+        j["cask_uninstall"] = uninstall_to_json(pkg.cask_uninstall);
     }
 
     return j;
@@ -442,6 +451,9 @@ Package package_from_json(const json& j) {
                 pkg.cask_artifacts.push_back(std::move(a));
             }
         }
+    }
+    if (j.contains("cask_uninstall")) {
+        merge_uninstall_directives(j["cask_uninstall"], pkg.cask_uninstall);
     }
 
     return pkg;
@@ -549,12 +561,94 @@ void save_index(const PackageIndex& idx, const fs::path& cache_path) {
     }
 }
 
-PackageIndex fetch_and_transform(const Config& /*config*/) {
-    PackageIndex idx;
+namespace {
 
-    // Fetch formulae.
-    SPDLOG_INFO("fetching Homebrew formula index");
-    std::string formula_data = fetch_url(kFormulaUrl);
+/// Every distinct bottle-tag candidate list den can produce on macOS, per
+/// arch. Derived from bottle_tag_candidates() so it tracks codename changes.
+const std::vector<std::pair<Arch, std::optional<MacOsVersion>>>& macos_platforms() {
+    static const auto platforms = [] {
+        std::vector<std::pair<Arch, std::optional<MacOsVersion>>> out;
+        for (Arch arch : {Arch::Arm64, Arch::X86_64}) {
+            std::vector<std::vector<std::string>> seen;
+            // Darwin 20+ maps to macOS 11+ (see detect_macos_version); scan
+            // well past the newest known codename so future majors are covered.
+            for (int major = 11; major <= 60; ++major) {
+                MacOsVersion v{major, 0};
+                auto cands = bottle_tag_candidates(arch, v);
+                if (std::find(seen.begin(), seen.end(), cands) == seen.end()) {
+                    seen.push_back(std::move(cands));
+                    out.emplace_back(arch, v);
+                }
+            }
+        }
+        return out;
+    }();
+    return platforms;
+}
+
+/// The (url, sha256) den would download on each macOS platform; nullopt where
+/// no archive is selectable.
+std::vector<std::optional<std::pair<std::string, std::string>>>
+cask_selection(const std::map<std::string, Package::Archive>& archives) {
+    std::vector<std::string> tags;
+    tags.reserve(archives.size());
+    for (const auto& [tag, _] : archives) {
+        tags.push_back(tag);
+    }
+    std::vector<std::optional<std::pair<std::string, std::string>>> out;
+    for (const auto& [arch, macos] : macos_platforms()) {
+        auto best = best_archive_tag(arch, macos, tags);
+        if (best) {
+            const auto& ar = archives.at(*best);
+            out.emplace_back(std::make_pair(ar.url, ar.sha256));
+        } else {
+            out.emplace_back(std::nullopt);
+        }
+    }
+    return out;
+}
+
+} // namespace
+
+void trim_cask_archives(Package& pkg) {
+    if (pkg.archives.size() <= 1) {
+        return;
+    }
+
+    const auto original = cask_selection(pkg.archives);
+    const bool any_selectable =
+        std::any_of(original.begin(), original.end(), [](const auto& s) { return s.has_value(); });
+    if (!any_selectable) {
+        return; // keep the listing intact for `den info`
+    }
+
+    // 1. Casks never install on Linux.
+    for (auto it = pkg.archives.begin(); it != pkg.archives.end();) {
+        if (it->first.ends_with("_linux")) {
+            it = pkg.archives.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    // 2. Greedily drop variants that are redundant on every macOS platform.
+    //    "default" is the universal fallback, so it is never a candidate.
+    std::vector<std::string> variant_tags;
+    for (const auto& [tag, _] : pkg.archives) {
+        if (tag != "default") {
+            variant_tags.push_back(tag);
+        }
+    }
+    for (const auto& tag : variant_tags) {
+        auto node = pkg.archives.extract(tag);
+        if (cask_selection(pkg.archives) != original) {
+            pkg.archives.insert(std::move(node));
+        }
+    }
+}
+
+PackageIndex transform_homebrew(const std::string& formula_data, const std::string& cask_data) {
+    PackageIndex idx;
 
     try {
         json formulae = json::parse(formula_data);
@@ -571,17 +665,18 @@ PackageIndex fetch_and_transform(const Config& /*config*/) {
 
     SPDLOG_INFO("indexed {} formulae", idx.packages.size());
 
-    // Fetch casks.
-    SPDLOG_INFO("fetching Homebrew cask index");
-    std::string cask_data = fetch_url(kCaskUrl);
-
     size_t formula_count = idx.packages.size();
+    size_t variants_before = 0;
+    size_t variants_after = 0;
 
     try {
         json casks = json::parse(cask_data);
         if (casks.is_array()) {
             for (const auto& c : casks) {
                 Package pkg = transform_cask(c);
+                variants_before += pkg.archives.size();
+                trim_cask_archives(pkg);
+                variants_after += pkg.archives.size();
                 std::string name = pkg.name;
                 // Casks might collide with formula names; cask gets a
                 // "cask/" prefix if there's a conflict.
@@ -596,10 +691,19 @@ PackageIndex fetch_and_transform(const Config& /*config*/) {
         throw DownloadError(std::string("failed to parse cask.json: ") + e.what());
     }
 
-    SPDLOG_INFO("indexed {} casks ({} total packages)", idx.packages.size() - formula_count,
-                idx.packages.size());
+    SPDLOG_INFO("indexed {} casks ({} total packages); cask archives {} -> {}",
+                idx.packages.size() - formula_count, idx.packages.size(), variants_before,
+                variants_after);
 
     return idx;
+}
+
+PackageIndex fetch_and_transform(const Config& /*config*/) {
+    SPDLOG_INFO("fetching Homebrew formula index");
+    std::string formula_data = fetch_url(kFormulaUrl);
+    SPDLOG_INFO("fetching Homebrew cask index");
+    std::string cask_data = fetch_url(kCaskUrl);
+    return transform_homebrew(formula_data, cask_data);
 }
 
 } // namespace den

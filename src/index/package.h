@@ -11,6 +11,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace den {
@@ -31,6 +32,25 @@ struct CaskArtifact {
     CaskArtifactKind kind = CaskArtifactKind::App;
     std::string source; // Path inside the container (e.g. "Foo.app", "bin/foo")
     std::string target; // Optional install target (app path or $HOMEBREW_PREFIX/bin/foo)
+};
+
+/// A cask's `uninstall` stanza (🎯T12). Directive values are kept exactly
+/// as the cask declares them; safety checks happen when they run
+/// (src/cask/uninstall_stanza.cpp).
+struct CaskUninstall {
+    std::vector<std::string> quit;                           // bundle ids
+    std::vector<std::pair<std::string, std::string>> signal; // (signal, bundle id)
+    std::vector<std::string> launchctl;                      // launchd labels
+    std::vector<std::string> pkgutil;                        // pkg receipt ids / patterns
+    std::vector<std::string> delete_paths;
+    std::vector<std::string> trash;
+    std::vector<std::string> rmdir;
+    std::vector<std::string> unsupported; // directive names den does not run (script, kext, …)
+
+    bool empty() const {
+        return quit.empty() && signal.empty() && launchctl.empty() && pkgutil.empty() &&
+               delete_paths.empty() && trash.empty() && rmdir.empty() && unsupported.empty();
+    }
 };
 
 // A package in den's index. Unified model — no formula/cask distinction.
@@ -61,6 +81,9 @@ struct Package {
 
     // Cask artifacts (app / binary / pkg). Empty for formulae.
     std::vector<CaskArtifact> cask_artifacts;
+
+    // Cask `uninstall` stanza (merged across all uninstall blocks).
+    CaskUninstall cask_uninstall;
 
     // Source build info.
     std::optional<std::string> source_url;

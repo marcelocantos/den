@@ -10,25 +10,59 @@
 # Usage:
 #   scripts/bench/compare-results.sh [SNAPSHOT.json] [--baseline PRIOR.json]
 #                                    [--max-regression PCT]
+#                                    [--max-aggregate-regression PCT]
 #
 #   SNAPSHOT.json        The run to evaluate. Default: newest bench-*.json in
 #                        bench/results/.
 #   --baseline PRIOR     A previous snapshot to compare against for regression
-#                        detection. Default: second-newest in bench/results/,
-#                        if one exists.
-#   --max-regression P   Fail if any den op is more than P% slower than the
-#                        baseline (default: 25).
+#                        detection. Default: newest same-host snapshot in
+#                        bench/results/, if one exists.
+#   --max-regression P   Fail if any single op's den/brew time ratio grew by
+#                        more than P% vs the baseline (default: 75).
+#   --max-aggregate-regression P
+#                        Fail if the geometric mean of the per-op ratio
+#                        changes grew by more than P% (default: 30).
+#
+# Statistic: each op's time is the *median* of its pooled runs (median_s,
+# written by compare-brew.sh since it began pooling RUNS x ROUNDS samples).
+# A GitHub runner stall that hits a few runs drags the mean of 10 runs up by
+# tens of ms (26 Oct run 40317054465: den info 272–450 ms, mean 338 ms) but
+# leaves the median where most runs landed. Snapshots written before median_s
+# existed only carry mean_s; when either side of a comparison lacks medians,
+# both sides use means so the two are never mixed (a median is usually below
+# the mean, which would flatter the newer run). The statistic in use is
+# printed in the report header.
 #
 # Contract checked (🎯T68):
 #   1. den is at least as fast as brew on every measured op.
 #   2. At least one op is "meaningfully" faster (>= MEANINGFUL_FACTOR x).
-#   3. No measured den op regressed by more than --max-regression vs a
-#      same-host baseline, *and* by more than MIN_ABS_REGRESSION_S.
-#      Cross-host comparisons (e.g. local M4 Max vs GitHub Actions
-#      macos-14) are skipped — absolute times are not comparable across
-#      machines. Sub-floor deltas are also skipped: hyperfine cannot
-#      calibrate shell startup below ~5 ms, so a 0.2 ms `list` baseline
-#      vs a 6 ms remeasurement is noise, not a product regression.
+#   3. den did not lose ground to brew vs a same-host baseline. Per op the
+#      gate compares ratio = den_ms / brew_ms now against the baseline's
+#      ratio, so a slower (or faster) GitHub runner, which moves den and
+#      brew together, cancels out. An op regresses when its ratio grew by
+#      more than --max-regression *and* den's own time grew by more than
+#      MIN_ABS_REGRESSION_S. Separately, the geometric mean of the ratio
+#      changes across all checked ops must not grow by more than
+#      --max-aggregate-regression; a uniform den-only slowdown (e.g. a new
+#      fixed startup cost) shows up there well before any single op trips.
+#      Tiny ops (den under TINY_OP_S in both runs, i.e. `list`) are reported
+#      but excluded from the ratio gate. Cross-host comparisons are skipped.
+#
+# Tolerances (derived from the 13 weekly gha-macos14 runs, 27 Jul–19 Oct
+# 2026, run ids 30253711792..39244425261, ignoring the 7 Sep step where
+# brew itself got ~2x faster):
+#   - Per-op ratio: consecutive-week changes have sd 14–20% and reach +35%;
+#     because failing runs are not committed the baseline can be weeks old,
+#     and across every pair since 7 Sep the worst noise is +70% (install,
+#     whose brew side has 14% in-run stddev). 75% clears that while still
+#     failing any op that roughly doubles relative to brew.
+#   - Aggregate (geomean of info/search/install/upgrade ratio changes):
+#     sd 10.3%, worst +18.7% over all pairs — about half the noise of raw
+#     den ms (sd 18.9%, worst +44%, the 19 Oct false failure). 30% is ~3 sd.
+#   - TINY_OP_S = 20 ms: `list` den means span 0.2–15.7 ms (in-run stddev
+#     23% den / 34% brew; ratio swings -94%..+3060% week to week) while
+#     every other op is >= 180 ms. hyperfine cannot calibrate shell startup
+#     below ~5 ms, so those ratios are noise.
 #
 # Exit status: 0 if the contract holds, 1 otherwise.
 
@@ -39,14 +73,17 @@ RESULTS_DIR="${REPO_ROOT}/bench/results"
 
 # A speedup is "meaningful" when den is at least this many times faster.
 MEANINGFUL_FACTOR="1.5"
-MAX_REGRESSION_PCT="25"
-# Hyperfine warns that commands under ~5 ms cannot have their shell
-# startup calibrated. A same-host % gate on those numbers (0.2 ms →
-# 6 ms = +2600%) is a false T68 failure. Require a 25 ms absolute
-# delta as well — large enough to ignore list noise, small enough that
-# the existing 50 ms same-host test (and any real info/install/upgrade
-# regression) still fails.
+# Per-op den/brew ratio growth (%) that counts as a regression.
+MAX_REGRESSION_PCT="75"
+# Geomean (across checked ops) den/brew ratio growth (%) that counts as a
+# regression.
+MAX_AGG_REGRESSION_PCT="30"
+# An op's ratio regression must also be backed by den itself getting at
+# least this much slower in absolute terms (seconds).
 MIN_ABS_REGRESSION_S="0.025"
+# Ops where den's mean is below this in both runs are too small to compare
+# by ratio (seconds).
+TINY_OP_S="0.020"
 
 SNAPSHOT=""
 BASELINE=""
@@ -55,6 +92,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --baseline)       BASELINE="$2";          shift 2 ;;
         --max-regression) MAX_REGRESSION_PCT="$2"; shift 2 ;;
+        --max-aggregate-regression) MAX_AGG_REGRESSION_PCT="$2"; shift 2 ;;
         -*)               echo "Unknown option: $1" >&2; exit 1 ;;
         *)                SNAPSHOT="$1";           shift ;;
     esac
@@ -128,29 +166,56 @@ fi
 echo ""
 
 # ---------------------------------------------------------------------------
-# Build a map of op -> {den_mean, brew_mean} for measured (non-null) rows.
+# Statistic selection.
 # ---------------------------------------------------------------------------
-# Emits TSV lines: op<TAB>den_mean<TAB>brew_mean   (only ops with both means)
-pair_means() {
-    local file="$1"
-    jq -r '
+# has_medians FILE — true iff every measured row (mean_s non-null) in FILE
+# also carries a median_s.
+has_medians() {
+    jq -e '
         [ .[] | select(.mean_s != null) ] as $rows
+        | ($rows | length) > 0 and all($rows[]; .median_s != null)
+    ' "$1" >/dev/null 2>&1
+}
+
+# runs_note FILE — "N runs" summary of per-row sample counts, if recorded.
+runs_note() {
+    jq -r '
+        [ .[] | select(.mean_s != null) | .runs // empty ] as $r
+        | if ($r | length) == 0 then "runs per op not recorded"
+          else "\($r | min)–\($r | max) runs per op" end
+    ' "$1"
+}
+
+# ---------------------------------------------------------------------------
+# Build a map of op -> {den, brew} for measured (non-null) rows, using STAT
+# ("median" or "mean").
+# ---------------------------------------------------------------------------
+# Emits TSV lines: op<TAB>den_s<TAB>brew_s   (only ops with both values)
+pair_stat() {
+    local file="$1" stat="$2"
+    jq -r --arg k "${stat}_s" '
+        [ .[] | select(.[$k] != null) ] as $rows
         | ($rows | map(.op) | unique) as $ops
         | $ops[]
         | . as $op
-        | ($rows | map(select(.op == $op and (.tool | startswith("den")))) | .[0].mean_s) as $den
-        | ($rows | map(select(.op == $op and (.tool | startswith("brew")))) | .[0].mean_s) as $brew
+        | ($rows | map(select(.op == $op and (.tool | startswith("den")))) | .[0][$k]) as $den
+        | ($rows | map(select(.op == $op and (.tool | startswith("brew")))) | .[0][$k]) as $brew
         | select($den != null and $brew != null)
         | [$op, ($den|tostring), ($brew|tostring)] | @tsv
     ' "${file}"
 }
+
+SNAP_STAT="mean"
+has_medians "${SNAPSHOT}" && SNAP_STAT="median"
+echo "statistic (den vs brew): ${SNAP_STAT}  ($(runs_note "${SNAPSHOT}"))"
+echo ""
 
 PASS=true
 MEANINGFUL_COUNT=0
 MEASURED_COUNT=0
 
 echo "--- den vs brew (per op) ---"
-printf "%-10s %12s %12s %10s   %s\n" "op" "den_ms" "brew_ms" "speedup" "verdict"
+printf "%-10s %12s %12s %10s   %s\n" "op" "den_ms" "brew_ms" "speedup" "verdict (${SNAP_STAT})"
 printf "%-10s %12s %12s %10s   %s\n" "--" "------" "-------" "-------" "-------"
 
 while IFS=$'\t' read -r op den brew; do
@@ -170,7 +235,7 @@ while IFS=$'\t' read -r op den brew; do
         MEANINGFUL_COUNT=$((MEANINGFUL_COUNT + 1))
     fi
     printf "%-10s %12s %12s %9sx   %s\n" "${op}" "${den_ms}" "${brew_ms}" "${speedup}" "${verdict}"
-done < <(pair_means "${SNAPSHOT}")
+done < <(pair_stat "${SNAPSHOT}" "${SNAP_STAT}")
 
 echo ""
 
@@ -195,39 +260,81 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Contract 3: regression vs baseline (if available).
+# Contract 3: den/brew ratio regression vs baseline (if available).
 # ---------------------------------------------------------------------------
 if [[ -n "${BASELINE}" && -f "${BASELINE}" ]]; then
+    # Like-for-like: medians only if both snapshots have them.
+    REG_STAT="mean"
+    if [[ "${SNAP_STAT}" == "median" ]] && has_medians "${BASELINE}"; then
+        REG_STAT="median"
+    fi
     echo ""
-    echo "--- regression vs baseline (den only) ---"
-    printf "%-10s %12s %12s %10s   %s\n" "op" "base_ms" "now_ms" "delta" "verdict"
-    printf "%-10s %12s %12s %10s   %s\n" "--" "-------" "------" "-----" "-------"
+    if [[ "${REG_STAT}" == "median" ]]; then
+        echo "regression statistic: median (snapshot $(runs_note "${SNAPSHOT}"); baseline $(runs_note "${BASELINE}"))"
+    else
+        echo "regression statistic: mean (baseline has no per-op medians; snapshot and baseline both compared on means)"
+    fi
+    echo "--- regression vs baseline (den/brew ratio; per-op limit +${MAX_REGRESSION_PCT}%, aggregate limit +${MAX_AGG_REGRESSION_PCT}%) ---"
+    printf "%-10s %18s %18s %10s %10s   %s\n" "op" "base den/brew" "now den/brew" "ratio_chg" "den_dms" "verdict"
+    printf "%-10s %18s %18s %10s %10s   %s\n" "--" "-------------" "------------" "---------" "-------" "-------"
 
-    # Map op -> den_mean for both files.
-    den_mean_for() {
-        jq -r --arg op "$2" '
-            [ .[] | select(.op == $op and (.tool|startswith("den")) and .mean_s != null) ]
-            | .[0].mean_s // empty
-        ' "$1"
-    }
+    # Baseline op<TAB>den<TAB>brew rows (looked up per op with awk, not an
+    # associative array: macOS /bin/bash is 3.2).
+    BASE_PAIRS="$(pair_stat "${BASELINE}" "${REG_STAT}")"
 
-    while IFS=$'\t' read -r op _den _brew; do
+    LOG_SUM="0"
+    CHECKED=0
+    while IFS=$'\t' read -r op now_den now_brew; do
         [[ -z "${op}" ]] && continue
-        base="$(den_mean_for "${BASELINE}" "${op}")"
-        now="$(den_mean_for "${SNAPSHOT}" "${op}")"
-        [[ -z "${base}" || -z "${now}" ]] && continue
-        base_ms="$(awk -v v="${base}" 'BEGIN{printf "%.1f", v*1000}')"
-        now_ms="$(awk -v v="${now}" 'BEGIN{printf "%.1f", v*1000}')"
-        delta="$(awk -v b="${base}" -v n="${now}" 'BEGIN{ if (b>0) printf "%+.1f%%", (n-b)/b*100; else print "n/a" }')"
-        verdict="ok"
-        if awk -v b="${base}" -v n="${now}" -v p="${MAX_REGRESSION_PCT}" \
-            -v a="${MIN_ABS_REGRESSION_S}" \
-            'BEGIN{ exit !(b>0 && (n-b)/b*100 > p && (n-b) > a) }'; then
-            verdict="REGRESSED"
+        base_row="$(awk -F'\t' -v op="${op}" '$1 == op { print $2 "\t" $3; exit }' <<<"${BASE_PAIRS}")"
+        [[ -z "${base_row}" ]] && continue
+        IFS=$'\t' read -r base_den base_brew <<<"${base_row}"
+
+        # One awk call computes the row: ratios, deltas, and the verdict.
+        IFS=$'\t' read -r base_r now_r ratio_d den_d verdict logr <<<"$(awk \
+            -v bd="${base_den}" -v bb="${base_brew}" \
+            -v nd="${now_den}" -v nb="${now_brew}" \
+            -v p="${MAX_REGRESSION_PCT}" -v a="${MIN_ABS_REGRESSION_S}" \
+            -v tiny="${TINY_OP_S}" '
+            BEGIN {
+                if (bd <= 0 || bb <= 0 || nd <= 0 || nb <= 0) {
+                    printf "n/a\tn/a\tn/a\tn/a\tskip (zero time)\t-\n"; exit
+                }
+                br = bd / bb; nr = nd / nb
+                ch = (nr / br - 1) * 100
+                dd = (nd - bd) * 1000
+                v = "ok"; lr = sprintf("%.12f", log(nr / br))
+                if (bd < tiny + 0 && nd < tiny + 0) {
+                    v = sprintf("skip (tiny, den < %d ms)", tiny * 1000); lr = "-"
+                } else if (ch > p + 0 && (nd - bd) > a + 0) {
+                    v = "REGRESSED"
+                }
+                printf "%.3f (%.0f/%.0f)\t%.3f (%.0f/%.0f)\t%+.1f%%\t%+.1f\t%s\t%s\n",
+                    br, bd*1000, bb*1000, nr, nd*1000, nb*1000, ch, dd, v, lr
+            }')"
+
+        if [[ "${verdict}" == "REGRESSED" ]]; then
             PASS=false
         fi
-        printf "%-10s %12s %12s %10s   %s\n" "${op}" "${base_ms}" "${now_ms}" "${delta}" "${verdict}"
-    done < <(pair_means "${SNAPSHOT}")
+        if [[ "${logr}" != "-" ]]; then
+            LOG_SUM="$(awk -v s="${LOG_SUM}" -v l="${logr}" 'BEGIN{printf "%.12f", s + l}')"
+            CHECKED=$((CHECKED + 1))
+        fi
+        printf "%-10s %18s %18s %10s %10s   %s\n" "${op}" "${base_r}" "${now_r}" "${ratio_d}" "${den_d}" "${verdict}"
+    done < <(pair_stat "${SNAPSHOT}" "${REG_STAT}")
+
+    echo ""
+    if [[ "${CHECKED}" -gt 0 ]]; then
+        agg="$(awk -v s="${LOG_SUM}" -v n="${CHECKED}" 'BEGIN{printf "%+.1f", (exp(s/n)-1)*100}')"
+        if awk -v g="${agg}" -v p="${MAX_AGG_REGRESSION_PCT}" 'BEGIN{ exit !(g+0 > p+0) }'; then
+            echo "aggregate: geomean den/brew ratio change over ${CHECKED} op(s) = ${agg}%  REGRESSED (limit +${MAX_AGG_REGRESSION_PCT}%)"
+            PASS=false
+        else
+            echo "aggregate: geomean den/brew ratio change over ${CHECKED} op(s) = ${agg}%  ok (limit +${MAX_AGG_REGRESSION_PCT}%)"
+        fi
+    else
+        echo "aggregate: no op large enough for a ratio comparison; skipped"
+    fi
 fi
 
 echo ""
