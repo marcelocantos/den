@@ -160,6 +160,57 @@ TEST_SUITE("relocate") {
 
         fs::remove_all(tmp);
     }
+
+    TEST_CASE("relocate_bottle handles version-suffixed binaries and skips symlinks") {
+        // Real bottles ship bin/tclsh9.1, bin/emacs-31.1, bin/gforth-0.7.3 and
+        // bin/wxrc-3.3 with an unversioned symlink alongside. The extension
+        // (".1", ".3") must not be mistaken for a man page, and symlinks must
+        // not be followed out of the keg.
+        auto tmp = fs::temp_directory_path() / ("den-relocate-ver-" + std::to_string(::getpid()));
+        auto outside =
+            fs::temp_directory_path() / ("den-relocate-out-" + std::to_string(::getpid()));
+        fs::remove_all(tmp);
+        fs::remove_all(outside);
+        fs::create_directories(tmp / "bin");
+        fs::create_directories(tmp / "etc");
+        fs::create_directories(outside);
+
+        auto src = tmp / "main.c";
+        {
+            std::ofstream out(src);
+            out << "int main(void) { return 0; }\n";
+        }
+        auto bin = tmp / "bin" / "probe9.1";
+        auto b = den::run_tool({"clang", src.string(), "-o", bin.string(), "-Wl,-rpath,/x"});
+        REQUIRE(b.spawned);
+        REQUIRE(b.exit_code == 0);
+        auto ch = den::run_tool(
+            {"install_name_tool", "-rpath", "/x", "@@HOMEBREW_PREFIX@@/opt/dep/lib", bin.string()});
+        REQUIRE(ch.exit_code == 0);
+        fs::create_symlink("probe9.1", tmp / "bin" / "probe");
+
+        // A symlink to a file outside the keg that also contains placeholders.
+        auto victim = outside / "conf";
+        {
+            std::ofstream out(victim);
+            out << "prefix=@@HOMEBREW_PREFIX@@\n";
+        }
+        fs::create_symlink(victim, tmp / "etc" / "conf");
+
+        relocate_bottle(tmp, "probe", "1.0", fs::path("/opt/homebrew/Cellar"));
+
+        auto post = den::run_tool({"otool", "-l", bin.string()});
+        CHECK(post.output.find("@@HOMEBREW_") == std::string::npos);
+        CHECK(post.output.find("/opt/homebrew/opt/dep/lib") != std::string::npos);
+        CHECK(fs::is_symlink(tmp / "bin" / "probe"));
+        CHECK(fs::is_symlink(tmp / "etc" / "conf"));
+        std::ifstream in(victim);
+        std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        CHECK(content == "prefix=@@HOMEBREW_PREFIX@@\n");
+
+        fs::remove_all(tmp);
+        fs::remove_all(outside);
+    }
 #endif
 
     TEST_CASE("expand_homebrew_placeholders grows Linux prefix paths") {
