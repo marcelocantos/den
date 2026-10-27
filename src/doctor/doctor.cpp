@@ -73,6 +73,22 @@ void check_store(const Config& config, std::vector<Finding>& findings) {
 }
 
 // ---------------------------------------------------------------------------
+// Check 2b: den's prefix fits the bottles' Mach-O header space
+// ---------------------------------------------------------------------------
+void check_prefix_header_space(const Config& config, std::vector<Finding>& findings) {
+    SPDLOG_DEBUG("check: prefix header space");
+#ifdef __APPLE__
+    constexpr bool macho = true;
+#else
+    constexpr bool macho = false;
+#endif
+    auto msg = prefix_header_space_warning(config.prefix.string(),
+                                           standard_bottle_prefix(config.arch), macho);
+    if (!msg.empty())
+        warn(findings, std::move(msg));
+}
+
+// ---------------------------------------------------------------------------
 // Check 3: manifest integrity
 // Validate every runtime manifest (`manifests/<slug>/manifest.json`) with the
 // same reader `den list` uses. A fresh install with no manifests is fine.
@@ -241,7 +257,7 @@ void check_file_permissions(const Config& config, std::vector<Finding>& findings
     for (const auto& p : sensitive) {
         if (!fs::exists(p))
             continue;
-        struct stat st {};
+        struct stat st{};
         if (::stat(p.c_str(), &st) != 0) {
             warn(findings, "cannot stat " + p.string() + ": " + std::strerror(errno));
             continue;
@@ -297,6 +313,27 @@ const char* severity_label(Severity s) {
 
 } // namespace
 
+std::string standard_bottle_prefix(Arch arch) {
+#ifdef __APPLE__
+    return arch == Arch::Arm64 ? "/opt/homebrew" : "/usr/local";
+#else
+    (void)arch;
+    return "/home/linuxbrew/.linuxbrew";
+#endif
+}
+
+std::string prefix_header_space_warning(const std::string& prefix, const std::string& standard,
+                                        bool macho) {
+    if (!macho || prefix.size() <= standard.size())
+        return {};
+    return "prefix " + prefix + " is " + std::to_string(prefix.size()) +
+           " characters, longer than " + standard + " (" + std::to_string(standard.size()) +
+           ") that bottles are built for. Relocated Mach-O load commands must fit in each "
+           "binary's spare header space, so some bottles may fail to pour. A prefix of at most " +
+           std::to_string(standard.size()) +
+           " characters avoids this (set DEN_PREFIX or store.prefix).";
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -306,6 +343,7 @@ std::vector<Finding> doctor(const Config& config) {
 
     check_den_home_structure(config, findings);
     check_store(config, findings);
+    check_prefix_header_space(config, findings);
     check_manifest(config, findings);
     check_env_materialisation(config, findings);
     check_broken_symlinks(config, findings);
