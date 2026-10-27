@@ -371,6 +371,95 @@ struct UpgradeEnv {
 
 } // namespace
 
+namespace {
+
+/// A binary-only cask shaped like android-platform-tools: the zip unpacks a
+/// platform-tools/ directory and the binaries are declared by their Homebrew
+/// staged path, "$HOMEBREW_PREFIX/Caskroom/<token>/<version>/...".
+Package make_caskroom_binary_cask(const fs::path& dir, const std::string& token,
+                                  const std::string& version,
+                                  const std::vector<std::string>& sources) {
+    const fs::path tools = dir / "content" / "platform-tools";
+    write_file(tools / "adb", "#!/bin/sh\necho adb " + version + "\n");
+    write_file(tools / "fastboot", "#!/bin/sh\necho fastboot\n");
+    write_file(tools / "lib64" / "libc++.dylib", "sibling\n");
+    // make_app_zip always adds an app bundle; this cask declares no app, so
+    // it is never installed.
+    auto zip = make_app_zip(dir, "Unused.app");
+    Package pkg = make_zip_cask(token, version, zip, "Unused.app");
+    pkg.cask_artifacts.clear();
+    for (const auto& src : sources) {
+        CaskArtifact bin;
+        bin.kind = CaskArtifactKind::Binary;
+        bin.source = src;
+        pkg.cask_artifacts.push_back(bin);
+    }
+    return pkg;
+}
+
+} // namespace
+
+TEST_SUITE("cask::caskroom_binary") {
+
+    TEST_CASE("binaries under the cask's own Caskroom path link into the stage") {
+        TmpDir tmp;
+        auto cfg = make_cfg(tmp.path);
+        setenv("DEN_APPDIR", cfg.appdir.c_str(), 1);
+        setenv("DEN_HOME", cfg.den_home.c_str(), 1);
+        const std::string root = "$HOMEBREW_PREFIX/Caskroom/demo-tools/37.0.1/platform-tools/";
+        auto pkg = make_caskroom_binary_cask(tmp.path / "z", "demo-tools", "37.0.1",
+                                             {root + "adb", root + "fastboot"});
+        auto result = install_cask(cfg, pkg);
+        CHECK(result.resolved_version == "37.0.1");
+
+        const auto bin = cfg.den_home / "envs" / "ROOT" / "bin";
+        const auto stage = cask_version_path(cfg, "demo-tools", "37.0.1") / "stage";
+        for (const char* name : {"adb", "fastboot"}) {
+            INFO(name);
+            const auto link = bin / name;
+            REQUIRE(fs::is_symlink(link));
+            // Linked in place inside the unpacked tree, so siblings resolve.
+            CHECK(fs::equivalent(link, stage / "platform-tools" / name));
+            CHECK_FALSE(fs::exists(stage / name)); // no copy out of the tree
+        }
+        CHECK(fs::exists(fs::path(fs::read_symlink(bin / "adb")).parent_path() / "lib64" /
+                         "libc++.dylib"));
+        CHECK(fs::is_empty(cfg.homebrew_caskroom));
+        CHECK(fs::is_empty(cfg.appdir)); // the stray app is not an artifact
+
+        uninstall_cask(cfg, "demo-tools");
+        CHECK_FALSE(fs::exists(bin / "adb"));
+        CHECK_FALSE(fs::exists(bin / "fastboot"));
+        CHECK_FALSE(is_cask_installed(cfg, "demo-tools"));
+        unsetenv("DEN_APPDIR");
+        unsetenv("DEN_HOME");
+    }
+
+    TEST_CASE("another cask's or version's Caskroom path is refused") {
+        TmpDir tmp;
+        auto cfg = make_cfg(tmp.path);
+        setenv("DEN_APPDIR", cfg.appdir.c_str(), 1);
+        setenv("DEN_HOME", cfg.den_home.c_str(), 1);
+        int n = 0;
+        for (const std::string src :
+             {"$HOMEBREW_PREFIX/Caskroom/other/37.0.1/platform-tools/adb",
+              "$HOMEBREW_PREFIX/Caskroom/demo-tools/36.0.0/platform-tools/adb",
+              "$HOMEBREW_PREFIX/Caskroom/demo-tools/37.0.1/../../other/37.0.1/platform-tools/adb",
+              "$HOMEBREW_PREFIX/Caskroom/demo-tools/37.0.1/"}) {
+            INFO(src);
+            auto pkg = make_caskroom_binary_cask(tmp.path / ("z" + std::to_string(n++)),
+                                                 "demo-tools", "37.0.1", {src});
+            CHECK_THROWS_WITH_AS(install_cask(cfg, pkg), doctest::Contains("binary not found"),
+                                 UserError);
+            CHECK_FALSE(is_cask_installed(cfg, "demo-tools"));
+            CHECK(fs::is_empty(cfg.den_home / "envs" / "ROOT" / "bin"));
+        }
+        CHECK(fs::is_empty(cfg.homebrew_caskroom));
+        unsetenv("DEN_APPDIR");
+        unsetenv("DEN_HOME");
+    }
+}
+
 TEST_SUITE("cask::upgrade_safety") {
 
     TEST_CASE("upgrade succeeds and replaces the den-owned app") {
