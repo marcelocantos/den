@@ -63,11 +63,11 @@ void tap_remove(const Config& config, const std::string& name);
 void merge_taps_into_index(const Config& config, PackageIndex& idx);
 
 /// The name to install a requested package under. A tap-qualified request
-/// ("user/repo/name") maps to the bare name when the bare index entry is the
-/// same tap formula, because kegs, opt links and the manifest use the bare
-/// formula name (as Homebrew's Cellar does). Throws UserError when a core
-/// formula of the same bare name shadows it, since both would need the same
-/// keg directory. Other names are returned unchanged.
-std::string resolve_tap_install_name(const PackageIndex& idx, const std::string& name);
+/// ("user/repo/name") maps to the bare name, which kegs, opt links and the
+/// manifest use (as Homebrew's Cellar does). When a core formula of the same
+/// bare name exists, the tap formula replaces it in `idx` for this run, so
+/// the explicit request wins, as `brew install user/repo/name` does. Other
+/// names are returned unchanged.
+std::string resolve_tap_install_name(PackageIndex& idx, const std::string& name);
 
 } // namespace den

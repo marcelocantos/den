@@ -7,6 +7,7 @@
 
 #include "../src/core/error.h"
 #include "../src/download/sha256.h"
+#include "../src/tap/tap.h"
 #include "../src/tap/url_formula.h"
 
 #include <doctest.h>
@@ -410,6 +411,27 @@ end
         } catch (const UserError& e) {
             CHECK(std::string(e.what()).find("'nope'") != std::string::npos);
         }
+    }
+
+    TEST_CASE("user/repo/name resolves to the bare name, and wins over a shadowed core formula") {
+        PackageIndex idx;
+        Package core;
+        core.name = "tool";
+        core.version = "9.9";
+        core.ruby_source_path = "Formula/t/tool.rb";
+        Package tap;
+        tap.name = "test/urltap/tool";
+        tap.version = "1.0";
+        tap.ruby_source_path = "/taps/test/homebrew-urltap/Formula/tool.rb";
+        idx.packages["tool"] = core;
+        idx.packages["test/urltap/tool"] = tap;
+
+        CHECK(resolve_tap_install_name(idx, "ripgrep") == "ripgrep");
+        CHECK(resolve_tap_install_name(idx, "test/urltap/tool") == "tool");
+        REQUIRE(idx.find("tool") != nullptr);
+        CHECK(idx.find("tool")->version == "1.0");
+        CHECK(idx.find("tool")->name == "tool");
+        CHECK(idx.find("tool")->ruby_source_path == tap.ruby_source_path);
     }
 
     // ── end to end through the CLI (offline, file:// download) ──────────────

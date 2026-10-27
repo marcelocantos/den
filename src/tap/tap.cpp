@@ -14,6 +14,7 @@
 #include <cctype>
 #include <cstdio>
 #include <fstream>
+#include <iostream>
 #include <regex>
 #include <sstream>
 #include <string_view>
@@ -274,23 +275,27 @@ void merge_taps_into_index(const Config& config, PackageIndex& idx) {
         }
     }
     // Tap formulae name tap dependencies in qualified form
-    // ("marcelocantos/tap/blurter"); resolve them to the bare keg name.
+    // ("marcelocantos/tap/blurter"); point them at the bare name when that
+    // entry is the same tap formula. (A dependency shadowed by a core formula
+    // stays qualified and does not resolve.)
     for (auto& [name, pkg] : idx.packages) {
         // Only tap entries: they record an absolute formula path, core
         // entries a repo-relative one ("Formula/t/tree.rb").
         if (!pkg.ruby_source_path || !pkg.ruby_source_path->starts_with("/"))
             continue;
         for (auto& dep : pkg.dependencies) {
-            try {
-                dep = resolve_tap_install_name(idx, dep);
-            } catch (const UserError&) {
-                // Shadowed by core; leave qualified so the failure names it.
-            }
+            if (std::count(dep.begin(), dep.end(), '/') != 2)
+                continue;
+            auto q = idx.packages.find(dep);
+            auto b = idx.packages.find(dep.substr(dep.rfind('/') + 1));
+            if (q != idx.packages.end() && b != idx.packages.end() &&
+                q->second.ruby_source_path == b->second.ruby_source_path)
+                dep = b->first;
         }
     }
 }
 
-std::string resolve_tap_install_name(const PackageIndex& idx, const std::string& name) {
+std::string resolve_tap_install_name(PackageIndex& idx, const std::string& name) {
     if (std::count(name.begin(), name.end(), '/') != 2)
         return name;
     const auto* q = idx.find(name);
@@ -298,12 +303,16 @@ std::string resolve_tap_install_name(const PackageIndex& idx, const std::string&
         return name;
     const std::string bare = name.substr(name.rfind('/') + 1);
     const auto* b = idx.find(bare);
-    if (b && b->ruby_source_path == q->ruby_source_path)
-        return bare;
-    throw UserError("cannot install " + name + ": the core formula '" + bare +
-                    "' has the same name, and den installs both into the same Cellar "
-                    "directory (" +
-                    bare + "/<version>); uninstall or avoid one of them");
+    if (!b || b->ruby_source_path != q->ruby_source_path) {
+        if (b) {
+            std::cerr << "note: " << name << " shadows the core formula '" << bare
+                      << "'; installing the tap formula as " << bare << "\n";
+        }
+        Package pkg = *q;
+        pkg.name = bare;
+        idx.packages[bare] = std::move(pkg);
+    }
+    return bare;
 }
 
 } // namespace den
