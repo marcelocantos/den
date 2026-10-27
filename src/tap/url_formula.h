@@ -34,6 +34,13 @@ namespace fs = std::filesystem;
 // the url/sha256/version/depends_on that apply to this platform (last
 // assignment wins, as in Ruby), and accepts only a fixed whitelist of
 // `def install` steps. Anything else is refused with the offending line.
+//
+// `system` steps (e.g. `system "make", "-C", "src"`) run after the download's
+// sha256 has been verified, with an explicit argv and no shell. Arguments must
+// be string literals ("…" or '…'), `%w[…]` word lists (optionally splatted),
+// or a single shell-free command string, which is split on whitespace as Ruby's
+// Kernel#system does. Anything that needs Ruby evaluation (`*std_*_args`,
+// `Formula[…]`, trailing `if`, other interpolations) is refused.
 
 struct TapPlatform {
     bool mac = true;
@@ -54,7 +61,7 @@ ParsedTapFormula parse_tap_formula(const std::string& src, const TapPlatform& pl
 
 // One whitelisted `def install` step.
 struct InstallStep {
-    enum class Kind { Install, Symlink, Write, Chmod, Mkdir };
+    enum class Kind { Install, Symlink, Write, Chmod, System, Mkdir };
     Kind kind = Kind::Install;
     // Stage-relative working directory the step runs in ("" = the stage
     // root). Set by enclosing `mkdir "d" do ... end` / `cd "d" do ... end`
@@ -68,7 +75,11 @@ struct InstallStep {
     std::string name;      // Symlink/Write/Chmod: file name inside dir
     std::string content;   // Write: heredoc body (interpolations not yet expanded)
     unsigned mode = 0;     // Chmod
-    bool create = false;   // Mkdir: create cwd/name (mkdir) or require it (cd)
+    // System: the command and its arguments, run directly (never through a
+    // shell) in the step's cwd within the staged download. `#{version}`
+    // and `#{name}` are the only interpolations, expanded when the step runs.
+    std::vector<std::string> argv;
+    bool create = false; // Mkdir: create cwd/name (mkdir) or require it (cd)
 };
 
 // Parse the joined `def install` statements. On the first statement outside
@@ -93,7 +104,8 @@ struct InstallPaths {
 
 // Run `steps` with `stage` (the unpacked download) as the working directory,
 // installing into paths.keg. Throws UserError on a missing source, a path that
-// escapes the stage or keg, or an unsupported interpolation.
+// escapes the stage or keg, an unsupported interpolation, or a `system`
+// command that cannot be started or exits non-zero.
 void apply_install_steps(const std::vector<InstallStep>& steps, const fs::path& stage,
                          const InstallPaths& paths);
 
