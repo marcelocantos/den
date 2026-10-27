@@ -164,14 +164,39 @@ bool is_valid_tap_name(const std::string& name) {
     return split_tap_name(name).has_value();
 }
 
-std::optional<fs::path> tap_dir(const Config& config, const std::string& name) {
+namespace {
+constexpr std::string_view kHomebrewRepoPrefix = "homebrew-";
+}
+
+std::string canonical_tap_name(const std::string& name) {
     auto parts = split_tap_name(name);
+    if (!parts)
+        return name;
+    auto& repo = parts->second;
+    if (repo.size() > kHomebrewRepoPrefix.size() && repo.starts_with(kHomebrewRepoPrefix))
+        repo = repo.substr(kHomebrewRepoPrefix.size());
+    return parts->first + "/" + repo;
+}
+
+std::string default_tap_url(const std::string& name) {
+    auto parts = split_tap_name(canonical_tap_name(name));
+    if (!parts)
+        return "";
+    return "https://github.com/" + parts->first + "/" + std::string(kHomebrewRepoPrefix) +
+           parts->second + ".git";
+}
+
+std::optional<fs::path> tap_dir(const Config& config, const std::string& name) {
+    auto parts = split_tap_name(canonical_tap_name(name));
     if (!parts)
         return std::nullopt;
     return config.den_home / "taps" / parts->first / parts->second;
 }
 
-Tap tap_add(const Config& config, const std::string& name, const std::string& source) {
+Tap tap_add(const Config& config, const std::string& raw_name, const std::string& source) {
+    // "user/homebrew-repo" and "user/repo" are one tap; store it under the
+    // short name, as Homebrew does.
+    const std::string name = canonical_tap_name(raw_name);
     auto parts = split_tap_name(name);
     if (!parts)
         throw UserError("invalid tap name '" + name + "' (expected user/repo)");
@@ -229,7 +254,8 @@ std::vector<Tap> tap_list(const Config& config) {
     return taps;
 }
 
-void tap_remove(const Config& config, const std::string& name) {
+void tap_remove(const Config& config, const std::string& raw_name) {
+    const std::string name = canonical_tap_name(raw_name);
     auto settings = read_settings(config.den_home);
     auto it = settings.taps.taps.find(name);
     if (it == settings.taps.taps.end()) {
