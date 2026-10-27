@@ -125,7 +125,8 @@ uint32_t materialise_one(const fs::path& den_home, const fs::path& store,
                          const std::string& env_path, const PackageIndex* idx,
                          const MaterialiseOptions& opts, std::vector<PrefixConflict>& conflicts);
 
-std::string describe_conflicts(const fs::path& prefix, const std::vector<PrefixConflict>& conflicts) {
+std::string describe_conflicts(const fs::path& prefix,
+                               const std::vector<PrefixConflict>& conflicts) {
     std::ostringstream out;
     std::set<std::string> pkgs;
     out << conflicts.size() << " path(s) in " << prefix.string()
@@ -309,7 +310,8 @@ uint32_t materialise_root(const fs::path& den_home, const fs::path& store, const
                 unlink_from_prefix(ctx, name);
             }
 
-            auto result = link_into_prefix(ctx, pkg_path, name, subdirs, opts.overwrite.count(name));
+            auto result =
+                link_into_prefix(ctx, pkg_path, name, subdirs, opts.overwrite.count(name));
             if (!result.conflicts.empty()) {
                 for (auto& path : result.conflicts) {
                     conflicts.push_back({name, std::move(path)});

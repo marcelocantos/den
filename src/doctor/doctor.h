@@ -49,6 +49,13 @@ std::vector<std::string> kegs_with_mismatched_cellar(const fs::path& store, cons
                                                      Arch arch,
                                                      const std::optional<MacOsVersion>& macos);
 
+/// The root environment is linked into the prefix, so `<prefix>/bin` and
+/// `<prefix>/sbin` must lead PATH (den's own bin dir may sit in front of
+/// them). Returns a description of the problem, or an empty string when
+/// `path_env` is in the right order.
+std::string root_path_order_problem(const std::string& path_env, const fs::path& prefix,
+                                    const fs::path& den_bin);
+
 /// Run all health checks and print a summary.
 /// Returns the list of findings so callers can set a non-zero exit code
 /// when there are errors.

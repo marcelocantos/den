@@ -73,13 +73,39 @@ std::string fish_quote(const fs::path& p) {
 }
 
 // Build the colon-separated PATH value:
-//   <env_bin>:<den_bin>:<original $PATH>
-std::string build_path_posix(const fs::path& env_bin, const fs::path& den_bin) {
-    return shell_escape(env_bin.string()) + ":" + shell_escape(den_bin.string()) + ":$PATH";
+//   <env_bin>[:<env_sbin>]:<den_bin>:<original $PATH>
+std::string build_path_posix(const fs::path& env_bin, const fs::path& env_sbin,
+                             const fs::path& den_bin) {
+    std::string out = shell_escape(env_bin.string()) + ":";
+    if (!env_sbin.empty()) {
+        out += shell_escape(env_sbin.string()) + ":";
+    }
+    return out + shell_escape(den_bin.string()) + ":$PATH";
 }
 
-std::string build_path_fish(const fs::path& env_bin, const fs::path& den_bin) {
-    return fish_quote(env_bin) + " " + fish_quote(den_bin) + " $PATH";
+std::string build_path_fish(const fs::path& env_bin, const fs::path& env_sbin,
+                            const fs::path& den_bin) {
+    std::string out = fish_quote(env_bin) + " ";
+    if (!env_sbin.empty()) {
+        out += fish_quote(env_sbin) + " ";
+    }
+    return out + fish_quote(den_bin) + " $PATH";
+}
+
+// Where an environment's links live: the prefix itself for the root env
+// (linked brew-style; see materialise), envs/<slug> for named envs. The
+// root env also puts <prefix>/sbin on PATH, as `brew shellenv` does.
+struct EnvLayout {
+    fs::path root;
+    fs::path sbin;
+};
+
+EnvLayout env_layout(const Config& config, const std::string& env_slug) {
+    if (env_slug == "ROOT") {
+        auto prefix = config.store.parent_path();
+        return {prefix, prefix / "sbin"};
+    }
+    return {config.den_home / "envs" / env_slug, {}};
 }
 
 // ---------------------------------------------------------------------------
@@ -141,7 +167,8 @@ void emit_fish_init(const Config& config) {
 // POSIX env-switch output
 // ---------------------------------------------------------------------------
 void emit_posix_env(const Config& config, const std::string& env_slug) {
-    fs::path env_dir = config.den_home / "envs" / env_slug;
+    const auto layout = env_layout(config, env_slug);
+    fs::path env_dir = layout.root;
     fs::path env_bin = env_dir / "bin";
     fs::path env_lib = env_dir / "lib";
     fs::path env_inc = env_dir / "include";
@@ -155,7 +182,7 @@ void emit_posix_env(const Config& config, const std::string& env_slug) {
 
     std::cout << "export DEN_HOME=" << dquote(config.den_home) << "\n"
               << "export DEN_ENV=" << dquote(env_slug) << "\n"
-              << "export PATH=\"" << build_path_posix(env_bin, den_bin) << "\"\n"
+              << "export PATH=\"" << build_path_posix(env_bin, layout.sbin, den_bin) << "\"\n"
               << "export LIBRARY_PATH=\"" << e(env_lib)
               << ":${LIBRARY_PATH:-}\"\n"
 #ifdef __APPLE__
@@ -176,7 +203,8 @@ void emit_posix_env(const Config& config, const std::string& env_slug) {
 // Fish env-switch output
 // ---------------------------------------------------------------------------
 void emit_fish_env(const Config& config, const std::string& env_slug) {
-    fs::path env_dir = config.den_home / "envs" / env_slug;
+    const auto layout = env_layout(config, env_slug);
+    fs::path env_dir = layout.root;
     fs::path env_bin = env_dir / "bin";
     fs::path env_lib = env_dir / "lib";
     fs::path env_inc = env_dir / "include";
@@ -188,7 +216,7 @@ void emit_fish_env(const Config& config, const std::string& env_slug) {
 
     std::cout << "set -gx DEN_HOME " << fish_quote(config.den_home) << "\n"
               << "set -gx DEN_ENV " << fish_quote(env_slug) << "\n"
-              << "set -gx PATH " << build_path_fish(env_bin, den_bin) << "\n"
+              << "set -gx PATH " << build_path_fish(env_bin, layout.sbin, den_bin) << "\n"
               << "set -gx LIBRARY_PATH " << fish_quote(env_lib) << " $LIBRARY_PATH\n"
               << "set -gx CPATH " << fish_quote(env_inc) << " $CPATH\n"
               << "set -gx PKG_CONFIG_PATH " << fish_quote(env_pc) << " $PKG_CONFIG_PATH\n"

@@ -16,7 +16,7 @@
 namespace den {
 
 void install_packages(const Config& config, PackageProvider& provider, const PackageIndex& idx,
-                      const std::vector<std::string>& names) {
+                      const std::vector<std::string>& names, const MaterialiseOptions& link_opts) {
     auto active = active_env_path(config.den_home);
     auto pname = std::string(provider.provider_name());
 
@@ -41,7 +41,7 @@ void install_packages(const Config& config, PackageProvider& provider, const Pac
     }
 
     std::cout << "==> Materialising environment...\n";
-    auto links = materialise(config.den_home, config.store, active, &idx);
+    auto links = materialise(config.den_home, config.store, active, &idx, link_opts);
     std::cout << "  " << links << " symlinks\n";
 }
 

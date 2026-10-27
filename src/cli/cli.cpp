@@ -191,6 +191,7 @@ struct Cli::M {
     // install
     std::vector<std::string> install_names;
     bool build_from_source = false;
+    bool install_overwrite = false;
     std::string install_provider;
 
     // uninstall
@@ -283,6 +284,9 @@ void Cli::M::setup() {
     install->add_option("names", install_names, "Package names to install")->required();
     install->add_flag("-s,--build-from-source", build_from_source,
                       "Build from source instead of pouring a bottle");
+    install->add_flag("--overwrite", install_overwrite,
+                      "Replace files in the prefix that conflict with these packages' links "
+                      "(like `brew link --overwrite`)");
     install->add_option("--provider", install_provider,
                         "Provider to install through (default: auto-resolve)");
     install->callback([this] {
@@ -291,6 +295,11 @@ void Cli::M::setup() {
         // Merge third-party taps (🎯T67) so tapped formulae resolve by both
         // their bare and "user/repo/name" forms before any provider runs.
         merge_taps_into_index(cfg, idx);
+
+        MaterialiseOptions link_opts;
+        if (this->install_overwrite) {
+            link_opts.overwrite.insert(install_names.begin(), install_names.end());
+        }
 
         if (this->build_from_source) {
             // Source builds are Homebrew-only — the Ruby DSL belongs to the
@@ -307,7 +316,7 @@ void Cli::M::setup() {
                 with_manifest(cfg.den_home, active,
                               [&](Manifest& m) { m.packages["homebrew"][name] = version; });
             }
-            auto links = materialise(cfg.den_home, cfg.store, active, &idx);
+            auto links = materialise(cfg.den_home, cfg.store, active, &idx, link_opts);
             std::cout << "Materialised: " << links << " symlinks.\n";
             return;
         }
@@ -329,7 +338,7 @@ void Cli::M::setup() {
                 SPDLOG_ERROR("package index is empty — run `den update` first");
                 continue;
             }
-            install_packages(cfg, *provider, idx, names);
+            install_packages(cfg, *provider, idx, names, link_opts);
         }
     });
 
@@ -412,6 +421,25 @@ void Cli::M::setup() {
         auto cache_path = cfg.cache / "index.json";
         save_index(idx, cache_path);
         std::cout << "Updated index: " << idx.packages.size() << " packages loaded.\n";
+
+        // One-time move of the root env from envs/ROOT/{bin,lib,...} into
+        // the prefix (see migrate_root_env_to_prefix). No-op once done.
+        auto report = migrate_root_env_to_prefix(cfg.den_home, cfg.store, &idx);
+        if (report.migrated) {
+            std::cout << "==> Linked the root environment into " << cfg.store.parent_path().string()
+                      << " (" << report.removed << " old envs/ROOT links replaced";
+            if (report.moved) {
+                std::cout << ", " << report.moved << " other links moved";
+            }
+            std::cout << ").\n    envs/ROOT/bin etc. now point at the prefix; restart your "
+                         "shell or run `eval \"$(den shell-env)\"` to pick up the new PATH.\n";
+            for (const auto& p : report.preserved) {
+                std::cout << "    kept non-link files aside in " << p.string() << "\n";
+            }
+            if (!report.conflicts.empty()) {
+                std::cerr << "warning: " << report.conflicts << "\n";
+            }
+        }
     });
 
     // --- list ---

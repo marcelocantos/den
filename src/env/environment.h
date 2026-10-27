@@ -51,10 +51,10 @@ bool root_env_needs_migration(const fs::path& den_home);
 
 struct RootMigrationReport {
     bool migrated = false;
-    uint32_t removed = 0;             // old envs/ROOT links into den's store, dropped
-    uint32_t moved = 0;               // other links (e.g. cask binaries) moved into the prefix
-    std::vector<fs::path> preserved;  // envs/ROOT dirs holding non-link files, renamed aside
-    std::string conflicts;            // materialise's conflict report, if any
+    uint32_t removed = 0;            // old envs/ROOT links into den's store, dropped
+    uint32_t moved = 0;              // other links (e.g. cask binaries) moved into the prefix
+    std::vector<fs::path> preserved; // envs/ROOT dirs holding non-link files, renamed aside
+    std::string conflicts;           // materialise's conflict report, if any
 };
 
 /// One-time move of the root environment from envs/ROOT/{bin,lib,...} into

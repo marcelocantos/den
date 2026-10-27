@@ -242,8 +242,8 @@ struct Planner {
 } // namespace
 
 const std::vector<std::string>& prefix_link_dirs() {
-    static const std::vector<std::string> dirs = {"bin",   "sbin", "lib", "include",   "share",
-                                                  "etc",   "var",  "Frameworks"};
+    static const std::vector<std::string> dirs = {"bin",   "sbin", "lib", "include",
+                                                  "share", "etc",  "var", "Frameworks"};
     return dirs;
 }
 
