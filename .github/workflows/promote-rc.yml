@@ -219,7 +219,69 @@ jobs:
             rc-assets/*-checksums.txt
 
       # -----------------------------------------------------------------------
-      # 8. Print promotion summary.
+      # 8. Bump the Homebrew formula (marcelocantos/homebrew-tap Formula/den.rb).
+      #
+      #    homebrew-releaser expects {repo}-{version}-{os}-{arch}.tar.gz with
+      #    arm64/amd64 arch names; den's canonical assets use aarch64/x86_64
+      #    (install.sh and self-update depend on those), so upload
+      #    byte-identical copies under the names the releaser looks for.
+      #    The GA release is created with github.token, which does not fire
+      #    release:published workflows, so this has to live here rather than
+      #    in release.yml.
+      # -----------------------------------------------------------------------
+      - name: Upload Homebrew-named asset aliases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          GA_TAG="${{ env.GA_TAG }}"
+          VERSION="${GA_TAG#v}"
+          mkdir -p brew-assets
+          cp "rc-assets/den-${VERSION}-darwin-aarch64.tar.gz" "brew-assets/den-${VERSION}-darwin-arm64.tar.gz"
+          cp "rc-assets/den-${VERSION}-linux-x86_64.tar.gz"   "brew-assets/den-${VERSION}-linux-amd64.tar.gz"
+          cp "rc-assets/den-${VERSION}-linux-aarch64.tar.gz"  "brew-assets/den-${VERSION}-linux-arm64.tar.gz"
+          gh release upload "$GA_TAG" --repo "$GITHUB_REPOSITORY" brew-assets/*.tar.gz
+
+      - name: Update Homebrew formula
+        uses: Justintime50/homebrew-releaser@v3
+        with:
+          homebrew_owner: marcelocantos
+          homebrew_tap: homebrew-tap
+          github_token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          formula_folder: Formula
+          version: ${{ env.GA_TAG }}
+          install: |
+            bin.install "den"
+            pkgshare.install "share/den/known_hashes.json" if File.exist?("share/den/known_hashes.json")
+          test: |
+            assert_equal version.to_s, shell_output("#{bin}/den --version").strip
+            ENV["DEN_HOME"] = (testpath/".den").to_s
+            ENV["DEN_PREFIX"] = (testpath/"prefix").to_s
+            assert_match "No packages installed", shell_output("#{bin}/den list")
+          target_darwin_arm64: true
+          target_linux_amd64: true
+          target_linux_arm64: true
+          skip_checksum: true
+          update_readme_table: true
+          formula_includes: |
+            # The macOS release binary links libarchive from the Homebrew prefix.
+            on_macos do
+              depends_on "libarchive"
+            end
+
+            # Background maintenance daemon (`brew services start den`). Its
+            # launchd label is Homebrew's (sh.brew.den / homebrew.mxcl.den),
+            # distinct from `den daemon install`'s dev.den.daemon; both use
+            # the same DEN_HOME pid lock, so run one or the other, not both.
+            service do
+              run [opt_bin/"den", "daemon", "run"]
+              keep_alive true
+              log_path var/"log/den.log"
+              error_log_path var/"log/den.log"
+              environment_variables PATH: std_service_path_env
+            end
+
+      # -----------------------------------------------------------------------
+      # 9. Print promotion summary.
       #    RC release is intentionally left in place as a historical record.
       # -----------------------------------------------------------------------
       - name: Print summary
@@ -241,4 +303,7 @@ jobs:
           echo ""
           echo "  The RC release is preserved as a historical record."
           echo "  To remove it: gh release delete ${RC_TAG} --cleanup-tag"
+          echo ""
+          echo "  Verify the tap release on a macOS host once the formula bump lands:"
+          echo "    brew install marcelocantos/tap/den && make verify-release RELEASE_TAG=${GA_TAG}"
           echo "============================================================"

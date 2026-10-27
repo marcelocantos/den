@@ -6,7 +6,7 @@
 BUILD_DIR := build
 CMAKE_FLAGS := -G Ninja -DCMAKE_BUILD_TYPE=Release
 
-.PHONY: bullseye configure build test format format-fix clean-tree harness-linux harness-macos soak-macos remote-check
+.PHONY: bullseye configure build test format format-fix clean-tree harness-linux harness-macos soak-macos remote-check verify-release
 
 bullseye: configure build test format clean-tree
 
@@ -62,3 +62,11 @@ remote-check: build/den
 	scripts/remote-check.sh
 
 build/den: build
+
+# End-to-end battery against a release-installed den (default: the
+# Homebrew formula `marcelocantos/tap/den`). Everything runs in a scratch
+# DEN_HOME/DEN_PREFIX; the LaunchAgent check uses a uniquely labelled
+# agent that is removed afterwards. Override DEN_BIN, RELEASE_TAG, VR_* —
+# see scripts/verify-release.sh for the full list.
+verify-release:
+	scripts/verify-release.sh

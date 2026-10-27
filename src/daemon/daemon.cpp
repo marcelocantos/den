@@ -535,7 +535,8 @@ void run_daemon(const Config& config, bool once) {
     ::sigaction(SIGTERM, &sa, nullptr);
 
     SPDLOG_INFO("daemon: started (pid {})", ::getpid());
-    log_daemon(den_home, "daemon started (pid " + std::to_string(::getpid()) + ")");
+    log_daemon(den_home, std::string("daemon started (pid ") + std::to_string(::getpid()) +
+                             ", den " + DEN_VERSION + ")");
 
     // ---- Main loop ---------------------------------------------------------
     while (!g_terminate) {
