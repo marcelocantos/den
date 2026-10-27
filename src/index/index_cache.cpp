@@ -27,7 +27,8 @@ namespace {
 
 constexpr std::array<char, 8> kMagic = {'D', 'E', 'N', 'I', 'D', 'X', '\0', '\0'};
 // v2: records carry Package::cask_uninstall (🎯T12 uninstall stanzas).
-constexpr uint32_t kFormatVersion = 2;
+// v3: records carry Package::revision (Homebrew formula revision).
+constexpr uint32_t kFormatVersion = 3;
 constexpr uint32_t kEndianTag = 0x01020304;
 constexpr size_t kHeaderSize = 80;
 constexpr size_t kEntrySize = 24;
@@ -358,6 +359,7 @@ std::string encode_package(const Package& pkg) {
     b.reserve(256);
     put_str(b, pkg.name);
     put_str(b, pkg.version);
+    append<uint32_t>(b, static_cast<uint32_t>(pkg.revision));
     put_str(b, pkg.description);
     put_str(b, pkg.homepage);
     put_str(b, pkg.license);
@@ -407,6 +409,7 @@ Package decode_package(const char* data, size_t len) {
     Package pkg;
     pkg.name = r.str();
     pkg.version = r.str();
+    pkg.revision = static_cast<int>(r.num<uint32_t>());
     pkg.description = r.str();
     pkg.homepage = r.str();
     pkg.license = r.str();

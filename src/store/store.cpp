@@ -3,7 +3,9 @@
 
 #include "store.h"
 
+#include "../build/relocate.h"
 #include "../env/manifest.h"
+#include "link.h"
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -301,6 +303,15 @@ CleanupReport cleanup_kegs(const fs::path& store, const fs::path& den_home, cons
                 continue;
             }
             remove_empty_formula_dir(store, pkg.path);
+            // Drop <prefix>/opt/<name> if it pointed at the deleted keg, and
+            // hand it to the highest keg left (if any) so shebangs through
+            // opt/ keep working.
+            if (remove_prefix_opt_link_to(store, pkg.name, pkg.path)) {
+                auto next = select_dep_keg(store, pkg.name);
+                if (!next.empty()) {
+                    ensure_prefix_opt_link(store, pkg.name, next);
+                }
+            }
         }
         report.removed.push_back(pkg);
     }
