@@ -17,7 +17,7 @@ Snapshot as of v0.10.0.
 | Command | Stability | Notes |
 |---|---|---|
 | `den install [-s] <names...>` | Stable | Unified model — no --cask flag |
-| `den uninstall <names...>` | Stable | |
+| `den uninstall <names...>` | Stable | Drops from the active environment; keg kept until `den cleanup`. If no environment still uses that version, den hands its own `opt/<name>` link to another installed den-owned, still-used version, or removes it. Never touches an `opt/` link to a keg den did not install. Does not autoremove dependencies |
 | `den upgrade [names...]` | Stable | |
 | `den update` | Stable | Fetches Homebrew formula + cask index |
 | `den list` | Stable | |
