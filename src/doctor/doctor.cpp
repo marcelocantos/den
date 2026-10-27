@@ -9,12 +9,14 @@
 #include "../index/bottle_cellar.h"
 #include "../index/index.h"
 #include "../platform/platform.h"
+#include "../settings/settings.h"
 #include "trust_checks.h"
 
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
 #include <cerrno>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -322,12 +324,9 @@ void check_file_permissions(const Config& config, std::vector<Finding>& findings
             warn(findings, "cannot stat " + p.string() + ": " + std::strerror(errno));
             continue;
         }
-        // Check that group and other have no read/write/exec bits.
-        constexpr mode_t bad_bits = 077; // g+rwx o+rwx
-        if (st.st_mode & bad_bits) {
-            error(findings, "sensitive file has overly permissive mode " +
-                                std::to_string(st.st_mode & 0777) +
-                                " (expected 0600): " + p.string());
+        auto problem = sensitive_file_mode_problem(p, st.st_mode);
+        if (!problem.empty()) {
+            error(findings, problem);
         }
     }
 }
@@ -454,6 +453,21 @@ std::string root_path_order_problem(const std::string& path_env, const fs::path&
     return "PATH should start with " + bin.string() + ":" + sbin.string() +
            " (the root environment is linked into the prefix); run `eval \"$(den shell-env)\"` "
            "or restart your shell";
+}
+
+std::string format_file_mode(unsigned mode) {
+    char buf[8];
+    std::snprintf(buf, sizeof buf, "%04o", mode & 07777u);
+    return buf;
+}
+
+std::string sensitive_file_mode_problem(const fs::path& p, unsigned mode) {
+    // Group and other must have no read/write/exec bits.
+    constexpr unsigned bad_bits = 077; // g+rwx o+rwx
+    if ((mode & bad_bits) == 0)
+        return {};
+    return "sensitive file has overly permissive mode " + format_file_mode(mode & 0777u) +
+           " (expected " + format_file_mode(kConfigFileMode) + "): " + p.string();
 }
 
 std::vector<Finding> doctor(const Config& config) {

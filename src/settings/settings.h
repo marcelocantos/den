@@ -51,6 +51,9 @@ struct Settings {
     std::map<std::string, std::string> casks;
 };
 
+/// Mode config.json is written with (and the mode `den doctor` expects).
+inline constexpr unsigned kConfigFileMode = 0600;
+
 // Read settings from <den_home>/config.json.  Returns defaults if the
 // file is absent or a field is missing.
 Settings read_settings(const fs::path& den_home);

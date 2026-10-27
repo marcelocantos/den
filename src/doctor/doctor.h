@@ -56,6 +56,14 @@ std::vector<std::string> kegs_with_mismatched_cellar(const fs::path& store, cons
 std::string root_path_order_problem(const std::string& path_env, const fs::path& prefix,
                                     const fs::path& den_bin);
 
+/// A file mode as four octal digits, e.g. 0644 -> "0644".
+std::string format_file_mode(unsigned mode);
+
+/// Problem description when `mode` gives group or other any access to the
+/// sensitive file `p` (config.json, *.key, *.pem), or an empty string when it
+/// is private. The mode is shown in octal.
+std::string sensitive_file_mode_problem(const fs::path& p, unsigned mode);
+
 /// Run all health checks and print a summary.
 /// Returns the list of findings so callers can set a non-zero exit code
 /// when there are errors.
