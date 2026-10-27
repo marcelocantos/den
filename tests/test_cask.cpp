@@ -637,5 +637,67 @@ TEST_SUITE("cask::linux") {
 
 #endif
 
+#ifdef __APPLE__
+
+TEST_SUITE("cask::binary_dir_collision") {
+
+    // flutter ships "flutter/bin/flutter" and links it as "flutter", which is
+    // also the name of the archive's top-level directory. den used to point
+    // the link at stage/flutter (the directory) instead of the binary.
+    TEST_CASE("a binary named like a top-level stage directory links to the binary") {
+        TmpDir tmp;
+        auto cfg = make_cfg(tmp.path);
+        setenv("DEN_APPDIR", cfg.appdir.c_str(), 1);
+        setenv("DEN_HOME", cfg.den_home.c_str(), 1);
+
+        auto zip = make_app_zip(tmp.path / "zip", "Tool.app", "tool/bin/tool");
+        auto pkg = make_zip_cask("tool", "1.0", zip, "Tool.app", "tool/bin/tool");
+        pkg.cask_artifacts.back().target = "$HOMEBREW_PREFIX/bin/tool";
+        install_cask(cfg, pkg);
+
+        const auto link = cfg.den_home / "envs" / "ROOT" / "bin" / "tool";
+        REQUIRE(fs::is_symlink(link));
+        CHECK(fs::is_regular_file(link));
+        CHECK(fs::path(fs::read_symlink(link)).filename() == "tool");
+        CHECK(fs::read_symlink(link).parent_path().filename() == "bin");
+        std::ifstream in(link);
+        std::string body((std::istreambuf_iterator<char>(in)), {});
+        CHECK(body.find("echo bin") != std::string::npos);
+
+        uninstall_cask(cfg, "tool");
+        CHECK_FALSE(fs::exists(link));
+        unsetenv("DEN_APPDIR");
+        unsetenv("DEN_HOME");
+    }
+
+    TEST_CASE("a copied out-of-stage binary never lands on a same-named stage directory") {
+        TmpDir tmp;
+        auto cfg = make_cfg(tmp.path);
+        setenv("DEN_APPDIR", cfg.appdir.c_str(), 1);
+        setenv("DEN_HOME", cfg.den_home.c_str(), 1);
+
+        const fs::path outside = tmp.path / "outside" / "tool";
+        write_file(outside, "#!/bin/sh\necho outside\n");
+        // The archive has a top-level "tool/" directory.
+        auto zip = make_app_zip(tmp.path / "zip", "Tool.app", "tool/README");
+        auto pkg = make_zip_cask("tool", "1.0", zip, "Tool.app", outside.string());
+        pkg.cask_artifacts.back().target = "$HOMEBREW_PREFIX/bin/tool";
+        install_cask(cfg, pkg);
+
+        const auto link = cfg.den_home / "envs" / "ROOT" / "bin" / "tool";
+        REQUIRE(fs::is_symlink(link));
+        REQUIRE(fs::is_regular_file(link));
+        std::ifstream in(link);
+        std::string body((std::istreambuf_iterator<char>(in)), {});
+        CHECK(body.find("echo outside") != std::string::npos);
+
+        uninstall_cask(cfg, "tool");
+        unsetenv("DEN_APPDIR");
+        unsetenv("DEN_HOME");
+    }
+}
+
+#endif
+
 } // namespace test
 } // namespace den
