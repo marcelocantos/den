@@ -7,6 +7,7 @@
 #include "../core/version.h"
 #include "../env/environment.h"
 #include "../env/manifest.h"
+#include "../env/version_change.h"
 #include "../index/index.h"
 #include "../provider/homebrew_provider.h"
 #include "../provider/registry.h"
@@ -539,6 +540,22 @@ MaintenanceReport run_maintenance_cycle(const fs::path& cellar, const fs::path& 
     return report;
 }
 
+void apply_daemon_upgrade(const Config& config, PackageProvider& provider, const PackageIndex& idx,
+                          const PendingUpgrade& pu) {
+    // Install, record and link as one unit: a version that cannot be linked
+    // is rolled back (manifest, links, opt link, poured keg) and reported as
+    // a failure, so the pass keeps it pending and logs no activity.
+    auto res =
+        apply_version_changes(config, provider, &idx, {{pu.name, pu.installed, pu.available}});
+    if (!res.rolled_back.empty()) {
+        throw UserError(
+            describe_rollback(config.store.parent_path(), res.rolled_back.front(), "auto-upgrade"));
+    }
+    if (!res.conflicts.empty()) {
+        throw UserError(describe_conflicts(config.store.parent_path(), res.conflicts));
+    }
+}
+
 namespace {
 
 // Real hooks for the running daemon. Only den-managed homebrew packages in
@@ -568,9 +585,7 @@ MaintenanceHooks make_live_hooks(const Config& config, PackageIndex& idx, bool& 
         auto* provider = registry.find("homebrew");
         if (!provider)
             throw UserError("homebrew provider not registered");
-        provider->install(config, pu.name, pu.available);
-        with_manifest(config.den_home, active_env_path(config.den_home),
-                      [&](Manifest& m) { m.packages["homebrew"][pu.name] = pu.available; });
+        apply_daemon_upgrade(config, *provider, idx, pu);
         applied_any = true;
     };
     return h;

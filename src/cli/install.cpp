@@ -10,6 +10,7 @@
 #include "../daemon/daemon.h"
 #include "../env/environment.h"
 #include "../env/manifest.h"
+#include "../env/version_change.h"
 #include "../store/pins.h"
 #include "../store/store.h"
 
@@ -35,35 +36,52 @@ bool report_link_count(uint32_t links, bool casks_only) {
     return links != 0 || !casks_only;
 }
 
+void report_version_change_failures(const Config& config, const VersionChangeResult& res,
+                                    const std::string& verb) {
+    std::string msg;
+    for (const auto& rb : res.rolled_back) {
+        if (!msg.empty())
+            msg += "\n";
+        msg += describe_rollback(config.store.parent_path(), rb, verb);
+    }
+    if (!res.conflicts.empty()) {
+        if (!msg.empty())
+            msg += "\n";
+        msg += describe_conflicts(config.store.parent_path(), res.conflicts);
+    }
+    if (!msg.empty())
+        throw UserError(msg);
+}
+
 void install_packages(const Config& config, PackageProvider& provider, const PackageIndex& idx,
                       const std::vector<std::string>& names, const MaterialiseOptions& link_opts) {
     auto active = active_env_path(config.den_home);
     auto pname = std::string(provider.provider_name());
 
+    // A package already in the manifest moves to the provider's version as a
+    // unit: if the new version cannot be linked, it stays where it was.
+    const auto manifest = read_manifest(config.den_home, active);
+    std::vector<VersionChange> changes;
     for (const auto& name : names) {
-        auto result = provider.install(config, name, "");
-
-        with_manifest(config.den_home, active, [&](Manifest& m) {
-            auto& bucket = m.packages[pname];
-            bucket[name] = result.resolved_version;
-            auto& auto_bucket = m.auto_deps[pname];
-            for (const auto& dep : result.auto_deps) {
-                if (!bucket.count(dep)) {
-                    if (const auto* dep_pkg = idx.find(dep)) {
-                        bucket[dep] = dep_pkg->version;
-                    }
-                }
-                auto_bucket.insert(dep);
-            }
-        });
-
-        std::cout << "==> Installed " << name << " " << result.resolved_version << "\n";
+        VersionChange c{name, "", ""};
+        if (auto b = manifest.packages.find(pname); b != manifest.packages.end()) {
+            if (auto it = b->second.find(name); it != b->second.end())
+                c.from = it->second;
+        }
+        changes.push_back(std::move(c));
     }
 
+    VersionChangeOptions opts;
+    opts.link_opts = link_opts;
+    opts.record_auto_deps = true;
     std::cout << "==> Materialising environment...\n";
-    auto links = materialise(config.den_home, config.store, active, &idx, link_opts);
-    if (report_link_count(links, cask_only(config, names)))
-        std::cout << "  " << links << " symlinks\n";
+    auto res = apply_version_changes(config, provider, &idx, changes, opts);
+    for (const auto& c : res.applied) {
+        std::cout << "==> Installed " << c.name << " " << c.to << "\n";
+    }
+    if (report_link_count(res.links, cask_only(config, names)))
+        std::cout << "  " << res.links << " symlinks\n";
+    report_version_change_failures(config, res, "install");
 }
 
 void uninstall_packages(const Config& config, PackageProvider& provider,
@@ -219,35 +237,35 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
         std::cout << "  " << u.name << " " << u.installed << " -> " << u.available << "\n";
     }
 
+    std::vector<VersionChange> changes;
     std::vector<std::string> upgraded_names;
     for (const auto& u : upgrades) {
-        provider.install(config, u.name, u.available);
+        changes.push_back({u.name, u.installed, u.available});
         upgraded_names.push_back(u.name);
     }
 
-    auto pname = std::string(provider.provider_name());
-    with_manifest(config.den_home, active, [&](Manifest& m) {
-        auto& bucket = m.packages[pname];
-        for (const auto& u : upgrades) {
-            bucket[u.name] = u.available;
-        }
-    });
+    // Each package moves as a unit: one that cannot be linked at its new
+    // version is put back (manifest, links, opt link) and its new keg removed.
+    std::cout << "==> Materialising environment...\n";
+    auto res = apply_version_changes(config, provider, &idx, changes);
 
-    {
+    if (!res.applied.empty()) {
         auto ts = now_secs();
         std::vector<ActivityEntry> entries;
-        entries.reserve(upgrades.size());
-        for (const auto& u : upgrades) {
-            entries.push_back({ts, u.name, u.installed, u.available, "manual"});
+        entries.reserve(res.applied.size());
+        for (const auto& c : res.applied) {
+            entries.push_back({ts, c.name, c.from, c.to, "manual"});
         }
         record_activity(config.den_home, entries);
     }
 
-    std::cout << "==> Materialising environment...\n";
-    auto links = materialise(config.den_home, config.store, active, &idx);
-    if (report_link_count(links, cask_only(config, upgraded_names)))
-        std::cout << "  " << links << " symlinks\n";
-    std::cout << "==> " << upgrades.size() << " package(s) upgraded.\n";
+    if (report_link_count(res.links, cask_only(config, upgraded_names)))
+        std::cout << "  " << res.links << " symlinks\n";
+    std::cout << "==> " << res.applied.size() << " package(s) upgraded.\n";
+    if (!res.rolled_back.empty()) {
+        std::cout << "==> " << res.rolled_back.size() << " package(s) rolled back.\n";
+    }
+    report_version_change_failures(config, res, "upgrade");
     if (!explicitly_pinned.empty()) {
         throw UserError(std::to_string(explicitly_pinned.size()) +
                         " requested package(s) are pinned");

@@ -1141,12 +1141,22 @@ void Cli::M::setup() {
             }
         }
 
-        // Update the resolved provider's manifest bucket to the requested version.
-        with_manifest(cfg.den_home, active,
-                      [&](Manifest& m) { m.packages[provider_name][use_name] = use_version; });
-
-        auto links = materialise(cfg.den_home, cfg.store, active);
-        std::cout << "Switched " << use_name << " to " << use_version << " (" << links
+        // Switch the manifest entry and relink as one unit: a version that
+        // cannot be linked leaves the current one recorded and linked.
+        std::string from;
+        {
+            auto m = read_manifest(cfg.den_home, active);
+            if (auto b = m.packages.find(provider_name); b != m.packages.end()) {
+                if (auto it = b->second.find(use_name); it != b->second.end())
+                    from = it->second;
+            }
+        }
+        VersionChangeOptions vopts;
+        vopts.install = false;
+        auto res =
+            apply_version_changes(cfg, provider, nullptr, {{use_name, from, use_version}}, vopts);
+        report_version_change_failures(cfg, res, "switch");
+        std::cout << "Switched " << use_name << " to " << use_version << " (" << res.links
                   << " symlinks).\n";
     });
 
