@@ -5,7 +5,9 @@
 #
 # No rebuild — the exact binaries the harness validated are copied from the RC
 # release to the GA release. The RC release is left in place as a historical
-# record.
+# record. That includes the Homebrew bottles: they are verified against the
+# RC's darwin binary and checksums, never rebuilt, and the GA formula's
+# bottle block points at the copies on the GA release.
 #
 # Trigger: Actions → Promote RC → Run workflow
 #   rc_tag:                       the prerelease tag to promote, e.g. v0.12.0-rc.3
@@ -180,6 +182,9 @@ jobs:
             echo "| \`den-${VERSION}-darwin-aarch64.tar.gz\` | macOS arm64 |"
             echo "| \`den-${VERSION}-linux-x86_64.tar.gz\` | Linux x86_64 |"
             echo "| \`den-${VERSION}-linux-aarch64.tar.gz\` | Linux arm64 |"
+            for tag in arm64_golden_gate arm64_tahoe arm64_sequoia arm64_sonoma; do
+              echo "| \`den-${VERSION}.${tag}.bottle.tar.gz\` | Homebrew bottle (${tag}) |"
+            done
             echo "| \`den-${VERSION}-checksums.txt\` | SHA256 checksums |"
             echo ""
             echo "## Install"
@@ -208,6 +213,22 @@ jobs:
           tar xzf "rc-assets/den-${VERSION}-linux-x86_64.tar.gz" -C rc-check den
           scripts/check-version.sh --skip-cmake --binary rc-check/den "$GA_TAG"
           rm -rf rc-check
+
+      # -----------------------------------------------------------------------
+      # 6c. Refuse to promote an RC without valid Homebrew bottles: every
+      #     supported tag present, listed in the RC checksums, laid out as
+      #     den/<version>/... with a receipt, and carrying exactly the RC's
+      #     darwin binary. RCs cut before bottles existed must be re-cut.
+      # -----------------------------------------------------------------------
+      - name: Verify RC Homebrew bottles
+        run: |
+          GA_TAG="${{ env.GA_TAG }}"
+          VERSION="${GA_TAG#v}"
+          python3 scripts/homebrew-bottles.py verify \
+            --version "$VERSION" \
+            --tarball "rc-assets/den-${VERSION}-darwin-aarch64.tar.gz" \
+            --dir rc-assets \
+            --checksums "rc-assets/den-${VERSION}-checksums.txt"
 
       # -----------------------------------------------------------------------
       # 7. Create the GA tag on the RC commit and publish the GA release.
@@ -254,6 +275,25 @@ jobs:
           cp "rc-assets/den-${VERSION}-linux-aarch64.tar.gz"  "brew-assets/den-${VERSION}-linux-arm64.tar.gz"
           gh release upload "$GA_TAG" --repo "$GITHUB_REPOSITORY" brew-assets/*.tar.gz
 
+      # The bottle block (root_url = this GA release), the on_macos
+      # libarchive dependency, the service block, install and test all
+      # come from scripts/homebrew-bottles.py, which also renders the RC
+      # formula, so RC and GA formulae cannot drift apart.
+      - name: Render Homebrew formula inputs
+        id: formula
+        run: |
+          GA_TAG="${{ env.GA_TAG }}"
+          python3 scripts/homebrew-bottles.py releaser-inputs \
+            --version "${GA_TAG#v}" \
+            --release-tag "$GA_TAG" \
+            --dir rc-assets \
+            --github-output "$GITHUB_OUTPUT"
+          python3 scripts/homebrew-bottles.py releaser-inputs \
+            --version "${GA_TAG#v}" \
+            --release-tag "$GA_TAG" \
+            --dir rc-assets \
+            --github-output -
+
       - name: Update Homebrew formula
         uses: Justintime50/homebrew-releaser@v3
         with:
@@ -262,36 +302,14 @@ jobs:
           github_token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           formula_folder: Formula
           version: ${{ env.GA_TAG }}
-          install: |
-            bin.install "den"
-            pkgshare.install "share/den/known_hashes.json" if File.exist?("share/den/known_hashes.json")
-          test: |
-            assert_equal version.to_s, shell_output("#{bin}/den --version").strip
-            ENV["DEN_HOME"] = (testpath/".den").to_s
-            ENV["DEN_PREFIX"] = (testpath/"prefix").to_s
-            assert_match "No packages installed", shell_output("#{bin}/den list")
+          install: ${{ steps.formula.outputs.install }}
+          test: ${{ steps.formula.outputs.test }}
           target_darwin_arm64: true
           target_linux_amd64: true
           target_linux_arm64: true
           skip_checksum: true
           update_readme_table: true
-          formula_includes: |
-            # The macOS release binary links libarchive from the Homebrew prefix.
-            on_macos do
-              depends_on "libarchive"
-            end
-
-            # Background maintenance daemon (`brew services start den`). Its
-            # launchd label is Homebrew's (sh.brew.den / homebrew.mxcl.den),
-            # distinct from `den daemon install`'s dev.den.daemon; both use
-            # the same DEN_HOME pid lock, so run one or the other, not both.
-            service do
-              run [opt_bin/"den", "daemon", "run"]
-              keep_alive true
-              log_path var/"log/den.log"
-              error_log_path var/"log/den.log"
-              environment_variables PATH: std_service_path_env
-            end
+          formula_includes: ${{ steps.formula.outputs.formula_includes }}
 
       # -----------------------------------------------------------------------
       # 9. Print promotion summary.

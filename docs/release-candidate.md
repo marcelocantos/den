@@ -36,7 +36,7 @@ releases are minor releases.
 
 The workflow tags `v0.12.0-rc.1` (or the next free N), builds all platforms,
 runs the Linux harness, and publishes a GitHub prerelease with the binaries,
-checksums, and harness logs attached.
+Homebrew bottles and an RC `den.rb`, checksums, and harness logs attached.
 
 Numbering: `rc.1` for the first attempt at a given GA version; each retry
 auto-bumps to the next available N.
@@ -84,10 +84,43 @@ identical to what was validated.
 
 The workflow:
 1. Validates the RC tag format and confirms it is still a prerelease.
-2. Enforces the macOS harness attestation (fails fast if false).
+2. Enforces the macOS harness attestation (fails fast if false), and
+   checks the RC's binary version and Homebrew bottles.
 3. Creates the GA tag (`v0.12.0`) on the same commit as the RC tag.
 4. Creates the GA GitHub release with the same assets.
-5. Leaves the RC release in place as a historical record.
+5. Bumps the tap formula, with a bottle block pointing at the GA release.
+6. Leaves the RC release in place as a historical record.
+
+## Homebrew bottles
+
+Every RC carries Homebrew bottles built by `scripts/homebrew-bottles.py` from
+the RC's own darwin-aarch64 tarball (nothing is recompiled):
+
+- `den-X.Y.0.<tag>.bottle.tar.gz` for `arm64_golden_gate` (macOS 27),
+  `arm64_tahoe`, `arm64_sequoia` and `arm64_sonoma`. The binary's minimum
+  macOS is 14 and there is no Intel macOS build, so there are no older or
+  `x86_64` tags, and no `:all` (it is a native binary).
+- Each bottle is `den/X.Y.0/{bin/den,share/den/known_hashes.json,INSTALL_RECEIPT.json}`.
+  The formula version is `X.Y.0` for RCs too, so RC and GA bottles are the
+  same bytes; only the formula's `root_url` differs.
+- The bottles use a fixed cellar (`/opt/homebrew/Cellar`) because the
+  binary links libarchive from `/opt/homebrew/opt`. A Homebrew in any other
+  prefix falls back to installing from the release tarball.
+- `den.rb` on the RC release is a complete formula for that RC with its
+  `bottle do` block. To try it, put it in a local tap
+  (`brew tap-new <you>/den-rc`, then copy it to that tap's `Formula/`),
+  `brew install <you>/den-rc/den`, and run
+  `make verify-release VR_FORMULA=<you>/den-rc/den RELEASE_TAG=vX.Y.0`.
+  The `poured` step fails unless brew poured the bottle.
+
+Homebrew only pours a bottle whose tag it can name. A brew older than 6.0
+has no symbol for macOS 27, so on macOS 27 it pours no bottles at all (not
+even homebrew-core's) and builds everything from source.
+
+Promotion checks the RC's bottles (every tag present, matching the RC
+checksums, holding exactly the RC's darwin binary) and refuses an RC
+without them. It copies them to the GA release with the other assets.
+The tap formula's bottle block then points at the GA release.
 
 ## How to abort
 
