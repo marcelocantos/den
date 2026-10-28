@@ -102,5 +102,5 @@ cmake --build build
 cd build && ctest --output-on-failure
 ```
 
-Requires: cmake, ninja, libcurl, libarchive.
+Requires: cmake, ninja, libcurl. libarchive is vendored and linked statically by default.
 Optional: Portable Ruby (for formula evaluation / source builds).

@@ -123,8 +123,11 @@ src/
 ```
 
 Tests live in `tests/test_*.cpp` (one binary, `den_tests`, run via
-`ctest`). Header-only deps are vendored under `vendor/`; system deps
-are `libcurl` and `libarchive`.
+`ctest`). Header-only deps are vendored under `vendor/`; libarchive
+(+xz/zstd/lz4) is built from pinned sources and linked statically
+(`cmake/VendorLibarchive.cmake`, `DEN_VENDOR_LIBARCHIVE=ON`). The only
+system dep is `libcurl`; `scripts/check-links.sh` enforces that release
+binaries link nothing outside the base OS.
 
 ## Build
 

@@ -1,4 +1,9 @@
 cmake_minimum_required(VERSION 3.24)
+
+# Release binaries target macOS 14 (Sonoma) and later. Must be set before
+# project(); ignored on other platforms.
+set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS version")
+
 project(den VERSION 0.14.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
@@ -25,7 +30,16 @@ add_subdirectory(vendor/github.com/gabime/spdlog EXCLUDE_FROM_ALL)
 
 # --- System dependencies ---
 find_package(CURL REQUIRED)
-find_package(LibArchive REQUIRED)
+
+# libarchive: vendored and statically linked by default so release binaries
+# need nothing from a package manager (see cmake/VendorLibarchive.cmake).
+# -DDEN_VENDOR_LIBARCHIVE=OFF falls back to a system libarchive.
+option(DEN_VENDOR_LIBARCHIVE "Build libarchive (+xz/zstd/lz4) from pinned sources and link statically" ON)
+if(DEN_VENDOR_LIBARCHIVE)
+    include(${CMAKE_SOURCE_DIR}/cmake/VendorLibarchive.cmake)
+else()
+    find_package(LibArchive REQUIRED)
+endif()
 
 # --- den library (all modules) ---
 file(GLOB_RECURSE DEN_SOURCES src/*.cpp)
@@ -85,6 +99,11 @@ elseif(UNIX)
     # Linux: may need pthread explicitly.
     find_package(Threads REQUIRED)
     target_link_libraries(den_lib PUBLIC Threads::Threads)
+    # Don't depend on the host's libstdc++/libgcc_s versions.
+    target_link_options(den_lib PUBLIC -static-libstdc++ -static-libgcc)
+endif()
+if(DEN_VENDOR_LIBARCHIVE)
+    add_dependencies(den_lib den_vendor_libarchive)
 endif()
 
 # Version injection.
