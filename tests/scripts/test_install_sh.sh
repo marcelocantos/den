@@ -109,12 +109,13 @@ if [ -z "$_real_den" ] && [ -x "$ROOT/build/den" ]; then
 fi
 if [ -n "$_real_den" ]; then
     _real_den=$(CDPATH= cd -- "$(dirname "$_real_den")" && pwd -P)/$(basename "$_real_den")
-    "$_real_den" get --help >/dev/null 2>&1 || _real_den=""
+    "$_real_den" get --help 2>/dev/null | grep -q 'den get' || _real_den=""
 fi
 
 # mkrel TAG ASSET_VERSION OS ARCH [real]
 # The default fake den is "old": it has `--version` and `set` (logged, and
-# writing a minimal config.json) but no `get`. With "real", everything except
+# writing a minimal config.json) but no `get`. Like the real CLI, it answers
+# --help anywhere (so `den get --help`) with its top-level help and exit 0. With "real", everything except
 # --version runs the real den binary.
 mkrel() {
     _d="$_tmp/rel/$1"
@@ -132,6 +133,9 @@ DEN
         cat >"$_s/den" <<DEN
 #!/bin/sh
 [ -n "\${FAKE_DEN_LOG:-}" ] && echo "\$*" >>"\$FAKE_DEN_LOG"
+for a in "\$@"; do
+    [ "\$a" = --help ] && { echo "Usage: den [OPTIONS] [SUBCOMMAND]"; exit 0; }
+done
 case "\$1" in
     --version) echo "$2" ;;
     set) mkdir -p "\$DEN_HOME" && printf '{"store":{"prefix":"%s"}}\\n' "\$3" >"\$DEN_HOME/config.json" ;;

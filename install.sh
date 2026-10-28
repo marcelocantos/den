@@ -356,7 +356,7 @@ persist_prefix() {
     _cfg="$den_home/config.json"
     _cmd="DEN_HOME=\"$den_home\" \"$_den\" set store.prefix \"$_want\""
 
-    if ! DEN_HOME="$den_home" "$_den" get --help >/dev/null 2>&1; then
+    if ! has_den_get "$_den"; then
         # Too old for `den get`: only write when there is nothing to merge.
         if [ -e "$_cfg" ]; then
             say "this den cannot read $_cfg safely; not changing it. To persist the prefix, run:"
@@ -402,6 +402,14 @@ persist_prefix() {
         say "could not record store.prefix in $_cfg. To persist the prefix, run:"
         say "  $_cmd"
     fi
+}
+
+# has_den_get DEN: whether DEN has a `get` subcommand. Exit status alone
+# cannot tell: den's CLI parser honours --help anywhere on the command line,
+# so a den without `get` answers `den get --help` with its top-level help and
+# exits 0. Look for get's own usage line instead.
+has_den_get() {
+    DEN_HOME="$den_home" "$1" get --help 2>/dev/null | grep -q 'den get'
 }
 
 add_shell_integration() {
