@@ -153,12 +153,10 @@ jobs:
           RC_TAG="${{ env.RC_TAG }}"
           RC_SHA="${{ env.RC_SHA }}"
 
-          # Find the most recent GA tag before this release (exclude the new one and RCs).
-          prior=$(gh api "repos/$GITHUB_REPOSITORY/git/refs/tags" \
-            --jq '.[].ref | ltrimstr("refs/tags/")' 2>/dev/null \
-            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-            | grep -v "^${GA_TAG}$" \
-            | sort -V | tail -1 || echo "")
+          # Diff against the highest final vX.Y.Z below this release; RCs
+          # and higher tags (e.g. a stray v1.0.0-rc.1) are never the base.
+          prior=$(git tag -l 'v*' | scripts/prev-release-tag.sh "$GA_TAG")
+          echo "Release notes base: ${prior:-<none>}"
 
           {
             echo "Promoted from ${RC_TAG}."
