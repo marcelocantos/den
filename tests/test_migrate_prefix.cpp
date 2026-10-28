@@ -11,8 +11,10 @@
 #include <doctest.h>
 
 #include "core/config.h"
+#include "core/error.h"
 #include "daemon/daemon.h"
 #include "download/sha256.h"
+#include "env/environment.h"
 #include "index/index.h"
 #include "migrate/migrate_prefix.h"
 #include "settings/settings.h"
@@ -703,5 +705,101 @@ TEST_SUITE("migrate_prefix") {
             running = running || (s.name == "mpsvc" && s.running);
         }
         CHECK(running);
+    }
+
+    TEST_CASE("e2e: each keg pours as its own transaction") {
+        MpTmp tmp;
+        Legacy f(tmp.path);
+        // A failure after ccc's keg is written but before it verifies
+        // discards exactly that keg and its opt link; earlier kegs stay done.
+        auto r = f.den("migrate-prefix --apply", "DEN_MIGRATE_PREFIX_FAULT=verify:ccc");
+        INFO(r.out);
+        CHECK(r.code == 1);
+        CHECK(has(r.out, "den is unchanged"));
+        CHECK_FALSE(fs::exists(f.to / "Cellar" / "ccc"));
+        CHECK_FALSE(fs::exists(fs::symlink_status(f.to / "opt" / "ccc")));
+        CHECK(fs::is_directory(f.to / "Cellar" / "aaa" / "1.0"));
+        {
+            auto j = read_migrate_prefix_journal(f.den_home);
+            REQUIRE(j);
+            CHECK(j->pouring.empty());
+            CHECK(std::find(j->done.begin(), j->done.end(), "aaa/1.0") != j->done.end());
+            CHECK(std::find(j->done.begin(), j->done.end(), "ccc/1.1") == j->done.end());
+        }
+        CHECK(f.config_prefix() == f.brew.string());
+
+        // A run killed mid-pour leaves the keg journalled as in flight: even
+        // with a receipt it is not trusted, but discarded and poured again.
+        {
+            auto j = *read_migrate_prefix_journal(f.den_home);
+            j.pouring = "bbb/1.0";
+            write_migrate_prefix_journal(f.den_home, j);
+        }
+        auto dry = f.den("migrate-prefix");
+        CHECK(has(dry.out, "reinstall  bbb 1.0"));
+        CHECK(has(dry.out, "done       aaa 1.0"));
+        // A keg whose opt link went missing no longer verifies either.
+        fs::remove(f.to / "opt" / "aaa");
+        auto res = f.den("migrate-prefix --resume");
+        INFO(res.out);
+        REQUIRE(res.code == 0);
+        CHECK(has(res.out, "poured     bbb 1.0"));
+        CHECK(has(res.out, "poured     aaa 1.0"));
+        CHECK(has(res.out, "poured     ccc 1.1"));
+        CHECK(has(res.out, "poured     eee 1.0"));
+        CHECK(journal_phase(f.den_home) == "done");
+        CHECK(read_migrate_prefix_journal(f.den_home)->pouring.empty());
+        CHECK(f.config_prefix() == f.to.string());
+    }
+
+    TEST_CASE("e2e: a keg whose links conflict in the old prefix moves cleanly") {
+        MpTmp tmp;
+        Legacy f(tmp.path);
+        // In the shared prefix, Homebrew owns the links for ssl@3 (they point
+        // at its own keg), so den's keg of the same formula cannot be linked
+        // there: the "not linking openssl@3: N conflicting path(s)" case.
+        const std::string n = "ssl@3";
+        const auto brew_keg = f.brew / "Cellar" / n / "0.9";
+        put(brew_keg / "bin" / n, "#!/bin/sh\necho brew\n");
+        put(brew_keg / "INSTALL_RECEIPT.json", "{}");
+        put(f.brew / "Cellar" / n / "1.0" / "bin" / n, "#!/bin/sh\necho den\n");
+        mark_keg_owned(f.brew / "Cellar" / n / "1.0", n, "1.0");
+        fs::create_symlink("../Cellar/" + n + "/0.9/bin/" + n, f.brew / "bin" / n);
+        put(f.den_home / "manifests" / "ROOT" / "manifest.json",
+            R"({"packages":{"homebrew":{"aaa":"1.0","ssl@3":"1.0"}},"auto_deps":{}})");
+        seed_index(f.den_home, {{"aaa", "1.0", {}}, {n, "1.0", {}}});
+        {
+            ScopedEnv h("DEN_HOME", f.den_home.string());
+            ScopedEnv dp("DEN_PREFIX", std::nullopt);
+            ScopedEnv bp("HOMEBREW_PREFIX", f.brew.string());
+            ScopedEnv bc("HOMEBREW_CELLAR", (f.brew / "Cellar").string());
+            const auto cfg = Config::detect();
+            REQUIRE(cfg.shares_homebrew_cellar());
+            std::string why;
+            try {
+                materialise(cfg.den_home, cfg.store, "/");
+            } catch (const std::exception& e) {
+                why = e.what();
+            }
+            INFO(why);
+            CHECK(has(why, n));
+            CHECK(fs::read_symlink(f.brew / "bin" / n) == "../Cellar/" + n + "/0.9/bin/" + n);
+        }
+        const auto brew_before = tree_snapshot(f.brew);
+
+        auto r = f.den("migrate-prefix --apply");
+        INFO(r.out);
+        REQUIRE(r.code == 0);
+        CHECK_FALSE(has(r.out, "conflicting"));
+        CHECK(has(r.out, "Moved: den now uses " + f.to.string()));
+        const auto keg = f.to / "Cellar" / n / "1.0";
+        REQUIRE(fs::is_symlink(f.to / "bin" / n));
+        CHECK(fs::equivalent(f.to / "bin" / n, keg / "bin" / n));
+        CHECK(fs::equivalent(f.to / "opt" / n, keg));
+        CHECK(fs::read_symlink(f.brew / "bin" / n) == "../Cellar/" + n + "/0.9/bin/" + n);
+        CHECK(tree_snapshot(f.brew) == brew_before);
+        // Linking again in the new prefix finds nothing in the way.
+        auto again = f.den("doctor");
+        CHECK_FALSE(has(again.out, "conflicting"));
     }
 }

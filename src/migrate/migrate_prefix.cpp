@@ -401,6 +401,7 @@ json to_json(const MigratePrefixJournal& j) {
     }
     o["manifest_changes"] = changes;
     o["ledger_swapped"] = j.ledger_swapped;
+    o["pouring"] = j.pouring;
     o["specs_rewritten"] = j.specs_rewritten;
     o["plist_rewritten"] = j.plist_rewritten;
     return o;
@@ -591,6 +592,7 @@ std::optional<MigratePrefixJournal> read_migrate_prefix_journal(const fs::path& 
         }
     }
     j.ledger_swapped = o.value("ledger_swapped", false);
+    j.pouring = o.value("pouring", std::string{});
     j.specs_rewritten = o.value("specs_rewritten", std::vector<std::string>{});
     j.plist_rewritten = o.value("plist_rewritten", false);
     return j;
@@ -715,6 +717,61 @@ std::optional<uint64_t> free_bytes_at(const fs::path& p, fs::path* at) {
 
 // ---- Plan -------------------------------------------------------------------
 
+namespace {
+
+// A keg in <to> counts as moved only when den's receipt names it, it holds
+// more than that receipt, and <to>/opt/<name> resolves to it. Anything less
+// is a half-finished pour that must be redone, never trusted.
+std::string keg_problem(const fs::path& store, const std::string& name,
+                        const std::string& version) {
+    const auto keg = store / name / version;
+    std::error_code ec;
+    if (!keg_owned_by_den(keg)) {
+        return keg.string() + " has no matching " + std::string(kDenReceiptFilename);
+    }
+    bool content = false;
+    for (const auto& e : fs::directory_iterator(keg, ec)) {
+        if (e.path().filename() != kDenReceiptFilename) {
+            content = true;
+            break;
+        }
+    }
+    if (!content) {
+        return keg.string() + " is empty";
+    }
+    const auto opt = store.parent_path() / "opt" / name;
+    if (!fs::is_symlink(fs::symlink_status(opt, ec)) || !fs::exists(opt, ec) ||
+        !fs::equivalent(opt, keg, ec)) {
+        return opt.string() + " does not point at " + keg.string();
+    }
+    return {};
+}
+
+// Undo one keg's pour inside <to>: the keg, its opt link (only if it points
+// at this keg) and the rack if that leaves it empty. <to> is not live before
+// the switch, so nothing den uses can depend on what this removes.
+void discard_keg(const fs::path& store, const std::string& name, const std::string& version) {
+    const auto keg = store / name / version;
+    std::error_code ec;
+    const auto opt = store.parent_path() / "opt" / name;
+    if (fs::is_symlink(fs::symlink_status(opt, ec))) {
+        auto target = fs::read_symlink(opt, ec);
+        if (!ec) {
+            auto resolved = target.is_absolute() ? target : (opt.parent_path() / target);
+            if (resolved.lexically_normal() == keg.lexically_normal() ||
+                (fs::exists(keg, ec) && fs::equivalent(resolved, keg, ec))) {
+                fs::remove(opt, ec);
+            }
+        }
+    }
+    fs::remove_all(keg, ec);
+    if (fs::is_empty(store / name, ec)) {
+        fs::remove(store / name, ec);
+    }
+}
+
+} // namespace
+
 MigratePrefixPlan plan_migrate_prefix(const Config& cfg, const PackageIndex& idx,
                                       const fs::path& to, const fs::path& home, bool measure) {
     MigratePrefixPlan plan;
@@ -727,6 +784,10 @@ MigratePrefixPlan plan_migrate_prefix(const Config& cfg, const PackageIndex& idx
 
     auto owned = owned_kegs(cfg.den_home);
     std::map<std::string, KegPlan> kegs;
+    std::string pouring; // a keg an interrupted run was pouring is never "done"
+    if (auto jr = read_migrate_prefix_journal(cfg.den_home); jr && jr->to == to.string()) {
+        pouring = jr->pouring;
+    }
 
     auto classify = [&](const std::string& name, const Owned& o, bool new_dep) {
         KegPlan k;
@@ -793,7 +854,8 @@ MigratePrefixPlan plan_migrate_prefix(const Config& cfg, const PackageIndex& idx
                 k.reason = problem;
             }
         }
-        if (k.action != KegAction::Blocked && keg_owned_by_den(to_cellar / name / k.target)) {
+        if (k.action != KegAction::Blocked && name + "/" + k.target != pouring &&
+            keg_problem(to_cellar, name, k.target).empty()) {
             k.action = KegAction::Done;
             k.bytes = 0;
             k.bytes_source = "already poured";
@@ -1386,7 +1448,9 @@ int run_migrate_prefix(const Config& cfg, const MigratePrefixOptions& opts, std:
         std::size_t remaining = 0;
         for (const auto& k : plan.kegs) {
             const auto keg = cfg_to.store / k.name / k.target;
-            if (k.action == KegAction::Done && keg_owned_by_den(keg)) {
+            const auto id = k.name + "/" + k.target;
+            if (k.action == KegAction::Done && id != j.pouring &&
+                keg_problem(cfg_to.store, k.name, k.target).empty()) {
                 continue;
             }
             if (!selected(k)) {
@@ -1394,29 +1458,43 @@ int run_migrate_prefix(const Config& cfg, const MigratePrefixOptions& opts, std:
                 continue;
             }
             item = k.name;
-            if (fs::exists(keg, ec) && !keg_owned_by_den(keg)) {
-                fs::remove_all(keg, ec); // a partial pour from an earlier run: ours to redo
+            // Each keg is its own transaction: journal it as in flight, pour,
+            // verify, then journal it done. Any failure discards exactly
+            // this keg, so <to> never holds a keg the journal cannot vouch
+            // for. A keg an interrupted run left in flight (or one that no
+            // longer verifies) is discarded and poured again.
+            discard_keg(cfg_to.store, k.name, k.target);
+            j.done.erase(std::remove(j.done.begin(), j.done.end(), id), j.done.end());
+            j.pouring = id;
+            write_migrate_prefix_journal(cfg.den_home, j);
+            try {
+                maybe_fault("pour:" + k.name);
+                const Package* pkg = idx.find(k.entry);
+                pour_formula_keg(cfg_to, *pkg);
+                ensure_prefix_opt_link(cfg_to.store, k.name, keg);
+                maybe_fault("verify:" + k.name);
+                if (auto problem = keg_problem(cfg_to.store, k.name, k.target); !problem.empty()) {
+                    throw Error("poured " + k.name + " " + k.target + " but " + problem);
+                }
+            } catch (...) {
+                discard_keg(cfg_to.store, k.name, k.target);
+                j.pouring.clear();
+                write_migrate_prefix_journal(cfg.den_home, j);
+                throw;
             }
-            maybe_fault("pour:" + k.name);
-            const Package* pkg = idx.find(k.entry);
-            pour_formula_keg(cfg_to, *pkg);
-            if (!keg_owned_by_den(keg)) {
-                throw Error("poured " + k.name + " " + k.target + " but " + keg.string() +
-                            " has no DEN_RECEIPT.json");
-            }
-            const auto id = k.name + "/" + k.target;
-            if (std::find(j.done.begin(), j.done.end(), id) == j.done.end()) {
-                j.done.push_back(id);
-            }
+            j.pouring.clear();
+            j.done.push_back(id);
             write_migrate_prefix_journal(cfg.den_home, j);
             out << "poured     " << k.name << " " << k.target << " -> " << keg.string() << "\n";
         }
         // Re-verify every receipt the journal claims (a resumed run trusts
         // nothing it did not just check).
         for (const auto& k : plan.kegs) {
-            const auto keg = cfg_to.store / k.name / k.target;
-            if (selected(k) && !keg_owned_by_den(keg)) {
-                throw Error("receipt missing for " + keg.string());
+            if (!selected(k)) {
+                continue;
+            }
+            if (auto problem = keg_problem(cfg_to.store, k.name, k.target); !problem.empty()) {
+                throw Error("verify " + k.name + " " + k.target + ": " + problem);
             }
         }
         if (remaining > 0) {
@@ -1455,7 +1533,18 @@ int run_migrate_prefix(const Config& cfg, const MigratePrefixOptions& opts, std:
         materialise(stage_home(cfg.den_home), cfg_to.store, "/", &idx);
         out << "linked     root env into " << to.string() << " (staged)\n";
 
-        // 4. switch
+        // 4. switch, only once every keg verifies in <to>
+        phase = "verify";
+        for (const auto& k : plan.kegs) {
+            item = k.name;
+            if (auto problem = keg_problem(cfg_to.store, k.name, k.target); !problem.empty()) {
+                throw Error("before switching, " + k.name + " " + k.target + ": " + problem);
+            }
+            if (std::find(j.done.begin(), j.done.end(), k.name + "/" + k.target) == j.done.end()) {
+                j.done.push_back(k.name + "/" + k.target);
+            }
+        }
+        item.clear();
         phase = "switch";
         j.previous_prefix_recorded = true;
         j.previous_prefix = read_settings(cfg.den_home).store.prefix;

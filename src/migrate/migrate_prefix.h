@@ -126,6 +126,7 @@ struct MigratePrefixJournal {
     std::string from;
     std::string phase;               // pour, link, materialise, switched, done, rolled_back
     std::vector<std::string> done;   // "name/version" poured with a receipt
+    std::string pouring;             // "name/version" being poured right now; discarded on resume
     std::vector<std::string> failed; // "phase: item: error"
     bool previous_prefix_recorded = false;
     std::optional<std::string> previous_prefix; // store.prefix before the switch
