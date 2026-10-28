@@ -74,6 +74,33 @@ bool legacy_shared_cellar(const fs::path& den_home, const fs::path& brew_cellar)
     return false;
 }
 
+// `den migrate-prefix` pours into <den_home>/prefix before it switches
+// store.prefix, so that Cellar exists while den must still use the old
+// prefix (and after a rollback, which keeps it). Its journal names the
+// target and phase; until the switch ("switched"/"done") the private
+// Cellar does not count. Read-only.
+bool migrate_prefix_pending(const fs::path& den_home, const fs::path& private_prefix) {
+    std::error_code ec;
+    const auto path = den_home / "migrate-prefix.json";
+    if (!fs::is_regular_file(path, ec)) {
+        return false;
+    }
+    std::ifstream f(path);
+    auto j = nlohmann::json::parse(f, nullptr, /*allow_exceptions=*/false);
+    if (!j.is_object() || !j.contains("to") || !j["to"].is_string()) {
+        return false;
+    }
+    const auto phase = j.value("phase", std::string());
+    if (phase == "switched" || phase == "done") {
+        return false;
+    }
+    const fs::path to = j["to"].get<std::string>();
+    if (to.lexically_normal() == private_prefix.lexically_normal()) {
+        return true;
+    }
+    return fs::equivalent(to, private_prefix, ec);
+}
+
 } // namespace
 
 const char* to_string(PrefixSource s) {
@@ -130,7 +157,8 @@ Config Config::detect() {
         c.set_prefix(absolute_or_self(dp), PrefixSource::EnvDenPrefix);
     } else if (auto s = read_settings(c.den_home); s.store.prefix && !s.store.prefix->empty()) {
         c.set_prefix(absolute_or_self(*s.store.prefix), PrefixSource::Settings);
-    } else if (fs::exists(private_prefix / "Cellar", ec)) {
+    } else if (fs::exists(private_prefix / "Cellar", ec) &&
+               !migrate_prefix_pending(c.den_home, private_prefix)) {
         c.set_prefix(private_prefix, PrefixSource::DenHome);
     } else if (legacy_shared_cellar(c.den_home, c.homebrew_cellar)) {
         c.set_prefix(c.homebrew_cellar.parent_path(), PrefixSource::LegacyShared);

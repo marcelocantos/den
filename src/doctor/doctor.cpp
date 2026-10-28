@@ -78,6 +78,9 @@ void check_store(const Config& config, std::vector<Finding>& findings) {
     } else if (!fs::is_directory(config.store)) {
         error(findings, "store path exists but is not a directory: " + config.store.string());
     }
+    if (config.shares_homebrew_cellar()) {
+        warn(findings, shared_prefix_hint());
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -244,7 +247,7 @@ void check_broken_symlinks(const Config& config, std::vector<Finding>& findings)
             warn(findings, "... and " + std::to_string(broken - 10) + " more broken symlinks");
         }
         if (broken > 0) {
-            warn(findings, broken_symlinks_hint(broken));
+            warn(findings, broken_symlinks_hint(broken, config.shares_homebrew_cellar()));
         }
         if (ec) {
             warn(findings, "error scanning env symlinks: " + ec.message());
@@ -322,7 +325,7 @@ void check_file_permissions(const Config& config, std::vector<Finding>& findings
     for (const auto& p : sensitive) {
         if (!fs::exists(p))
             continue;
-        struct stat st{};
+        struct stat st {};
         if (::stat(p.c_str(), &st) != 0) {
             warn(findings, "cannot stat " + p.string() + ": " + std::strerror(errno));
             continue;
@@ -375,11 +378,20 @@ const char* severity_label(Severity s) {
 
 } // namespace
 
-std::string broken_symlinks_hint(int broken) {
-    return std::to_string(broken) + " broken symlink" + (broken == 1 ? "" : "s") +
-           " in den environments. When brew upgrades or removes kegs under a prefix it "
-           "shares with den, links into the old kegs break; `den migrate-prefix` (coming) is "
-           "how to fix them. den doctor only reports these links, it does not repair them.";
+std::string shared_prefix_hint() {
+    return "den is still installing into Homebrew's folder, so Homebrew upgrades can break "
+           "your den environments. Run `den migrate-prefix` to see what moving would do. It "
+           "changes nothing until you add --apply.";
+}
+
+std::string broken_symlinks_hint(int broken, bool shared) {
+    std::string out = std::to_string(broken) + " broken symlink" + (broken == 1 ? "" : "s") +
+                      " in den environments.";
+    if (shared) {
+        out += " When Homebrew upgrades or removes kegs in the folder den shares with it, "
+               "links into the old kegs break; `den migrate-prefix` gives den its own folder.";
+    }
+    return out + " den doctor only reports these links; it does not repair them.";
 }
 
 std::string standard_bottle_prefix(Arch arch) {
