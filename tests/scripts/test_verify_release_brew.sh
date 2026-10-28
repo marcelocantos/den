@@ -113,7 +113,9 @@ run() {
     mkdir -p "$_tmp/callerhome"
     case " $* " in *" PRETRUST=1 "*) pretrust "$_tmp/callerhome/.homebrew" ;; esac
     case " $* " in *" XDG_CONFIG_HOME="*) pretrust "$_tmp/xdg/homebrew" ;; esac
-    env HOME="$_tmp/callerhome" BREW="$_tmp/brew" FAKE_LOG="$_tmp/calls" FAKE_ROOT="$_tmp" FAKE_KEG="$KEG" \
+    # Drop any ambient XDG config (GitHub's Linux runners set XDG_CONFIG_HOME),
+    # so each case's trust store lives under its own caller HOME.
+    env -u XDG_CONFIG_HOME -u HOMEBREW_XDG_CONFIG_HOME HOME="$_tmp/callerhome" BREW="$_tmp/brew" FAKE_LOG="$_tmp/calls" FAKE_ROOT="$_tmp" FAKE_KEG="$KEG" \
         VR_ROOT="$_tmp/vr" VR_FORMULA=marcelocantos/den-rc/den RELEASE_TAG=v1.2.0 VR_POURED=0 \
         VR_ONLY="brew-trust brew-test formula-test" "$@" bash "$VR" >"$_tmp/out" 2>&1
     _got=$?
