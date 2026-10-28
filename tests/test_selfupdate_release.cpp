@@ -8,6 +8,7 @@
 // network or the running binary: the install tests target a scratch exe.
 
 #include "../src/core/error.h"
+#include "../src/download/sha256.h"
 #include "../src/selfupdate/selfupdate.h"
 
 #include <doctest.h>
@@ -211,6 +212,31 @@ TEST_SUITE("self-update --version") {
         CHECK(old == "old bytes");
         // No staging leftovers beside the binary.
         CHECK(count_entries(exe.parent_path(), "den.new") == 0);
+    }
+
+    TEST_CASE("self-update keeps install.sh's installed-tag record in step with the binary") {
+        // `den --version` omits -rc.N, so install.sh records the tag; a
+        // self-update that left it alone made install.sh report the release
+        // install.sh last installed (rc.1) instead of the one self-update
+        // installed (rc.2).
+        TempDir t;
+        auto exe = t.path / ".den" / "bin" / "den";
+        write_file(exe, "rc.2 bytes");
+        auto record = t.path / ".den" / "share" / "den" / "installed-tag";
+        write_file(record, "v0.15.0-rc.1\nsha256 " + hash_string("rc.1 bytes") + "\n");
+
+        update_installed_tag_record(exe, "v0.15.0-rc.2");
+
+        CHECK(slurp(record) == "v0.15.0-rc.2\nsha256 " + hash_string("rc.2 bytes") + "\n");
+        CHECK_FALSE(fs::exists(fs::path(record.string() + ".new")));
+    }
+
+    TEST_CASE("self-update does not create an installed-tag record install.sh never wrote") {
+        TempDir t;
+        auto exe = t.path / "bin" / "den";
+        write_file(exe, "bytes");
+        update_installed_tag_record(exe, "v0.15.0-rc.2");
+        CHECK_FALSE(fs::exists(t.path / "share" / "den" / "installed-tag"));
     }
 
     TEST_CASE("install_update_tarball refuses a tarball without den, leaving exe alone") {

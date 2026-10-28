@@ -104,24 +104,48 @@ main() {
     say "installing den $tag for $os/$arch"
 
     # --- Check for existing install ---
-    # `den --version` prints the bare version (e.g. 0.14.0), which an RC
-    # shares with its GA, so the installed tag is recorded beside it.
+    # `den --version` prints the bare version (e.g. 0.15.0), which every RC
+    # shares with its GA, so the installed tag is recorded beside it:
+    # line 1 the tag, line 2 `sha256 <hex>` of the binary it describes. The
+    # binary can change underneath the record (`den self-update` replaces it),
+    # so the record is only believed while that sha still matches the binary.
+    # A legacy record (tag only, from an older install.sh) is believed unless
+    # the binary is newer than it. A stale record is never used to skip an
+    # install or to name the installed tag.
     tag_file="$den_dir/share/den/installed-tag"
     if [ -x "$bin_dir/den" ]; then
         existing="$("$bin_dir/den" --version 2>/dev/null)" || existing=""
         existing_tag=""
+        recorded_tag=""
+        record_stale=no
         if [ -f "$tag_file" ]; then
-            existing_tag="$(cat "$tag_file" 2>/dev/null)" || existing_tag=""
+            recorded_tag="$(sed -n 1p "$tag_file" 2>/dev/null)" || recorded_tag=""
+            recorded_sha="$(sed -n 's/^sha256 //p' "$tag_file" 2>/dev/null)" || recorded_sha=""
+            if [ -n "$recorded_sha" ]; then
+                if [ "$recorded_sha" = "$(file_sha256 "$bin_dir/den")" ]; then
+                    existing_tag="$recorded_tag"
+                else
+                    record_stale=yes
+                fi
+            elif [ "$bin_dir/den" -nt "$tag_file" ]; then
+                record_stale=yes
+            else
+                existing_tag="$recorded_tag"
+            fi
         fi
-        if [ "$existing" = "$asset_version" ]; then
-            if [ "$existing_tag" = "$tag" ] || { [ -z "$existing_tag" ] && [ "$tag" = "v$asset_version" ]; }; then
+        if [ "$existing" = "$asset_version" ] && [ "$record_stale" = no ]; then
+            if [ "$existing_tag" = "$tag" ] || { [ -z "$recorded_tag" ] && [ "$tag" = "v$asset_version" ]; }; then
                 ensure_prefix "$prefix"
                 say "den $tag is already installed."
                 persist_prefix "$bin_dir/den"
                 exit 0
             fi
         fi
-        say "replacing den ${existing_tag:-${existing:-unknown}} -> $tag"
+        if [ "$record_stale" = yes ]; then
+            say "replacing den ${existing:-unknown} (replaced since install.sh recorded ${recorded_tag:-a tag}; exact release unknown) -> $tag"
+        else
+            say "replacing den ${existing_tag:-${existing:-unknown}} -> $tag"
+        fi
     fi
 
     # --- Prefix ---
@@ -166,7 +190,7 @@ main() {
 
     chmod +x "$bin_dir/den"
     mkdir -p "$den_dir/share/den"
-    printf '%s\n' "$tag" > "$tag_file"
+    printf '%s\nsha256 %s\n' "$tag" "$(file_sha256 "$bin_dir/den")" > "$tag_file"
 
     # Clear macOS quarantine flag.
     if [ "$os" = "darwin" ]; then
@@ -268,15 +292,20 @@ verify_checksum() {
         err "checksum not found for $_archive_name in checksum file"
     fi
 
-    _tool="$(sha256_tool)" || err "need 'shasum' or 'sha256sum' to verify the download"
-    case "$_tool" in
-        shasum) _actual="$(shasum -a 256 "$_file" | awk '{print $1}')" ;;
-        *)      _actual="$(sha256sum "$_file" | awk '{print $1}')" ;;
-    esac
+    sha256_tool >/dev/null || err "need 'shasum' or 'sha256sum' to verify the download"
+    _actual="$(file_sha256 "$_file")"
 
     if [ "$_actual" != "$_expected" ]; then
         err "checksum mismatch: expected $_expected, got $_actual"
     fi
+}
+
+# file_sha256 FILE: its lowercase hex SHA256 (empty if it cannot be read).
+file_sha256() {
+    case "$(sha256_tool)" in
+        shasum)    shasum -a 256 "$1" 2>/dev/null | awk '{print $1}' ;;
+        sha256sum) sha256sum "$1" 2>/dev/null | awk '{print $1}' ;;
+    esac
 }
 
 sha256_tool() {

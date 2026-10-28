@@ -165,6 +165,37 @@ void refresh_packaged_replica(const fs::path& extracted_root, const fs::path& ex
     }
 }
 
+void update_installed_tag_record(const fs::path& exe, const std::string& tag) {
+    auto record = (exe.parent_path() / ".." / "share" / "den" / "installed-tag").lexically_normal();
+    std::error_code ec;
+    if (!fs::is_regular_file(record, ec)) {
+        return;
+    }
+    std::string sha;
+    try {
+        sha = hash_file(exe);
+    } catch (const std::exception& e) {
+        SPDLOG_WARN("could not hash {} for {}: {}", exe.string(), record.string(), e.what());
+        return;
+    }
+    auto staging = record;
+    staging += ".new";
+    {
+        std::ofstream out(staging, std::ios::binary | std::ios::trunc);
+        out << tag << "\nsha256 " << sha << "\n";
+        if (!out) {
+            fs::remove(staging, ec);
+            SPDLOG_WARN("could not update {}", record.string());
+            return;
+        }
+    }
+    fs::rename(staging, record, ec);
+    if (ec) {
+        fs::remove(staging, ec);
+        SPDLOG_WARN("could not update {}", record.string());
+    }
+}
+
 std::string normalize_release_tag(const std::string& version) {
     static const std::regex re(R"(^v?([0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?)$)");
     std::smatch m;
@@ -358,6 +389,7 @@ void apply_update(const UpdateInfo& info, const Config& cfg) {
     }
 
     install_update_tarball(tarball_path, exe);
+    update_installed_tag_record(exe, info.tag.empty() ? "v" + info.latest_version : info.tag);
 
     std::cout << "Updated den " << DEN_VERSION << " → " << info.latest_version;
     if (!info.tag.empty() && asset_version_for_tag(info.tag) != info.tag.substr(1)) {
