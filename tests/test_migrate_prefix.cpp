@@ -177,6 +177,7 @@ struct IndexEntry {
     std::string name;
     std::string version;
     std::vector<std::string> deps;
+    std::string cellar = {}; // non-empty: a bottle built for this fixed Cellar
 };
 
 // Offline index + archive cache for several formulae.
@@ -204,6 +205,11 @@ void seed_index(const fs::path& den_home, const std::vector<IndexEntry>& entries
                            {{"url", "file:///nonexistent/" + e.name + "-" + e.version + ".tar.gz"},
                             {"sha256", sha},
                             {"relocation", "needs_substitution"}}}}}});
+        if (!e.cellar.empty()) {
+            auto& a = pkgs.back()["archives"]["all"];
+            a["relocation"] = "hardcoded_prefix";
+            a["cellar"] = e.cellar;
+        }
     }
     put(den_home / "cache" / "index.json", nlohmann::json{{"packages", pkgs}}.dump(2));
 }
@@ -306,6 +312,64 @@ struct FakeDaemon {
         ::close(fd);
     }
 };
+
+// Add to a Legacy fixture fff 2.0, whose bottle only pours into the fake
+// brew's Cellar, and ggg 1.0 (relocatable) that depends on it. `brew_bin`:
+// <brew>/bin/brew exists; `keg`: brew's Cellar holds fff 2.0 with brew's
+// receipt (`den_poured`: with den's receipt instead).
+struct BrewOwnedSetup {
+    bool brew_bin = true;
+    bool keg = true;
+    bool den_poured = false;
+};
+
+void add_brew_owned(const Legacy& f, BrewOwnedSetup o = {}) {
+    const auto cellar = (f.brew / "Cellar").string();
+    put(f.den_home / "manifests" / "ROOT" / "manifest.json",
+        R"({"packages":{"homebrew":{"aaa":"1.0","bbb":"1.0","ccc":"1.0","ddd":"1.0",)"
+        R"("fff":"2.0","ggg":"1.0"}},"auto_deps":{}})");
+    seed_index(f.den_home, {{"aaa", "1.0", {}},
+                            {"bbb", "1.0", {}},
+                            {"ccc", "1.1", {"eee"}},
+                            {"ddd", "1.0", {}},
+                            {"eee", "1.0", {}},
+                            {"fff", "2.0", {}, cellar},
+                            {"ggg", "1.0", {"fff"}}});
+    if (o.brew_bin) {
+        put(f.brew / "bin" / "brew", "#!/bin/sh\nexit 1\n");
+    }
+    if (o.keg) {
+        const auto keg = f.brew / "Cellar" / "fff" / "2.0";
+        put(keg / "bin" / "fff", "#!/bin/sh\necho brew fff\n");
+        if (o.den_poured) {
+            mark_keg_owned(keg, "fff", "2.0");
+        } else {
+            put(keg / "INSTALL_RECEIPT.json", "{}");
+        }
+        fs::create_directories(f.brew / "opt");
+        fs::create_symlink("../Cellar/fff/2.0", f.brew / "opt" / "fff");
+    }
+}
+
+std::map<std::string, KegPlan> plan_by_name(const Legacy& f, std::string* printed = nullptr) {
+    ScopedEnv h("DEN_HOME", f.den_home.string());
+    ScopedEnv dp("DEN_PREFIX", std::nullopt);
+    ScopedEnv bp("HOMEBREW_PREFIX", f.brew.string());
+    ScopedEnv bc("HOMEBREW_CELLAR", (f.brew / "Cellar").string());
+    const auto cfg = Config::detect();
+    const auto plan =
+        plan_migrate_prefix(cfg, load_index(cfg.cache / "index.json"), f.to, f.home, true);
+    if (printed) {
+        std::ostringstream os;
+        print_migrate_prefix_plan(os, plan);
+        *printed = os.str();
+    }
+    std::map<std::string, KegPlan> by;
+    for (const auto& k : plan.kegs) {
+        by[k.name] = k;
+    }
+    return by;
+}
 
 } // namespace
 
@@ -802,6 +866,149 @@ TEST_SUITE("migrate_prefix") {
         // Linking again in the new prefix finds nothing in the way.
         auto again = f.den("doctor");
         CHECK_FALSE(has(again.out, "conflicting"));
+    }
+
+    TEST_CASE("plan keeps a keg whose bottle only pours into brew's Cellar with brew") {
+        MpTmp tmp;
+        Legacy f(tmp.path);
+        add_brew_owned(f);
+        std::string out;
+        auto by = plan_by_name(f, &out);
+        MESSAGE("brew-owned plan:\n" << out);
+        REQUIRE(by.count("fff"));
+        CHECK(by["fff"].action == KegAction::BrewOwned);
+        CHECK(by["fff"].target == "2.0");
+        CHECK(by["fff"].owner == KegOwner::Brew);
+        CHECK(by["fff"].brew_keg == f.brew / "Cellar" / "fff" / "2.0");
+        CHECK(by["ggg"].action == KegAction::Reinstall);
+        CHECK(by["ggg"].brew_links == std::vector<std::string>{"fff"});
+        CHECK_FALSE(by["ggg"].brew_links_scanned);
+        CHECK(by["aaa"].brew_links.empty());
+        const auto brew = f.brew.string();
+        const auto to = f.to.string();
+        CHECK(has(out, "brew-owned fff 2.0 (bottle only pours into " + brew +
+                           "/Cellar; stays with brew)\n"));
+        CHECK(has(out, "brew-link  ggg 1.0 will load fff from " + brew + "/opt through " + to +
+                           "/opt links (brew-owned dependency)\n"));
+        CHECK_FALSE(has(out, "disk       fff"));
+        CHECK(has(out, "7 kegs, 1 drift, 1 pinned, 0 blocked, 1 brew-owned, 0 already moved; 6 "
+                       "to reinstall; 1 link into brew-owned kegs; " +
+                           brew + " writes: 0"));
+    }
+
+    TEST_CASE("plan blocks a fixed-cellar keg when brew is not installed") {
+        MpTmp tmp;
+        Legacy f(tmp.path);
+        add_brew_owned(f, {.brew_bin = false});
+        std::string out;
+        auto by = plan_by_name(f, &out);
+        CHECK(by["fff"].action == KegAction::Blocked);
+        CHECK(has(by["fff"].reason,
+                  "Homebrew is not installed (no " + f.brew.string() + "/bin/brew)"));
+        CHECK(has(out, "blocked    fff 2.0: its bottle only pours into " + f.brew.string() +
+                           "/Cellar; Homebrew is not installed"));
+        CHECK(has(out, "1 blocked, 0 brew-owned"));
+        CHECK(by["ggg"].brew_links.empty());
+    }
+
+    TEST_CASE("plan blocks a fixed-cellar keg brew's Cellar does not hold") {
+        MpTmp tmp;
+        Legacy f(tmp.path);
+        add_brew_owned(f, {.keg = false});
+        auto by = plan_by_name(f);
+        CHECK(by["fff"].action == KegAction::Blocked);
+        CHECK(has(by["fff"].reason, "/Cellar has no fff keg"));
+    }
+
+    TEST_CASE("plan blocks a fixed-cellar keg den poured into brew's Cellar") {
+        MpTmp tmp;
+        Legacy f(tmp.path);
+        add_brew_owned(f, {.den_poured = true});
+        auto by = plan_by_name(f);
+        CHECK(by["fff"].action == KegAction::Blocked);
+        CHECK(has(by["fff"].reason, "was poured by den, so brew does not own it"));
+    }
+
+    TEST_CASE("plan blocks a fixed cellar that is not Homebrew's") {
+        MpTmp tmp;
+        Legacy f(tmp.path);
+        add_brew_owned(f);
+        seed_index(f.den_home, {{"aaa", "1.0", {}},
+                                {"bbb", "1.0", {}},
+                                {"ccc", "1.1", {"eee"}},
+                                {"ddd", "1.0", {}},
+                                {"eee", "1.0", {}},
+                                {"fff", "2.0", {}, "/somewhere/else/Cellar"},
+                                {"ggg", "1.0", {"fff"}}});
+        auto by = plan_by_name(f);
+        CHECK(by["fff"].action == KegAction::Blocked);
+        CHECK(has(by["fff"].reason, "not Homebrew's Cellar here"));
+    }
+
+    TEST_CASE("blocked kegs without a manifest version still print a version") {
+        MpTmp tmp;
+        Legacy f(tmp.path);
+        add_brew_owned(f, {.keg = false});
+        // fff is now only a dependency of ggg (a new dependency, no manifest
+        // version), and zzz is an auto dependency den's index no longer has.
+        put(f.den_home / "manifests" / "ROOT" / "manifest.json",
+            R"({"packages":{"homebrew":{"aaa":"1.0","ggg":"1.0"}},)"
+            R"("auto_deps":{"homebrew":["zzz"]}})");
+        std::string out;
+        auto by = plan_by_name(f, &out);
+        MESSAGE(out);
+        CHECK(by["fff"].new_dep);
+        CHECK(by["fff"].action == KegAction::Blocked);
+        CHECK(has(out, "blocked    fff 2.0: its bottle only pours into"));
+        CHECK(has(out, "blocked    zzz (no version recorded): not in den's index"));
+        CHECK_FALSE(has(out, " : "));
+        KegPlan k;
+        CHECK(keg_display_version(k) == "(no version recorded)");
+        k.target = "4.1.0";
+        CHECK(keg_display_version(k) == "4.1.0");
+        k.manifest_versions = {"1.0", "1.1"};
+        CHECK(keg_display_version(k) == "1.0,1.1");
+    }
+
+    TEST_CASE("e2e: --apply moves past brew-owned kegs and links them to brew's opt") {
+        MpTmp tmp;
+        Legacy f(tmp.path);
+        add_brew_owned(f);
+        const auto brew_before = tree_snapshot(f.brew);
+        auto r = f.den("migrate-prefix --apply", "DEN_MIGRATE_PREFIX_FREE_BYTES=1000000000");
+        MESSAGE("brew-owned apply:\n" << r.out);
+        REQUIRE(r.code == 0);
+        CHECK(has(r.out, "Moved: den now uses " + f.to.string()));
+        CHECK(f.config_prefix() == f.to.string());
+        CHECK_FALSE(fs::exists(f.to / "Cellar" / "fff"));
+        REQUIRE(fs::is_symlink(f.to / "opt" / "fff"));
+        CHECK(fs::read_symlink(f.to / "opt" / "fff") == f.brew / "opt" / "fff");
+        CHECK(fs::equivalent(f.to / "opt" / "fff", f.brew / "Cellar" / "fff" / "2.0"));
+        CHECK(has(r.out, "linked     " + (f.to / "opt" / "fff").string() + " -> " +
+                             (f.brew / "opt" / "fff").string() + " (brew-owned)"));
+        CHECK(keg_owned_by_den(f.to / "Cellar" / "ggg" / "1.0"));
+        CHECK(f.manifest_version("fff") == "2.0");
+        CHECK(tree_snapshot(f.brew) == brew_before);
+
+        auto d = f.den("doctor");
+        INFO(d.out);
+        CHECK(has(d.out, "remaining brew dependencies: 1\n    fff 2.0: stays with brew (" +
+                             (f.to / "opt" / "fff").string() + " -> " +
+                             (f.brew / "opt" / "fff").string() + ")"));
+    }
+
+    TEST_CASE("e2e: --apply still refuses a fixed-cellar keg brew cannot provide") {
+        MpTmp tmp;
+        Legacy f(tmp.path);
+        add_brew_owned(f, {.brew_bin = false});
+        const auto brew_before = tree_snapshot(f.brew);
+        auto r = f.den("migrate-prefix --apply", "DEN_MIGRATE_PREFIX_FREE_BYTES=1000000000");
+        INFO(r.out);
+        CHECK(r.code == 1);
+        CHECK(has(r.out, "Refusing: 1 keg(s) cannot be moved safely"));
+        CHECK(has(r.out, "  fff: its bottle only pours into"));
+        CHECK_FALSE(fs::exists(f.to));
+        CHECK(tree_snapshot(f.brew) == brew_before);
     }
 }
 
