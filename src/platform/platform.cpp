@@ -213,11 +213,25 @@ std::optional<MacOsVersion> macos_version_from_darwin(std::string_view release) 
     if (n < 2) {
         darwin_minor = 0;
     }
-    // Darwin 20–24 are macOS 11–15 (offset 9). Apple then jumped the
-    // marketing version to the year: Darwin 25 is macOS 26 (Tahoe), so from
-    // Darwin 25 on the offset is -1. The Darwin minor tracks the macOS minor
-    // closely enough to serve as a fallback.
-    const int major = darwin_major <= 24 ? darwin_major - 9 : darwin_major + 1;
+    // Apple's Darwin-to-macOS mapping has changed twice, so spell it out
+    // rather than derive it from one offset (it matches Homebrew's
+    // MacOSVersion.kernel_major_version):
+    //   Darwin 20–24 -> macOS 11–15 (Big Sur..Sequoia, offset 9)
+    //   Darwin 25    -> macOS 26 (Tahoe; marketing jumped to the year)
+    //   Darwin 26    -> never shipped (Apple skipped it)
+    //   Darwin 27+   -> macOS 27+ (Golden Gate on; numbers aligned)
+    // The Darwin minor tracks the macOS minor closely enough to serve as a
+    // fallback.
+    int major = 0;
+    if (darwin_major <= 24) {
+        major = darwin_major - 9;
+    } else if (darwin_major == 25) {
+        major = 26;
+    } else if (darwin_major == 26) {
+        return std::nullopt;
+    } else {
+        major = darwin_major;
+    }
     return MacOsVersion{major, darwin_minor};
 }
 
@@ -268,6 +282,8 @@ std::optional<MacOsVersion> detect_macos_version() {
 
 std::optional<std::string> macos_codename(int major) {
     switch (major) {
+    case 27:
+        return "golden_gate";
     case 26:
         return "tahoe";
     case 15:
@@ -301,7 +317,8 @@ std::vector<std::string> bottle_tag_candidates(Arch arch,
                                                const std::optional<MacOsVersion>& macos) {
     // Ordered from newest to oldest — first match wins.
     static const std::pair<int, const char*> kCodenames[] = {
-        {26, "tahoe"}, {15, "sequoia"}, {14, "sonoma"}, {13, "ventura"}, {12, "monterey"},
+        {27, "golden_gate"}, {26, "tahoe"},   {15, "sequoia"},
+        {14, "sonoma"},      {13, "ventura"}, {12, "monterey"},
     };
 
     if (!macos) {

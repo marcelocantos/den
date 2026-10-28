@@ -183,6 +183,19 @@ end
         CHECK(has_marker(p, "on_macos"));
     }
 
+    TEST_CASE("macOS-release blocks (on_tahoe, on_golden_gate) trigger COMPLEX") {
+        for (const char* kw : {"on_sonoma", "on_sequoia", "on_tahoe", "on_golden_gate"}) {
+            CAPTURE(kw);
+            auto src = wrap_install(std::string("    ") + kw + R"( :or_newer do
+      system "./configure", "--with-new-sdk"
+    end
+)");
+            auto p = parse_formula(src, "/opt/den/fake/1.0", "fake");
+            CHECK(p.complexity == FormulaComplexity::Complex);
+            CHECK(has_marker(p, "on_macos_version"));
+        }
+    }
+
     TEST_CASE("on_linux block triggers COMPLEX") {
         auto src = wrap_install(R"(    on_linux do
       system "./configure", "--with-linux"

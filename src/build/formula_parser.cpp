@@ -310,7 +310,9 @@ std::string detect_complexity_construct(const std::string& line) {
         line_starts_with_keyword(line, "on_monterey") ||
         line_starts_with_keyword(line, "on_ventura") ||
         line_starts_with_keyword(line, "on_sonoma") ||
-        line_starts_with_keyword(line, "on_sequoia") || line_starts_with_keyword(line, "on_tahoe"))
+        line_starts_with_keyword(line, "on_sequoia") ||
+        line_starts_with_keyword(line, "on_tahoe") ||
+        line_starts_with_keyword(line, "on_golden_gate"))
         return "on_macos_version";
     // Top-level DSL blocks that can appear in install.
     if (line_starts_with_keyword(line, "resource"))
