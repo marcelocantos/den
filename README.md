@@ -45,6 +45,15 @@ everything — not just Python, but every package on your system.
 curl -fsSL https://raw.githubusercontent.com/marcelocantos/den/master/install.sh | sh
 ```
 
+`install.sh` needs only `curl` and `shasum` or `sha256sum` (no Homebrew). It
+verifies the release checksum and installs `den` into `~/.den/bin`
+(`DEN_INSTALL_DIR` overrides). Set `DEN_VERSION` to pick a release, release
+candidates included (`DEN_VERSION=0.15.0-rc.1`). If the den prefix
+(`~/.den/prefix`, or `DEN_PREFIX`) can't be created without `sudo`, it prints
+the `sudo mkdir`/`chown` commands and, when run interactively, offers to run
+them. An installed den moves to another release with
+`den self-update --version X.Y.Z[-rc.N]`.
+
 Or with Homebrew (macOS, Apple Silicon):
 
 ```bash

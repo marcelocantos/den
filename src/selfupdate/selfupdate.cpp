@@ -5,6 +5,7 @@
 
 #include "../core/error.h"
 #include "../core/self_exe.h"
+#include "../download/archive.h"
 #include "../download/http.h"
 #include "../download/sha256.h"
 #include "../index/sat_solver.h"
@@ -14,12 +15,17 @@
 #include <spdlog/spdlog.h>
 
 #include <cctype>
+#include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <regex>
 #include <sstream>
 #include <vector>
+
+#include <unistd.h>
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
@@ -29,9 +35,6 @@ namespace den {
 
 namespace fs = std::filesystem;
 
-namespace {
-
-/// Determine the platform suffix for tarball names (e.g. "darwin-aarch64").
 std::string platform_suffix(const Config& cfg) {
 #ifdef __APPLE__
     std::string os = "darwin";
@@ -40,6 +43,8 @@ std::string platform_suffix(const Config& cfg) {
 #endif
     return os + "-" + to_string(cfg.arch);
 }
+
+namespace {
 
 /// Find the running binary's path.
 fs::path self_exe() {
@@ -127,20 +132,25 @@ std::optional<fs::path> running_exe_path() {
 }
 
 void refresh_packaged_replica(const fs::path& extracted_root, const fs::path& exe) {
-    // 🎯T42: keep an installed <bin>/../share/den/known_hashes.json in step
-    // with the new binary — a stale on-disk copy would otherwise shadow the
-    // newer snapshot compiled into it. Only refresh a copy that already
-    // exists (never create or delete one); without one den uses its embedded
-    // snapshot.
+    // 🎯T42: keep <bin>/../share/den/known_hashes.json in step with the new
+    // binary — a stale on-disk copy would otherwise shadow the newer
+    // snapshot compiled into it. A missing copy is created (installs that
+    // predate the shipped replica gain one); a tarball without a replica
+    // leaves any installed copy alone.
     auto shipped = extracted_root / "share" / "den" / "known_hashes.json";
-    auto installed = exe.parent_path() / ".." / "share" / "den" / "known_hashes.json";
+    auto installed =
+        (exe.parent_path() / ".." / "share" / "den" / "known_hashes.json").lexically_normal();
     std::error_code ec;
-    if (!fs::is_regular_file(installed, ec)) {
+    if (!fs::is_regular_file(shipped, ec)) {
+        if (fs::is_regular_file(installed, ec)) {
+            SPDLOG_WARN("update tarball has no share/den/known_hashes.json; leaving {} as is",
+                        installed.string());
+        }
         return;
     }
-    if (!fs::is_regular_file(shipped, ec)) {
-        SPDLOG_WARN("update tarball has no share/den/known_hashes.json; leaving {} as is",
-                    installed.string());
+    fs::create_directories(installed.parent_path(), ec);
+    if (ec) {
+        SPDLOG_WARN("could not create {}: {}", installed.parent_path().string(), ec.message());
         return;
     }
     auto staging = installed;
@@ -151,8 +161,83 @@ void refresh_packaged_replica(const fs::path& extracted_root, const fs::path& ex
     }
     if (ec) {
         fs::remove(staging, ec);
-        SPDLOG_WARN("could not refresh trust replica {}", installed.string());
+        SPDLOG_WARN("could not install trust replica {}", installed.string());
     }
+}
+
+std::string normalize_release_tag(const std::string& version) {
+    static const std::regex re(R"(^v?([0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?)$)");
+    std::smatch m;
+    if (!std::regex_match(version, m, re)) {
+        throw UserError("invalid release version '" + version +
+                        "' (expected X.Y.Z or X.Y.Z-rc.N, optionally with a leading v)");
+    }
+    return "v" + m[1].str();
+}
+
+std::string asset_version_for_tag(const std::string& tag) {
+    std::string v = tag.starts_with("v") ? tag.substr(1) : tag;
+    if (auto dash = v.find('-'); dash != std::string::npos) {
+        v.resize(dash);
+    }
+    return v;
+}
+
+std::optional<UpdateInfo> update_info_from_release_json(const std::string& json,
+                                                        const std::string& suffix) {
+    auto j = nlohmann::json::parse(json, nullptr, false);
+    if (j.is_discarded() || !j.is_object() || !j.contains("tag_name") ||
+        !j["tag_name"].is_string()) {
+        SPDLOG_WARN("unexpected response from GitHub releases API");
+        return std::nullopt;
+    }
+    std::string tag = j["tag_name"].get<std::string>();
+    std::string version = asset_version_for_tag(tag);
+    std::string tarball_name = "den-" + version + "-" + suffix + ".tar.gz";
+    std::string checksum_name = tarball_name + ".sha256";
+
+    UpdateInfo info{.latest_version = version, .download_url = {}, .checksum_url = {}, .tag = tag};
+    if (j.contains("assets") && j["assets"].is_array()) {
+        for (const auto& asset : j["assets"]) {
+            if (!asset.is_object() || !asset.contains("name") || !asset["name"].is_string() ||
+                !asset.contains("browser_download_url") ||
+                !asset["browser_download_url"].is_string()) {
+                continue;
+            }
+            auto name = asset["name"].get<std::string>();
+            if (name == tarball_name) {
+                info.download_url = asset["browser_download_url"].get<std::string>();
+            } else if (name == checksum_name) {
+                info.checksum_url = asset["browser_download_url"].get<std::string>();
+            }
+        }
+    }
+    if (info.download_url.empty()) {
+        SPDLOG_WARN("no binary available for {} in release {}", suffix, tag);
+        return std::nullopt;
+    }
+    return info;
+}
+
+UpdateInfo fetch_release_for_version(const Config& cfg, const std::string& version) {
+    const std::string tag = normalize_release_tag(version);
+    const std::string url = "https://api.github.com/repos/marcelocantos/den/releases/tags/" + tag;
+    SPDLOG_INFO("fetching release {}...", tag);
+    std::string response;
+    try {
+        response = fetch_url(url);
+    } catch (const std::exception& e) {
+        throw UserError("could not fetch release " + tag + ": " + e.what());
+    }
+    const auto suffix = platform_suffix(cfg);
+    auto info = update_info_from_release_json(response, suffix);
+    if (!info) {
+        throw UserError("release " + tag + " has no den binary for " + suffix);
+    }
+    if (info->tag != tag) {
+        throw UserError("GitHub returned release " + info->tag + " when asked for " + tag);
+    }
+    return *info;
 }
 
 std::string resolve_latest_version() {
@@ -189,52 +274,17 @@ std::optional<UpdateInfo> check_for_update(const Config& cfg) {
         return std::nullopt;
     }
 
-    auto j = nlohmann::json::parse(response, nullptr, false);
-    if (j.is_discarded() || !j.contains("tag_name")) {
-        SPDLOG_WARN("unexpected response from GitHub releases API");
+    auto info = update_info_from_release_json(response, platform_suffix(cfg));
+    if (!info) {
         return std::nullopt;
     }
-
-    std::string tag = j["tag_name"].get<std::string>();
-    // Strip leading 'v'.
-    std::string latest = tag.starts_with("v") ? tag.substr(1) : tag;
-
     // Numeric version compare (not string equality): GitHub's "latest" may be
     // an older GA (e.g. 0.12.0) while this binary is already 1.0.0 / an RC
     // ahead of the last stable tag. Only offer an update when latest is newer.
-    if (sat::version_compare(latest, DEN_VERSION) <= 0) {
+    if (sat::version_compare(info->latest_version, DEN_VERSION) <= 0) {
         return std::nullopt;
     }
-
-    // Find the download URL for our platform.
-    std::string suffix = platform_suffix(cfg);
-    std::string tarball_name = "den-" + latest + "-" + suffix + ".tar.gz";
-    std::string checksum_name = tarball_name + ".sha256";
-
-    std::string download_url;
-    std::string checksum_url;
-
-    if (j.contains("assets")) {
-        for (const auto& asset : j["assets"]) {
-            auto name = asset["name"].get<std::string>();
-            if (name == tarball_name) {
-                download_url = asset["browser_download_url"].get<std::string>();
-            } else if (name == checksum_name) {
-                checksum_url = asset["browser_download_url"].get<std::string>();
-            }
-        }
-    }
-
-    if (download_url.empty()) {
-        SPDLOG_WARN("no binary available for {} in release {}", suffix, tag);
-        return std::nullopt;
-    }
-
-    return UpdateInfo{
-        .latest_version = latest,
-        .download_url = download_url,
-        .checksum_url = checksum_url,
-    };
+    return info;
 }
 
 namespace {
@@ -279,7 +329,8 @@ void apply_update(const UpdateInfo& info, const Config& cfg) {
     }
 
     // Download the tarball.
-    std::cout << "Downloading den " << info.latest_version << "...\n";
+    std::cout << "Downloading den " << (info.tag.empty() ? info.latest_version : info.tag)
+              << "...\n";
     auto tarball_data = fetch_url(info.download_url);
 
     auto actual = hash_string(tarball_data);
@@ -288,28 +339,73 @@ void apply_update(const UpdateInfo& info, const Config& cfg) {
     }
     SPDLOG_INFO("checksum verified");
 
-    // Extract to a temp directory.
-    auto tmp_dir = fs::temp_directory_path() / "den-self-update";
-    fs::create_directories(tmp_dir);
+    auto work = make_private_temp_dir("den-self-update");
+    struct Cleanup {
+        fs::path dir;
+        ~Cleanup() {
+            std::error_code ec;
+            fs::remove_all(dir, ec);
+        }
+    } cleanup{work};
 
-    auto tarball_path = tmp_dir / "den.tar.gz";
+    auto tarball_path = work / "den.tar.gz";
     {
         std::ofstream out(tarball_path, std::ios::binary);
         out.write(tarball_data.data(), static_cast<std::streamsize>(tarball_data.size()));
+        if (!out) {
+            throw UserError("failed to write update tarball to " + tarball_path.string());
+        }
     }
 
-    // Extract — tarball has "den" at the top level (and, from 🎯T42 on,
+    install_update_tarball(tarball_path, exe);
+
+    std::cout << "Updated den " << DEN_VERSION << " → " << info.latest_version;
+    if (!info.tag.empty() && asset_version_for_tag(info.tag) != info.tag.substr(1)) {
+        std::cout << " (" << info.tag << ")";
+    }
+    std::cout << "\n";
+}
+
+fs::path make_private_temp_dir(const std::string& stem) {
+    std::error_code ec;
+    auto base = fs::temp_directory_path(ec);
+    if (ec) {
+        base = "/tmp";
+    }
+    std::string tmpl = (base / (stem + ".XXXXXX")).string();
+    std::vector<char> buf(tmpl.begin(), tmpl.end());
+    buf.push_back('\0');
+    if (::mkdtemp(buf.data()) == nullptr) {
+        throw UserError("cannot create a temporary directory from " + tmpl + ": " +
+                        std::strerror(errno));
+    }
+    return fs::path(buf.data());
+}
+
+void install_update_tarball(const fs::path& tarball, const fs::path& exe) {
+    auto work = make_private_temp_dir("den-self-update-x");
+    struct Cleanup {
+        fs::path dir;
+        ~Cleanup() {
+            std::error_code ec;
+            fs::remove_all(dir, ec);
+        }
+    } cleanup{work};
+
+    // Extract in-process with den's hardened libarchive extractor (no shell,
+    // so no quoting of paths; rejects absolute, `..` and escaping symlinks).
+    // The tarball has "den" at the top level (and, from 🎯T42 on,
     // share/den/known_hashes.json beside it).
-    auto rc = std::system(("tar xzf " + tarball_path.string() + " -C " + tmp_dir.string()).c_str());
-    if (rc != 0) {
-        fs::remove_all(tmp_dir);
-        throw UserError("failed to extract update tarball");
+    try {
+        extract_archive(tarball, work);
+    } catch (const std::exception& e) {
+        throw UserError(std::string("failed to extract update tarball: ") + e.what());
     }
 
-    auto new_binary = tmp_dir / "den";
-    if (!fs::exists(new_binary)) {
-        fs::remove_all(tmp_dir);
-        throw UserError("extracted tarball does not contain 'den' binary");
+    auto new_binary = work / "den";
+    std::error_code ec;
+    if (!fs::is_regular_file(fs::symlink_status(new_binary, ec))) {
+        throw UserError("extracted tarball does not contain a regular 'den' binary");
     }
 
     // Make executable and writable (owner needs write for future updates).
@@ -318,29 +414,24 @@ void apply_update(const UpdateInfo& info, const Config& cfg) {
                         fs::perms::others_read | fs::perms::others_exec,
                     fs::perm_options::replace);
 
-    // Atomic replace: rename new binary over old.
-    // On the same filesystem this is atomic. If they're on different
-    // filesystems, copy + rename.
-    std::error_code ec;
+    // Atomic replace: rename new binary over old. On the same filesystem this
+    // is atomic; across filesystems, copy beside the target, then rename.
     fs::rename(new_binary, exe, ec);
     if (ec) {
-        // Different filesystems — copy then rename.
         auto staging = exe;
         staging += ".new";
-        fs::copy_file(new_binary, staging, fs::copy_options::overwrite_existing);
-        fs::rename(staging, exe, ec);
+        fs::copy_file(new_binary, staging, fs::copy_options::overwrite_existing, ec);
+        if (!ec) {
+            fs::rename(staging, exe, ec);
+        }
         if (ec) {
-            fs::remove(staging);
-            fs::remove_all(tmp_dir);
+            std::error_code ec2;
+            fs::remove(staging, ec2);
             throw UserError("failed to replace binary: " + ec.message());
         }
     }
 
-    refresh_packaged_replica(tmp_dir, exe);
-
-    fs::remove_all(tmp_dir);
-
-    std::cout << "Updated den " << DEN_VERSION << " → " << info.latest_version << "\n";
+    refresh_packaged_replica(work, exe);
 }
 
 } // namespace den

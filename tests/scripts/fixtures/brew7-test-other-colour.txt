@@ -1,6 +1,0 @@
-==> Testing marcelocantos/den-rc/den
-==> /opt/homebrew/Cellar/den/0.14.0/bin/den --version
-[31mError:[0m marcelocantos/den-rc/den: failed
-[31mError:[0m Your Python (3.9) is too outdated.
-  Expected: 0.14.0
-  Actual: 0.13.0

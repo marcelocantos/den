@@ -12,10 +12,36 @@
 namespace den {
 
 struct UpdateInfo {
-    std::string latest_version; // e.g. "0.5.0" (no v prefix)
+    std::string latest_version; // version the binary reports, e.g. "0.5.0" (no v, no -rc.N)
     std::string download_url;   // tarball URL for this platform
     std::string checksum_url;   // .sha256 URL
+    std::string tag;            // release tag, e.g. "v0.5.0" or "v0.5.0-rc.1"
 };
+
+/// Normalise a user-supplied release version to its tag: "0.15.0",
+/// "v0.15.0", "0.15.0-rc.1" and "v0.15.0-rc.1" are accepted (the latter two
+/// map to "v0.15.0-rc.1"). Throws UserError on anything else.
+std::string normalize_release_tag(const std::string& version);
+
+/// The version in a release's asset names (and printed by `den --version`):
+/// the tag minus its leading "v" and any "-rc.N" suffix. Release candidates
+/// ship the GA-named assets, e.g. tag v0.15.0-rc.1 carries
+/// den-0.15.0-<os>-<arch>.tar.gz.
+std::string asset_version_for_tag(const std::string& tag);
+
+/// Platform suffix used in release tarball names, e.g. "darwin-aarch64".
+std::string platform_suffix(const Config& cfg);
+
+/// Build an UpdateInfo from a GitHub release JSON document (as returned by
+/// /releases/latest or /releases/tags/<tag>). Returns nullopt when the JSON
+/// is malformed or the release has no tarball for `suffix`.
+std::optional<UpdateInfo> update_info_from_release_json(const std::string& json,
+                                                        const std::string& suffix);
+
+/// Fetch a specific release (GA or RC) by version or tag, via
+/// /releases/tags/<tag>. Throws UserError when the version is malformed, the
+/// release cannot be fetched, or it has no binary for this platform.
+UpdateInfo fetch_release_for_version(const Config& cfg, const std::string& version);
 
 /// The command that upgrades a Homebrew-installed den.
 inline constexpr const char* kBrewUpgradeCommand = "brew upgrade marcelocantos/tap/den";
@@ -52,9 +78,20 @@ std::optional<UpdateInfo> check_for_update(const Config& cfg);
 /// The running binary is atomically replaced via rename.
 void apply_update(const UpdateInfo& info, const Config& cfg);
 
-/// After extracting an update tarball into `extracted_root`, refresh an
-/// existing <exe_dir>/../share/den/known_hashes.json from the tarball's
-/// share/den/known_hashes.json (🎯T42). No-op if either is absent.
+/// Create a fresh, private (0700) temporary directory under the system temp
+/// dir with mkdtemp(3), named `<stem>.XXXXXX`. Throws UserError on failure.
+std::filesystem::path make_private_temp_dir(const std::string& stem);
+
+/// Install a verified update tarball: extract it with den's hardened
+/// libarchive extractor into a fresh private temp dir, then atomically
+/// replace `exe` with the tarball's `den` and refresh the trust replica.
+/// The temp dir is always removed. Throws UserError on failure.
+void install_update_tarball(const std::filesystem::path& tarball, const std::filesystem::path& exe);
+
+/// After extracting an update tarball into `extracted_root`, install the
+/// tarball's share/den/known_hashes.json as <exe_dir>/../share/den/
+/// known_hashes.json (🎯T42), creating it if missing. If the tarball has no
+/// replica, an installed copy is left as is.
 void refresh_packaged_replica(const std::filesystem::path& extracted_root,
                               const std::filesystem::path& exe);
 

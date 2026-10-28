@@ -63,13 +63,13 @@ remote-check: build/den
 
 build/den: build
 
-# End-to-end battery against a release-installed den (default: the
-# Homebrew formula `marcelocantos/tap/den`). Everything runs in a scratch
-# DEN_HOME/DEN_PREFIX; the LaunchAgent check uses a uniquely labelled
-# agent that is removed afterwards. Override DEN_BIN, RELEASE_TAG, VR_* —
-# see scripts/verify-release.sh for the full list.
+# End-to-end battery against a published release, GA or RC
+# (RELEASE_TAG=vX.Y.Z or vX.Y.Z-rc.N; default: v<CMake version>), installed
+# by install.sh into a scratch HOME/DEN_HOME/DEN_PREFIX with Homebrew off
+# PATH. The LaunchAgent check uses a uniquely labelled agent that is removed
+# afterwards. VR_* knobs: see scripts/verify-release.sh.
 verify-release:
-	scripts/verify-release.sh
+	scripts/verify-release.sh $(RELEASE_TAG)
 
 # Publish Formula/den.rb to marcelocantos/homebrew-tap for a GA release
 # (default: the latest vX.Y.Z tag) via tapper on the dev Mac. Run after

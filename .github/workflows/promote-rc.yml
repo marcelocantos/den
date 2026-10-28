@@ -321,6 +321,6 @@ jobs:
           echo ""
           echo "  Next, on the dev Mac: publish the tap formula (bottled):"
           echo "    make release-tap RELEASE_TAG=${GA_TAG}"
-          echo "  Then verify the tap release:"
-          echo "    brew install marcelocantos/tap/den && make verify-release RELEASE_TAG=${GA_TAG}"
+          echo "  Then verify the GA release (installs it with install.sh into scratch):"
+          echo "    make verify-release RELEASE_TAG=${GA_TAG}"
           echo "============================================================"

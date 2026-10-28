@@ -336,6 +336,24 @@ TEST_SUITE("cli::integration") {
         CHECK(out.find("Downloading") == std::string::npos);
     }
 
+    TEST_CASE("self-update --version rejects a malformed version before any network access") {
+        const auto out = run_den_fresh("self-update --version not-a-version");
+        CHECK(out.find("invalid release version") != std::string::npos);
+        CHECK(out.find("Downloading") == std::string::npos);
+        CHECK(out.find("unknown option") == std::string::npos);
+    }
+
+    TEST_CASE("self-update --check --version probes a tag without downloading") {
+        // Contacts the GitHub Releases API for v0.14.0 (a published GA). With
+        // no network the command fails with "could not fetch release".
+        const auto out = run_den_fresh("self-update --check --version 0.14.0");
+        const bool found = out.find("den v0.14.0 is available") != std::string::npos;
+        const bool no_network = out.find("could not fetch release") != std::string::npos ||
+                                out.find("has no den binary") != std::string::npos;
+        CHECK((found || no_network));
+        CHECK(out.find("Downloading") == std::string::npos);
+    }
+
     // -----------------------------------------------------------------------
     // 16. doctor — runs without crashing, reports findings or passes
     // -----------------------------------------------------------------------

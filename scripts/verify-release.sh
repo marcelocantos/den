@@ -1,24 +1,25 @@
 #!/usr/bin/env bash
-# verify-release.sh — end-to-end battery against a release-installed den.
+# verify-release.sh — end-to-end battery against a published den release.
 #
-# Default target is the Homebrew formula (brew install marcelocantos/tap/den).
-# Everything den touches lives under a scratch root; the user's real
-# DEN_HOME, prefix, Homebrew prefix and LaunchAgents are never written.
+# Usage: scripts/verify-release.sh [TAG]      (or RELEASE_TAG=TAG)
+#
+# TAG is a release tag, GA or release candidate: v0.15.0-rc.1, 0.15.0-rc.1,
+# v0.14.0 or 0.14.0. The release is installed with install.sh into a scratch
+# root — scratch HOME, DEN_HOME, DEN_PREFIX and DEN_INSTALL_DIR, with
+# /opt/homebrew (and Linuxbrew) stripped from PATH and every DYLD_* variable
+# unset — so Homebrew is neither needed nor consulted. Everything den touches
+# lives under the scratch root; the user's real DEN_HOME, prefix, any
+# Homebrew prefix and the real LaunchAgents are never written.
 #
 # Knobs (all optional):
-#   DEN_BIN            den binary under test (default: $(brew --prefix $VR_FORMULA)/bin/den)
-#   RELEASE_TAG        expected release tag, e.g. v0.14.0 (default: v<CMakeLists project version>)
-#   BREW               brew executable used for read-only lookups/`brew test` (default: brew)
-#   VR_FORMULA         formula name (default: marcelocantos/tap/den)
-#   VR_BREW_TEST       1 = run `brew test $VR_FORMULA` (default: 1 when DEN_BIN came from brew)
-#   VR_BREW_TRUST      brew >= 7 only: 1 = run `brew trust --formula $VR_FORMULA`
-#                      before any brew lookup (default); 0 = do not trust, just
-#                      fail clearly if brew refuses to load the formula
-#   VR_POURED          1 = require the formula to have been poured from a bottle
-#                      (default: 1 when DEN_BIN came from brew on macOS; Linux
-#                      has no bottles and installs from the release tarball)
+#   RELEASE_TAG        release tag to verify (default: v<CMakeLists project version>)
+#   VR_INSTALL_SH      installer (default: install.sh in this checkout)
+#   VR_PREV_TAG        GA the self-update step starts from (default: the newest
+#                      vX.Y.Z tag below RELEASE_TAG, per scripts/prev-release-tag.sh)
+#   VR_RELEASE_URL     release download base (default:
+#                      https://github.com/marcelocantos/den/releases/download)
 #   VR_ROOT            scratch root (default: mktemp -d /tmp/den-verify-release.XXXXXX)
-#   VR_HOME VR_DEN_HOME VR_PREFIX VR_APPDIR VR_FONTDIR VR_PKG_ROOT
+#   VR_HOME VR_DEN_HOME VR_PREFIX VR_APPDIR VR_FONTDIR VR_PKG_ROOT VR_INSTALL_DIR
 #                      individual scratch paths (default: under VR_ROOT)
 #   VR_BOTTLE          plain bottle formula           (default: tree)
 #   VR_DEP_PARENT      formula with a dependency      (default: jq)
@@ -30,27 +31,18 @@
 #   VR_ONLY            space-separated step names to run (default: all)
 #   VR_SKIP            space-separated step names to skip
 #   VR_SKIP_LAUNCHD    1 = skip the LaunchAgent step (same as VR_SKIP=launchd)
-#   VR_SERVICE_PLIST   service plist to exercise (default: <formula prefix>/{sh.brew,homebrew.mxcl}.den.plist)
 #   VR_LAUNCHD_SECS    how long the agent must stay up (default: 60)
-#   VR_REPLICA_ROOT    install root the trust replica must ship under (default: dirname(DEN_BIN)/..)
+#   VR_REPLICA_ROOT    install root the trust replica must ship under
+#                      (default: VR_INSTALL_DIR)
 #   VR_DOCTOR_ALLOW    optional ERE of `den doctor` [error] lines to tolerate (default:
 #                      none; a clean release needs no allowlist)
 #   VR_KEEP            1 = keep the scratch root (default: kept only on failure)
 #
-# Homebrew 7 refuses to load formulae from a non-official tap until they are
-# trusted, and keeps that trust list under the caller's $HOME
-# (~/.homebrew/trust.json, or $XDG_CONFIG_HOME/homebrew). verify-release
-# therefore trusts the one formula under test (never the whole tap) before
-# its first brew lookup, then hands a read-only copy of that trust store to
-# the scratch HOME, under which the later brew commands run. brew-test is reported SKIP, not FAIL, only
-# when brew refuses because Xcode or the Command Line Tools are below its
-# minimum (brew 7 on macOS 27 refuses `brew test` for every formula without
-# Xcode/CLT 27); formula-test runs the formula's test commands directly so
-# that coverage is kept either way.
-#
-# Steps: version brew-trust brew-test formula-test isolation poured update bottle
-#        opt-link trust pin upgrade dependents tap font-cask app-cask uninstall
-#        doctor cleanup launchd
+# Steps: install version isolation links checksum self-update empty-store
+#        update bottle opt-link trust pin upgrade dependents tap font-cask
+#        app-cask uninstall doctor cleanup launchd
+# install and isolation can never be skipped; the run aborts before den
+# writes anything if install, version or isolation fails.
 set -uo pipefail
 
 die() { echo "verify-release: $*" >&2; exit 2; }
@@ -62,103 +54,39 @@ REPO_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 # The account's home from the password database, not $HOME (which a caller
 # may already have pointed at scratch).
 REAL_HOME=$(python3 -c 'import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)')
-# The caller's HOME before scratch takes over: brew 7 keeps its trust store
-# relative to it (see brew_trust_file).
-BREW_HOME=${HOME:-$REAL_HOME}
-BREW=${BREW:-brew}
-VR_FORMULA=${VR_FORMULA:-marcelocantos/tap/den}
-VR_BREW_TRUST=${VR_BREW_TRUST:-1}
-# Every brew call, minus the scratch prefix overrides. Before scratch is set
-# up (trust preflight, keg discovery) brew sees the caller's own HOME and
-# config. Once scratch is set up, brew_scratch_ runs it under the scratch
-# HOME, with brew's config dir pinned there too, so it reads the read-only
-# trust handoff and can write nothing back to the caller's brew config.
-brew_() { env -u HOMEBREW_PREFIX -u HOMEBREW_CELLAR HOMEBREW_NO_AUTO_UPDATE=1 "$BREW" "$@"; }
-brew_scratch_() { env -u XDG_CONFIG_HOME -u HOMEBREW_XDG_CONFIG_HOME -u HOMEBREW_PREFIX -u HOMEBREW_CELLAR HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_COLOR=1 "$BREW" "$@"; }
-# Where brew 7 reads its trust store for the current environment: under
-# $XDG_CONFIG_HOME/homebrew (or $HOMEBREW_XDG_CONFIG_HOME/homebrew), else
-# $HOME/.homebrew (Library/Homebrew/trust.rb trust_file; bin/brew sets
-# HOMEBREW_USER_CONFIG_HOME).
-brew_trust_file() {
-    if [ -n "${XDG_CONFIG_HOME:-}" ]; then echo "$XDG_CONFIG_HOME/homebrew/trust.json"
-    elif [ -n "${HOMEBREW_XDG_CONFIG_HOME:-}" ]; then echo "$HOMEBREW_XDG_CONFIG_HOME/homebrew/trust.json"
-    else echo "$BREW_HOME/.homebrew/trust.json"; fi
-}
+CALLER_BREW_PREFIX=${HOMEBREW_PREFIX:-}
 
-# ---- brew >= 7: trust the formula under test ----------------------------
-# Needed before the first lookup: `brew --prefix`, `info` and `test` all
-# load the formula, and brew 7 refuses an untrusted non-official one.
-TRUST_NOTE=""
-TRUST_PROBE=0 # 1 = brew >= 7 and a third-party formula: re-check under scratch
-TRUST_SRC=$(brew_trust_file)
-brew_major() { brew_ --version 2>/dev/null | sed -n 's/^Homebrew \([0-9][0-9]*\)\..*/\1/p' | head -1; }
-needs_trust() { # fully-qualified formula from a non-official tap
-    case "$1" in
-        homebrew/*|Homebrew/*) return 1 ;;
-        */*/*) return 0 ;;
-    esac
-    return 1
-}
-trust_formula() {
-    local major out rc=0
-    major=$(brew_major)
-    if [ -z "$major" ] || [ "$major" -lt 7 ]; then
-        TRUST_NOTE="brew ${major:-unknown} < 7: no tap trust needed"; return 0
-    fi
-    if ! needs_trust "$VR_FORMULA"; then
-        TRUST_NOTE="$VR_FORMULA is not from a third-party tap: no trust needed"; return 0
-    fi
-    if [ "$VR_BREW_TRUST" = 1 ]; then
-        out=$(brew_ trust --formula "$VR_FORMULA" 2>&1) || rc=$?
-        [ "$rc" -eq 0 ] || die "brew $major: 'brew trust --formula $VR_FORMULA' failed (exit $rc):
-$out
-Fix the tap (brew tap ${VR_FORMULA%/*}), then run: brew trust --formula $VR_FORMULA"
-        TRUST_NOTE="brew $major: $out"
-    fi
-    TRUST_PROBE=1
-    # Prove brew will now load it (also covers VR_BREW_TRUST=0).
-    out=$(brew_ info --json=v2 "$VR_FORMULA" 2>&1) || true
-    if echo "$out" | grep -Eq 'Refusing to load .* from untrusted tap|untrusted tap'; then
-        die "brew $major refuses to load $VR_FORMULA because it is not trusted.
-Run: brew trust --formula $VR_FORMULA
-(or rerun verify-release with VR_BREW_TRUST=1, the default)"
-    fi
-    TRUST_NOTE="${TRUST_NOTE:-brew $major: $VR_FORMULA already trusted}; brew loads $VR_FORMULA"
-}
-if [ -z "${DEN_BIN:-}" ] || [ "${VR_BREW_TEST:-0}" = 1 ] || [ "${VR_POURED:-0}" = 1 ]; then
-    command -v "$BREW" >/dev/null 2>&1 || die "DEN_BIN unset and no brew on PATH"
-    trust_formula
-fi
-
-# ---- binary under test --------------------------------------------------
-FORMULA_PREFIX=""
-if [ -z "${DEN_BIN:-}" ]; then
-    brew_ list --versions "$VR_FORMULA" >/dev/null 2>&1 \
-        || die "$VR_FORMULA is not installed; run: brew install $VR_FORMULA (or set DEN_BIN)"
-    FORMULA_PREFIX=$(brew_ --prefix "$VR_FORMULA")
-    DEN_BIN="$FORMULA_PREFIX/bin/den"
-    : "${VR_BREW_TEST:=1}"
-    [ "$(uname)" = Darwin ] && : "${VR_POURED:=1}"
-fi
-[ -x "$DEN_BIN" ] || die "DEN_BIN not executable: $DEN_BIN"
-DEN_BIN=$(cd "$(dirname "$DEN_BIN")" && pwd)/$(basename "$DEN_BIN")
-: "${VR_BREW_TEST:=0}"
-: "${VR_POURED:=0}"
-[ "$VR_POURED" = 0 ] || [ -n "$FORMULA_PREFIX" ] || die "VR_POURED=1 needs a brew-installed den (unset DEN_BIN)"
-if [ -z "${VR_SERVICE_PLIST:-}" ] && [ -n "$FORMULA_PREFIX" ]; then
-    # Homebrew names the generated plist after its service label, which has
-    # been homebrew.mxcl.<name> and, more recently, sh.brew.<name>.
-    for f in "$FORMULA_PREFIX/sh.brew.den.plist" "$FORMULA_PREFIX/homebrew.mxcl.den.plist"; do
-        if [ -f "$f" ]; then VR_SERVICE_PLIST=$f; break; fi
-    done
-fi
-VR_SERVICE_PLIST=${VR_SERVICE_PLIST:-}
+# ---- release under test -------------------------------------------------
+[ $# -le 1 ] || die "usage: $0 [TAG]"
+[ $# -eq 0 ] || RELEASE_TAG=$1
 if [ -z "${RELEASE_TAG:-}" ]; then
     v=$(sed -n 's/^project(den VERSION \([0-9.]*\).*/\1/p' "$REPO_DIR/CMakeLists.txt" 2>/dev/null)
     [ -n "$v" ] || die "RELEASE_TAG unset and no version in CMakeLists.txt"
     RELEASE_TAG="v$v"
 fi
+RELEASE_TAG="v${RELEASE_TAG#v}"
+echo "$RELEASE_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$' \
+    || die "invalid release tag '$RELEASE_TAG' (expected vX.Y.Z or vX.Y.Z-rc.N)"
+# What `den --version` prints and the release's asset names use: an RC
+# ships GA-named assets (den-<X.Y.Z>-...).
 VERSION=${RELEASE_TAG#v}
+VERSION=${VERSION%%-*}
+VR_INSTALL_SH=${VR_INSTALL_SH:-$REPO_DIR/install.sh}
+[ -f "$VR_INSTALL_SH" ] || die "installer not found: $VR_INSTALL_SH"
+VR_RELEASE_URL=${VR_RELEASE_URL:-https://github.com/marcelocantos/den/releases/download}
+if [ -z "${VR_PREV_TAG+x}" ]; then
+    VR_PREV_TAG=$(git -C "$REPO_DIR" tag -l 'v*' 2>/dev/null | sh "$SCRIPT_DIR/prev-release-tag.sh" "$RELEASE_TAG" 2>/dev/null || true)
+fi
+case "$(uname -s)" in
+    Darwin) REL_OS=darwin ;;
+    Linux) REL_OS=linux ;;
+    *) die "unsupported OS: $(uname -s)" ;;
+esac
+case "$(uname -m)" in
+    x86_64|amd64) REL_ARCH=x86_64 ;;
+    aarch64|arm64) REL_ARCH=aarch64 ;;
+    *) die "unsupported architecture: $(uname -m)" ;;
+esac
 
 # ---- scratch layout & guard ---------------------------------------------
 VR_ROOT=${VR_ROOT:-$(mktemp -d /tmp/den-verify-release.XXXXXX)}
@@ -169,13 +97,12 @@ VR_PREFIX=${VR_PREFIX:-$VR_ROOT/prefix}
 VR_APPDIR=${VR_APPDIR:-$VR_ROOT/apps}
 VR_FONTDIR=${VR_FONTDIR:-$VR_ROOT/fonts}
 VR_PKG_ROOT=${VR_PKG_ROOT:-$VR_ROOT/pkgroot}
+VR_INSTALL_DIR=${VR_INSTALL_DIR:-$VR_ROOT/install}
+VR_PREV_DIR=$VR_ROOT/prev
 LOGDIR=$VR_ROOT/logs
 
-FORBIDDEN="/opt/homebrew /usr/local /home/linuxbrew/.linuxbrew $REAL_HOME"
-if command -v "$BREW" >/dev/null 2>&1; then
-    FORBIDDEN="$FORBIDDEN $(brew_ --prefix 2>/dev/null)"
-fi
-for p in "$VR_ROOT" "$VR_HOME" "$VR_DEN_HOME" "$VR_PREFIX" "$VR_APPDIR" "$VR_FONTDIR" "$VR_PKG_ROOT"; do
+FORBIDDEN="/opt/homebrew /usr/local /home/linuxbrew/.linuxbrew $REAL_HOME $CALLER_BREW_PREFIX"
+for p in "$VR_ROOT" "$VR_HOME" "$VR_DEN_HOME" "$VR_PREFIX" "$VR_APPDIR" "$VR_FONTDIR" "$VR_PKG_ROOT" "$VR_INSTALL_DIR"; do
     for f in $FORBIDDEN; do
         [ -n "$f" ] && [ -e "$f" ] || continue
         if under "$p" "$f"; then die "refusing scratch path $p (under $f)"; fi
@@ -185,26 +112,27 @@ done
 # Only create anything once every path has cleared the guard.
 mkdir -p "$VR_HOME" "$VR_DEN_HOME" "$VR_PREFIX" "$VR_APPDIR" "$VR_FONTDIR" "$VR_PKG_ROOT" "$LOGDIR"
 
+# No Homebrew: drop its bin dirs from PATH and every dynamic-loader override,
+# so neither install.sh nor den can pick up a brew tool or library.
+clean_path=""
+IFS=: read -r -a _path_parts <<<"${PATH:-/usr/bin:/bin}"
+for d in "${_path_parts[@]}"; do
+    case "$d" in
+        ""|/opt/homebrew|/opt/homebrew/*|/home/linuxbrew/.linuxbrew|/home/linuxbrew/.linuxbrew/*) continue ;;
+    esac
+    clean_path="${clean_path:+$clean_path:}$d"
+done
+export PATH="${clean_path:-/usr/bin:/bin}"
+for v in $(env | sed -n 's/^\(DYLD_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 unset DEN_ENV DEN_STORE DEN_CONFIG
 export HOME="$VR_HOME" DEN_HOME="$VR_DEN_HOME" DEN_PREFIX="$VR_PREFIX"
+# den reads HOMEBREW_PREFIX only to locate an existing Homebrew (migrate,
+# diagnostics); point it at scratch so nothing real is even read.
 export HOMEBREW_PREFIX="$VR_PREFIX" HOMEBREW_CELLAR="$VR_PREFIX/Cellar"
 export DEN_APPDIR="$VR_APPDIR" DEN_FONTDIR="$VR_FONTDIR" DEN_CASK_PKG_ROOT="$VR_PKG_ROOT"
 export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ANALYTICS=1
 
-# Hand brew's trust store to the scratch HOME, read-only. brew under the
-# scratch HOME (brew_scratch_) reads $VR_HOME/.homebrew/trust.json; without
-# it brew 7 refuses the formula trusted in the caller's store. The file is
-# 0400 in a 0500 dir: brew reads the store with no ownership or lock checks
-# (trust.rb trust_store), and any attempted trust write (atomic_write into
-# the dir, plus its .lock file) fails rather than touching either store.
-TRUST_HANDOFF=""
-if [ -f "$TRUST_SRC" ]; then
-    mkdir -p "$VR_HOME/.homebrew"
-    cp "$TRUST_SRC" "$VR_HOME/.homebrew/trust.json"
-    chmod 0400 "$VR_HOME/.homebrew/trust.json"
-    chmod 0500 "$VR_HOME/.homebrew"
-    TRUST_HANDOFF="trust store handed to scratch read-only ($TRUST_SRC)"
-fi
+DEN_BIN=$VR_INSTALL_DIR/bin/den
 
 VR_BOTTLE=${VR_BOTTLE:-tree}
 VR_DEP_PARENT=${VR_DEP_PARENT:-jq}
@@ -215,7 +143,7 @@ VR_FONT_CASK=${VR_FONT_CASK:-font-hack}
 VR_APP_CASK=${VR_APP_CASK:-macdown}
 VR_APP_BUNDLE=${VR_APP_BUNDLE:-MacDown.app}
 VR_LAUNCHD_SECS=${VR_LAUNCHD_SECS:-60}
-VR_REPLICA_ROOT=${VR_REPLICA_ROOT:-$(dirname "$(dirname "$(realpath_ "$DEN_BIN")")")}
+VR_REPLICA_ROOT=${VR_REPLICA_ROOT:-$VR_INSTALL_DIR}
 [ "${VR_SKIP_LAUNCHD:-0}" = 1 ] && VR_SKIP="${VR_SKIP:-} launchd"
 
 # ---- step runner ----------------------------------------------------------
@@ -224,7 +152,8 @@ SKIP_RC=77
 skip_because() { echo "skip-reason: $*"; exit "$SKIP_RC"; }
 den() { "$DEN_BIN" "$@"; }
 wanted() {
-    [ "$1" = isolation ] && return 0 # safety check: never skippable
+    # Safety gates: never skippable.
+    case "$1" in install|isolation) return 0 ;; esac
     case " ${VR_SKIP:-} " in *" $1 "*) return 1 ;; esac
     [ -z "${VR_ONLY:-}" ] && return 0
     case " $VR_ONLY " in *" $1 "*) return 0 ;; esac
@@ -262,64 +191,89 @@ expect_fail() { # expect_fail <ERE> cmd...: cmd must exit non-zero and print ERE
 }
 listed() { den list 2>/dev/null | grep -Eq "(^|[[:space:]/])$1([[:space:]]|$)"; }
 
+
+sha256_() {
+    if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
+    else sha256sum "$1" | awk '{print $1}'; fi
+}
+# run_install DIR TAG: install.sh with every location in scratch, no PATH
+# edits and no prompts (it never needs sudo: the scratch prefix is writable).
+run_install() {
+    env DEN_INSTALL_DIR="$1" DEN_VERSION="$2" DEN_NO_MODIFY_PATH=1 DEN_INSTALL_INTERACTIVE=0 \
+        sh "$VR_INSTALL_SH" </dev/null
+}
+
 # ---- steps ----------------------------------------------------------------
+s_install() {
+    run_install "$VR_INSTALL_DIR" "$RELEASE_TAG"
+    [ -x "$DEN_BIN" ] || { echo "install.sh left no executable $DEN_BIN"; return 1; }
+    [ -f "$VR_INSTALL_DIR/share/den/known_hashes.json" ] || { echo "no trust replica under $VR_INSTALL_DIR/share/den"; return 1; }
+}
 s_version() {
     local got; got=$(den --version)
-    echo "den --version: $got (expected $VERSION)"
+    echo "den --version: $got (expected $VERSION, tag $RELEASE_TAG)"
     [ "$got" = "$VERSION" ]
 }
-s_brew_trust() {
-    echo "$TRUST_NOTE"
-    [ -z "$TRUST_HANDOFF" ] || echo "$TRUST_HANDOFF"
-    [ "$TRUST_PROBE" = 1 ] || return 0
-    # Under the scratch HOME, as brew-test and poured will run brew.
-    local out; out=$(brew_scratch_ info --json=v2 "$VR_FORMULA" 2>&1) || true
-    if echo "$out" | grep -q 'untrusted tap'; then
-        echo "brew under the scratch HOME still refuses $VR_FORMULA as untrusted"
-        echo "(trust store: ${TRUST_SRC}; handoff: ${TRUST_HANDOFF:-none})"
-        echo "$out" | grep 'untrusted tap' | head -1
-        return 1
+# The released binary must load nothing a stock OS lacks (no Homebrew libs).
+s_links() { sh "$SCRIPT_DIR/check-links.sh" "$DEN_BIN"; }
+# The installed bytes are the release asset, and the asset matches both the
+# per-asset .sha256 and the release-wide checksums file.
+s_checksum() {
+    local d=$VR_ROOT/release asset sha want_sum want_side
+    asset="den-$VERSION-$REL_OS-$REL_ARCH.tar.gz"
+    mkdir -p "$d/x"
+    curl -fsSL "$VR_RELEASE_URL/$RELEASE_TAG/$asset" -o "$d/$asset"
+    curl -fsSL "$VR_RELEASE_URL/$RELEASE_TAG/$asset.sha256" -o "$d/$asset.sha256"
+    curl -fsSL "$VR_RELEASE_URL/$RELEASE_TAG/den-$VERSION-checksums.txt" -o "$d/checksums.txt"
+    sha=$(sha256_ "$d/$asset")
+    want_side=$(awk '{print $1; exit}' "$d/$asset.sha256")
+    want_sum=$(awk -v f="$asset" '$2 == f || $2 == "*" f {print $1; exit}' "$d/checksums.txt")
+    echo "sha256 $asset: $sha (sidecar ${want_side:-none}, checksums ${want_sum:-none})"
+    [ -n "$want_sum" ] || { echo "$asset missing from den-$VERSION-checksums.txt"; return 1; }
+    [ "$sha" = "$want_side" ] || { echo "sidecar .sha256 mismatch"; return 1; }
+    [ "$sha" = "$want_sum" ] || { echo "checksums.txt mismatch"; return 1; }
+    tar -xzf "$d/$asset" -C "$d/x"
+    cmp "$d/x/den" "$DEN_BIN" || { echo "installed den differs from the release asset"; return 1; }
+    if [ -f "$d/x/share/den/known_hashes.json" ]; then
+        cmp "$d/x/share/den/known_hashes.json" "$VR_INSTALL_DIR/share/den/known_hashes.json" \
+            || { echo "installed trust replica differs from the release asset"; return 1; }
     fi
-    echo "brew under the scratch HOME loads $VR_FORMULA"
 }
-# brew refuses to set up any test (or build) environment when Xcode or the
-# CLT is below its minimum (Homebrew::Diagnostic fatal_setup_build_environment_checks).
-# That is the host, not den: report SKIP with brew's reason. Anything else fails.
-BREW_DEVTOOLS_RE='^(Error: )?Your (Xcode \(.*\).* is too outdated|Command Line Tools are too outdated)'
-# brew 7's `brew test` errors can arrive coloured and CRLF-terminated even
-# when captured: "\e[31mError:\e[0m Your Xcode (26.6) ... is too outdated.\r".
-# brew_scratch_ sets HOMEBREW_NO_COLOR, but don't rely on it: strip ANSI
-# escape sequences and trailing CRs before matching.
-plain_text_() {
-    local esc cr; esc=$(printf '\033'); cr=$(printf '\r')
-    sed -e "s/${esc}\[[0-9;?]*[A-Za-z]//g" -e "s/${cr}*\$//"
-}
-s_brew_test() {
-    local out rc=0
-    out=$(brew_scratch_ test "$VR_FORMULA" 2>&1) || rc=$?
-    echo "$out"
-    [ "$rc" -ne 0 ] || return 0
-    local why; why=$(printf '%s\n' "$out" | plain_text_ | grep -E "$BREW_DEVTOOLS_RE" | head -1 | sed 's/^Error: //' || true)
-    [ -z "$why" ] || skip_because "brew refuses to test: $why"
-    echo "brew test exit $rc"; return 1
-}
-# The formula's own test block, run directly (mirrors TEST in
-# scripts/homebrew-bottles.py), so den.rb's checks still run when brew-test
-# is skipped.
-s_formula_test() {
-    local t=$VR_ROOT/formula-test got
-    mkdir -p "$t"
-    got=$(den --version); echo "den --version: $got"
+# Start from the previous GA (installed by install.sh into its own scratch
+# dir) and self-update to the tag under test: the result must be the very
+# bytes install.sh put in place, replica included.
+s_self_update() {
+    [ -n "$VR_PREV_TAG" ] || skip_because "no previous GA tag (set VR_PREV_TAG)"
+    [ "v${VR_PREV_TAG#v}" != "$RELEASE_TAG" ] || skip_because "VR_PREV_TAG is the tag under test"
+    local prev=$VR_PREV_DIR/bin/den got
+    run_install "$VR_PREV_DIR" "$VR_PREV_TAG"
+    echo "previous: $("$prev" --version) ($VR_PREV_TAG)"
+    if "$prev" self-update --help 2>&1 | grep -q -- '--version'; then
+        "$prev" self-update --version "$RELEASE_TAG"
+    else
+        # Releases before self-update --version can only move to Latest.
+        case "$RELEASE_TAG" in
+            *-rc.*) skip_because "$VR_PREV_TAG has no 'self-update --version' (needed to reach an RC)" ;;
+        esac
+        local latest
+        latest=$(curl -fsSL https://api.github.com/repos/marcelocantos/den/releases/latest \
+            | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+        [ "$latest" = "$RELEASE_TAG" ] || skip_because "$VR_PREV_TAG has no 'self-update --version' and $RELEASE_TAG is not Latest ($latest)"
+        "$prev" self-update
+    fi
+    got=$("$prev" --version); echo "after self-update: $got"
     [ "$got" = "$VERSION" ] || { echo "expected $VERSION"; return 1; }
+    cmp "$prev" "$DEN_BIN" || { echo "self-updated den differs from the install.sh one"; return 1; }
+    [ -f "$VR_PREV_DIR/share/den/known_hashes.json" ] || { echo "self-update left no trust replica"; return 1; }
+    cmp "$VR_PREV_DIR/share/den/known_hashes.json" "$VR_INSTALL_DIR/share/den/known_hashes.json" \
+        || { echo "self-updated trust replica differs from the install.sh one"; return 1; }
+}
+# A fresh store is empty (what the Homebrew formula's `test do` checked).
+s_empty_store() {
+    local t=$VR_ROOT/empty-store got
+    mkdir -p "$t"
     got=$(DEN_HOME="$t/.den" DEN_PREFIX="$t/prefix" den list); echo "den list: $got"
     echo "$got" | grep -q "No packages installed" || { echo "den list did not report 'No packages installed'"; return 1; }
-}
-# INSTALL_RECEIPT.json and `brew info --json=v2` must both say the keg was
-# poured from a bottle (a tarball/source install records false). brew
-# derives its own prefix, but drop the scratch overrides anyway.
-s_poured() {
-    env -u HOMEBREW_PREFIX -u HOMEBREW_CELLAR -u XDG_CONFIG_HOME -u HOMEBREW_XDG_CONFIG_HOME BREW="$BREW" \
-        sh "$SCRIPT_DIR/check-poured.sh" "$FORMULA_PREFIX" "$VR_FORMULA"
 }
 s_isolation() {
     local cfg; cfg=$(den config); echo "$cfg"
@@ -429,31 +383,43 @@ la_teardown() {
     launchctl bootout "gui/$(id -u)/$LA_LABEL" >/dev/null 2>&1 || true
     rm -f "$LA_PLIST"
 }
+# `den daemon install` writes the real agent plist (label dev.den.daemon)
+# into the scratch HOME's LaunchAgents and then loads it. That load would
+# replace the account's own den agent, so it runs against a stub launchctl;
+# the generated plist is then checked, relabelled and loaded for real under
+# a unique label.
 s_launchd() {
     [ "$(uname)" = Darwin ] || { echo "launchd step is macOS-only"; return 1; }
-    [ -f "$VR_SERVICE_PLIST" ] || { echo "no service plist (VR_SERVICE_PLIST=$VR_SERVICE_PLIST)"; return 1; }
-    local prog a1 a2 uid pid0 pid st t=0
-    prog=$(plutil -extract ProgramArguments.0 raw "$VR_SERVICE_PLIST")
-    a1=$(plutil -extract ProgramArguments.1 raw "$VR_SERVICE_PLIST")
-    a2=$(plutil -extract ProgramArguments.2 raw "$VR_SERVICE_PLIST")
-    echo "service: $prog $a1 $a2"
+    local stub=$VR_ROOT/stub-bin src=$VR_HOME/Library/LaunchAgents/dev.den.daemon.plist
+    mkdir -p "$stub"
+    printf '#!/bin/sh\necho "launchctl $*" >>"%s/launchctl.log"\n' "$VR_ROOT" >"$stub/launchctl"
+    chmod +x "$stub/launchctl"
+    PATH="$stub:$PATH" den daemon install
+    [ -f "$src" ] || { echo "den daemon install wrote no $src"; return 1; }
+    grep -q bootstrap "$VR_ROOT/launchctl.log" || { echo "den daemon install did not bootstrap its agent"; return 1; }
+    local label prog a1 a2 uid pid0 pid st t=0
+    label=$(plutil -extract Label raw "$src")
+    prog=$(plutil -extract ProgramArguments.0 raw "$src")
+    a1=$(plutil -extract ProgramArguments.1 raw "$src")
+    a2=$(plutil -extract ProgramArguments.2 raw "$src")
+    echo "service: $label: $prog $a1 $a2"
+    [ "$label" = dev.den.daemon ] || { echo "unexpected label $label"; return 1; }
     [ "$a1 $a2" = "daemon run" ] || { echo "service does not run 'den daemon run'"; return 1; }
     [ "$(realpath_ "$prog")" = "$(realpath_ "$DEN_BIN")" ] || { echo "service binary $prog is not $DEN_BIN"; return 1; }
+    [ "$(plutil -extract EnvironmentVariables.DEN_HOME raw "$src")" = "$VR_DEN_HOME" ] || { echo "plist DEN_HOME is not $VR_DEN_HOME"; return 1; }
+    [ "$(plutil -extract EnvironmentVariables.DEN_PREFIX raw "$src")" = "$VR_PREFIX" ] || { echo "plist DEN_PREFIX is not $VR_PREFIX"; return 1; }
+    echo "plist PATH: $(plutil -extract EnvironmentVariables.PATH raw "$src" 2>/dev/null || echo none)"
 
     uid=$(id -u)
     trap la_teardown EXIT
-    cp "$VR_SERVICE_PLIST" "$LA_PLIST"; chmod u+w "$LA_PLIST"
+    cp "$src" "$LA_PLIST"; chmod u+w "$LA_PLIST"
     plutil -replace Label -string "$LA_LABEL" "$LA_PLIST"
-    plutil -remove EnvironmentVariables "$LA_PLIST" 2>/dev/null || true
-    plutil -insert EnvironmentVariables -dictionary "$LA_PLIST"
     local k
-    for k in HOME DEN_HOME DEN_PREFIX HOMEBREW_PREFIX HOMEBREW_CELLAR DEN_APPDIR DEN_FONTDIR DEN_CASK_PKG_ROOT; do
-        plutil -insert "EnvironmentVariables.$k" -string "${!k}" "$LA_PLIST"
+    for k in HOME HOMEBREW_PREFIX HOMEBREW_CELLAR DEN_APPDIR DEN_FONTDIR DEN_CASK_PKG_ROOT; do
+        plutil -replace "EnvironmentVariables.$k" -string "${!k}" "$LA_PLIST"
     done
-    plutil -insert EnvironmentVariables.PATH -string "/usr/bin:/bin:/usr/sbin:/sbin" "$LA_PLIST"
-    plutil -replace StandardOutPath -string "$VR_ROOT/launchd.out" "$LA_PLIST"
-    plutil -replace StandardErrorPath -string "$VR_ROOT/launchd.err" "$LA_PLIST"
-    plutil -remove WorkingDirectory "$LA_PLIST" 2>/dev/null || true
+    # No Homebrew on the agent's PATH either.
+    plutil -replace EnvironmentVariables.PATH -string "/usr/bin:/bin:/usr/sbin:/sbin" "$LA_PLIST"
     launchctl bootstrap "gui/$uid" "$LA_PLIST"
     echo "bootstrapped gui/$uid/$LA_LABEL"
 
@@ -465,7 +431,7 @@ s_launchd() {
         st=$(launchctl print "gui/$uid/$LA_LABEL")
         pid=$(echo "$st" | sed -n 's/^[[:space:]]*pid = //p' | head -1)
         echo "t=${t}s state=$(echo "$st" | sed -n 's/^[[:space:]]*state = //p' | head -1) pid=${pid:-none}"
-        [ "$pid" = "$pid0" ] || { echo "agent died or restarted (pid $pid0 -> ${pid:-none})"; cat "$VR_ROOT/launchd.err" 2>/dev/null; return 1; }
+        [ "$pid" = "$pid0" ] || { echo "agent died or restarted (pid $pid0 -> ${pid:-none})"; tail -20 "$VR_DEN_HOME/daemon.log" 2>/dev/null; return 1; }
     done
     local exe; exe=$(ps -o comm= -p "$pid0")
     echo "process: $exe"
@@ -489,21 +455,21 @@ finish() {
 trap finish EXIT
 trap 'exit 130' INT TERM
 
-echo "verify-release: den=$DEN_BIN tag=$RELEASE_TAG root=$VR_ROOT"
-[ -z "$TRUST_NOTE" ] || echo "verify-release: brew-trust: $TRUST_NOTE"
-[ -z "$TRUST_HANDOFF" ] || echo "verify-release: brew-trust: $TRUST_HANDOFF"
+echo "verify-release: tag=$RELEASE_TAG version=$VERSION prev=${VR_PREV_TAG:-none} root=$VR_ROOT"
+echo "verify-release: installer=$VR_INSTALL_SH PATH=$PATH"
+step install s_install
 step version s_version
-if [ -n "$TRUST_NOTE" ]; then step brew-trust s_brew_trust; else VR_SKIP="${VR_SKIP:-} brew-trust"; step brew-trust true; fi
-if [ "$VR_BREW_TEST" = 1 ]; then step brew-test s_brew_test; else VR_SKIP="${VR_SKIP:-} brew-test"; step brew-test true; fi
 step isolation s_isolation
-# Abort only on the safety checks themselves (brew-trust/brew-test results
-# are reported, not fatal): a wrong binary or an unconfined den.
+# Abort on the gates: no binary, the wrong binary, or an unconfined den.
 case " $FAILS " in
+    *" install "*) echo "verify-release: install.sh failed for $RELEASE_TAG — aborting"; exit 1 ;;
     *" version "*) echo "verify-release: version failed (den under test is not $VERSION) — aborting before den writes anything"; exit 1 ;;
     *" isolation "*) echo "verify-release: isolation failed (den config escapes $VR_ROOT) — aborting before den writes anything"; exit 1 ;;
 esac
-if [ "$VR_POURED" = 1 ]; then step poured s_poured; else VR_SKIP="${VR_SKIP:-} poured"; step poured true; fi
-step formula-test s_formula_test
+step links s_links
+step checksum s_checksum
+step self-update s_self_update
+step empty-store s_empty_store
 step update s_update
 step bottle s_bottle
 step opt-link s_opt_link

@@ -8,8 +8,17 @@
 #   curl -fsSL https://raw.githubusercontent.com/marcelocantos/den/master/install.sh | sh
 #
 # Environment variables:
-#   DEN_VERSION          Pin a specific version (default: latest)
-#   DEN_INSTALL_DIR      Override install directory (default: ~/.den)
+#   DEN_VERSION          Pin a release: 0.14.0, v0.14.0, 0.15.0-rc.1 or
+#                        v0.15.0-rc.1 (default: latest GA)
+#   DEN_INSTALL_DIR      Override install directory (default: $DEN_HOME, else ~/.den)
+#   DEN_HOME             den's home, as den itself reads it (default: ~/.den)
+#   DEN_PREFIX           den's package prefix, as den itself reads it
+#                        (default: $DEN_HOME/prefix). Created if missing; a
+#                        prefix you cannot create (e.g. /opt/homebrew) needs
+#                        sudo, which is offered interactively, never run
+#                        silently.
+#   DEN_INSTALL_INTERACTIVE  1 to prompt, 0 to never prompt (default: prompt
+#                        when a terminal is available)
 #   DEN_NO_MODIFY_PATH   Set to 1 to skip shell profile modification
 #
 set -eu
@@ -36,9 +45,16 @@ main() {
     esac
 
     # --- Configuration ---
-    den_dir="${DEN_INSTALL_DIR:-$HOME/.den}"
+    den_home="${DEN_HOME:-$HOME/.den}"
+    den_dir="${DEN_INSTALL_DIR:-$den_home}"
     bin_dir="$den_dir/bin"
+    # Same resolution order den uses when DEN_PREFIX is set or defaulted (a
+    # store.prefix in config.json is den's own setting and not consulted).
+    prefix="${DEN_PREFIX:-$den_home/prefix}"
     version="${DEN_VERSION:-}"
+
+    # A sha256 tool is mandatory: never install unverified bytes.
+    sha256_tool >/dev/null || err "need 'shasum' or 'sha256sum' to verify the download"
 
     # --- Resolve version ---
     if [ -z "$version" ]; then
@@ -49,32 +65,61 @@ main() {
         fi
     fi
 
-    # Validate version format (vN.N.N or N.N.N).
+    # Accept N.N.N or N.N.N-rc.N, each with an optional leading v.
+    version="${version#v}"
     case "$version" in
-        v[0-9]*.[0-9]*.[0-9]*) ;;
-        [0-9]*.[0-9]*.[0-9]*)  ;;
-        *) err "invalid version format: $version (expected vN.N.N)" ;;
+        *[!0-9.a-z-]*) err "invalid version format: $version (expected N.N.N or N.N.N-rc.N)" ;;
     esac
+    _base="${version%%-*}"
+    _rest="${version#"$_base"}"
+    is_valid_base "$_base" || err "invalid version format: $version (expected N.N.N or N.N.N-rc.N)"
+    case "$_rest" in
+        "") ;;
+        -rc.*)
+            _rc="${_rest#-rc.}"
+            case "$_rc" in
+                ""|*[!0-9]*) err "invalid version format: $version (expected N.N.N or N.N.N-rc.N)" ;;
+            esac
+            ;;
+        *) err "invalid version format: $version (expected N.N.N or N.N.N-rc.N)" ;;
+    esac
+    tag="v$version"
+    # Release candidates ship GA-named assets (den-<base>-...) and the binary
+    # reports the base version.
+    asset_version="$_base"
 
-    say "installing den $version for $os/$arch"
+    say "installing den $tag for $os/$arch"
 
     # --- Check for existing install ---
+    # `den --version` prints the bare version (e.g. 0.14.0), which an RC
+    # shares with its GA, so the installed tag is recorded beside it.
+    tag_file="$den_dir/share/den/installed-tag"
     if [ -x "$bin_dir/den" ]; then
-        existing="$("$bin_dir/den" --version 2>/dev/null | awk '{print $2}')" || existing=""
-        if [ "$existing" = "$version" ]; then
-            say "den $version is already installed."
-            exit 0
+        existing="$("$bin_dir/den" --version 2>/dev/null)" || existing=""
+        existing_tag=""
+        if [ -f "$tag_file" ]; then
+            existing_tag="$(cat "$tag_file" 2>/dev/null)" || existing_tag=""
         fi
-        say "upgrading den $existing -> $version"
+        if [ "$existing" = "$asset_version" ]; then
+            if [ "$existing_tag" = "$tag" ] || { [ -z "$existing_tag" ] && [ "$tag" = "v$asset_version" ]; }; then
+                ensure_prefix "$prefix"
+                say "den $tag is already installed."
+                exit 0
+            fi
+        fi
+        say "replacing den ${existing_tag:-${existing:-unknown}} -> $tag"
     fi
+
+    # --- Prefix ---
+    ensure_prefix "$prefix"
 
     # --- Download ---
     tmpdir="$(mktemp -d)"
     trap 'rm -rf "$tmpdir"' EXIT
 
-    archive_name="den-${version}-${os}-${arch}.tar.gz"
-    checksum_name="den-${version}-checksums.txt"
-    base_url="https://github.com/marcelocantos/den/releases/download/v${version}"
+    archive_name="den-${asset_version}-${os}-${arch}.tar.gz"
+    checksum_name="den-${asset_version}-checksums.txt"
+    base_url="https://github.com/marcelocantos/den/releases/download/${tag}"
 
     say "downloading $archive_name..."
     download "$base_url/$archive_name" "$tmpdir/$archive_name"
@@ -90,8 +135,8 @@ main() {
 
     if [ -f "$tmpdir/den" ]; then
         pkg_root="$tmpdir"
-    elif [ -f "$tmpdir/den-${version}-${os}-${arch}/den" ]; then
-        pkg_root="$tmpdir/den-${version}-${os}-${arch}"
+    elif [ -f "$tmpdir/den-${asset_version}-${os}-${arch}/den" ]; then
+        pkg_root="$tmpdir/den-${asset_version}-${os}-${arch}"
     else
         err "binary not found in archive"
     fi
@@ -106,6 +151,8 @@ main() {
     fi
 
     chmod +x "$bin_dir/den"
+    mkdir -p "$den_dir/share/den"
+    printf '%s\n' "$tag" > "$tag_file"
 
     # Clear macOS quarantine flag.
     if [ "$os" = "darwin" ]; then
@@ -126,6 +173,11 @@ main() {
     # --- Done ---
     say ""
     say "den installed to $bin_dir/den"
+    if [ -n "${DEN_PREFIX:-}" ] && [ "$DEN_PREFIX" != "$den_home/prefix" ]; then
+        say ""
+        say "den reads its prefix from DEN_PREFIX; keep it set in your shell profile:"
+        say "  export DEN_PREFIX=\"$DEN_PREFIX\""
+    fi
     say ""
     say "restart your shell, then get started:"
     say "  den migrate              # import existing Homebrew packages"
@@ -163,23 +215,99 @@ verify_checksum() {
     _checksum_file="$2"
     _archive_name="$3"
 
-    _expected="$(grep -F "$_archive_name" "$_checksum_file" | awk '{print $1}')"
+    _expected="$(awk -v n="$_archive_name" '$2 == n || $2 == "*" n {print $1; exit}' "$_checksum_file")"
     if [ -z "$_expected" ]; then
         err "checksum not found for $_archive_name in checksum file"
     fi
 
-    if check_cmd shasum; then
-        _actual="$(shasum -a 256 "$_file" | awk '{print $1}')"
-    elif check_cmd sha256sum; then
-        _actual="$(sha256sum "$_file" | awk '{print $1}')"
-    else
-        say "warning: cannot verify checksum (no shasum or sha256sum)"
-        return
-    fi
+    _tool="$(sha256_tool)" || err "need 'shasum' or 'sha256sum' to verify the download"
+    case "$_tool" in
+        shasum) _actual="$(shasum -a 256 "$_file" | awk '{print $1}')" ;;
+        *)      _actual="$(sha256sum "$_file" | awk '{print $1}')" ;;
+    esac
 
     if [ "$_actual" != "$_expected" ]; then
         err "checksum mismatch: expected $_expected, got $_actual"
     fi
+}
+
+sha256_tool() {
+    if check_cmd shasum; then
+        echo shasum
+    elif check_cmd sha256sum; then
+        echo sha256sum
+    else
+        return 1
+    fi
+}
+
+is_valid_base() {
+    # N.N.N, digits only.
+    case "$1" in
+        *[!0-9.]*|.*|*.|*..*) return 1 ;;
+    esac
+    _IFS_save="$IFS"
+    IFS=.
+    # shellcheck disable=SC2086
+    set -- $1
+    IFS="$_IFS_save"
+    [ $# -eq 3 ]
+}
+
+is_interactive() {
+    case "${DEN_INSTALL_INTERACTIVE:-}" in
+        1) return 0 ;;
+        0) return 1 ;;
+    esac
+    # `curl ... | sh` has a pipe on stdin, but the terminal is still there.
+    (: <"${DEN_INSTALL_TTY:-/dev/tty}") 2>/dev/null
+}
+
+ensure_prefix() {
+    _prefix="$1"
+    if [ -d "$_prefix" ] && [ -w "$_prefix" ]; then
+        return
+    fi
+    if [ ! -e "$_prefix" ]; then
+        # Find the nearest existing ancestor; if we can write there, no
+        # privileges are needed.
+        _anc="$(dirname "$_prefix")"
+        while [ ! -e "$_anc" ]; do
+            _anc="$(dirname "$_anc")"
+        done
+        if [ -d "$_anc" ] && [ -w "$_anc" ]; then
+            mkdir -p "$_prefix" || err "could not create prefix $_prefix"
+            say "created prefix $_prefix"
+            return
+        fi
+    fi
+
+    _user="$(id -un)"
+    if [ "$os" = "darwin" ]; then
+        _group="admin"
+    else
+        _group="$(id -gn)"
+    fi
+    _cmd="sudo mkdir -p $_prefix && sudo chown $_user:$_group $_prefix"
+
+    say "den's prefix $_prefix does not exist or is not writable by $_user."
+    say "den installs packages there without sudo, so it must be created once and"
+    say "owned by you. The command is:"
+    say "  $_cmd"
+    if ! is_interactive; then
+        err "run the command above (or set DEN_PREFIX to a directory you own), then re-run the installer"
+    fi
+    printf 'den: run it now with sudo? [Y/n] ' >&2
+    _answer=""
+    read -r _answer < "${DEN_INSTALL_TTY:-/dev/tty}" || _answer=n
+    case "$_answer" in
+        ""|y|Y|yes|YES|Yes) ;;
+        *) err "not creating $_prefix; run the command above (or set DEN_PREFIX), then re-run the installer" ;;
+    esac
+    sudo mkdir -p "$_prefix" || err "sudo mkdir -p $_prefix failed"
+    sudo chown "$_user:$_group" "$_prefix" || err "sudo chown $_user:$_group $_prefix failed"
+    [ -d "$_prefix" ] && [ -w "$_prefix" ] || err "prefix $_prefix is still not writable"
+    say "created prefix $_prefix"
 }
 
 add_shell_integration() {
