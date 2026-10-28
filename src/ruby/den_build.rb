@@ -56,6 +56,13 @@ den_home = Pathname.new(ARGV[2])
 want_version = ARGV[3].to_s.empty? ? nil : ARGV[3]
 want_name = ARGV[4].to_s.empty? ? nil : ARGV[4]
 
+# Build sandbox (docs/source-builds.md): den passes a Seatbelt profile that
+# denies writes to its prefix and $DEN_HOME outside this build's directories.
+# Every command the formula runs through Formula#system executes under it;
+# the formula's own Ruby file operations and the stage merge do not.
+den_sandbox_profile = ENV.delete("DEN_BUILD_SANDBOX_PROFILE").to_s
+den_sandbox_profile = nil if den_sandbox_profile.empty?
+
 # --- Scan den's store for installed packages ---
 
 installed = {} # name -> Pathname (latest version dir)
@@ -277,6 +284,30 @@ f.define_singleton_method(:system) do |cmd, *args|
     saved_env.each { |k, v| ENV[k] = v }
   end
   den_merge_stage.call if kind
+end
+
+# Formula#system forks, sets up logging, and calls exec_cmd in the child,
+# which ends in Kernel.exec(cmd, *args). In that child only, Kernel.exec runs
+# the command under sandbox-exec, as Homebrew's own sandbox wraps commands; a
+# lone string goes through /bin/sh, as Kernel.exec would run it.
+if den_sandbox_profile
+  unless f.respond_to?(:exec_cmd, true)
+    abort "error: this Homebrew library has no Formula#exec_cmd, so den cannot sandbox the build"
+  end
+  f.define_singleton_method(:exec_cmd) do |cmd, args, out, log_filename|
+    profile = den_sandbox_profile
+    Kernel.singleton_class.prepend(Module.new do
+      define_method(:exec) do |c, *a|
+        c = c.first if c.is_a?(Array)
+        if a.empty?
+          super("/usr/bin/sandbox-exec", "-p", profile, "/bin/sh", "-c", c.to_s)
+        else
+          super("/usr/bin/sandbox-exec", "-p", profile, c.to_s, *a.map(&:to_s))
+        end
+      end
+    end)
+    super(cmd, args, out, log_filename)
+  end
 end
 
 f.define_singleton_method(:inreplace) do |paths, before = nil, after = nil, **opts, &block|
