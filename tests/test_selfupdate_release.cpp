@@ -234,5 +234,73 @@ TEST_SUITE("self-update --version") {
     }
 }
 
+TEST_CASE("is_same_version_request: RCs and GA of the running version count as same") {
+    UpdateInfo rc{"0.15.0", "u", "c", "v0.15.0-rc.3"};
+    UpdateInfo ga{"0.15.0", "u", "c", "v0.15.0"};
+    UpdateInfo newer{"0.16.0", "u", "c", "v0.16.0-rc.1"};
+    UpdateInfo untagged{"0.15.0", "u", "c", ""};
+    CHECK(is_same_version_request(rc, "0.15.0"));
+    CHECK(is_same_version_request(ga, "0.15.0"));
+    CHECK(is_same_version_request(untagged, "0.15.0"));
+    CHECK_FALSE(is_same_version_request(newer, "0.15.0"));
+    CHECK_FALSE(is_same_version_request(rc, "0.14.0"));
+    CHECK_FALSE(is_same_version_request(UpdateInfo{}, ""));
+}
+
+TEST_CASE("install_update_tarball skip_if_identical leaves an identical binary alone") {
+    TempDir t;
+    auto tarball = t.path / "same.tar.gz";
+    make_tarball(tarball, {{"den", "same bytes"}, {"share/den/known_hashes.json", "{}\n"}});
+    auto exe = t.path / "bin" / "den";
+    write_file(exe, "same bytes");
+    struct stat before{};
+    REQUIRE(::stat(exe.c_str(), &before) == 0);
+
+    CHECK_FALSE(install_update_tarball(tarball, exe, /*skip_if_identical=*/true));
+
+    struct stat after{};
+    REQUIRE(::stat(exe.c_str(), &after) == 0);
+    CHECK(after.st_ino == before.st_ino); // not replaced
+    CHECK(slurp(exe) == "same bytes");
+    // Nothing else is touched either: no replica created.
+    CHECK_FALSE(fs::exists(t.path / "share" / "den" / "known_hashes.json"));
+}
+
+TEST_CASE("install_update_tarball skip_if_identical still installs different bytes") {
+    // e.g. running rc.2 asks for rc.3: same version number, new binary.
+    TempDir t;
+    auto tarball = t.path / "rc3.tar.gz";
+    make_tarball(tarball, {{"den", "rc.3 bytes"}});
+    auto exe = t.path / "bin" / "den";
+    write_file(exe, "rc.2 bytes");
+    CHECK(install_update_tarball(tarball, exe, /*skip_if_identical=*/true));
+    CHECK(slurp(exe) == "rc.3 bytes");
+}
+
+TEST_CASE("install_update_tarball skip_if_identical: same size, different bytes installs") {
+    TempDir t;
+    auto tarball = t.path / "x.tar.gz";
+    make_tarball(tarball, {{"den", "abcd"}});
+    auto exe = t.path / "bin" / "den";
+    write_file(exe, "abce");
+    CHECK(install_update_tarball(tarball, exe, true));
+    CHECK(slurp(exe) == "abcd");
+}
+
+TEST_CASE("install_update_tarball without skip (--force) reinstalls identical bytes") {
+    TempDir t;
+    auto tarball = t.path / "same.tar.gz";
+    make_tarball(tarball, {{"den", "same bytes"}});
+    auto exe = t.path / "bin" / "den";
+    write_file(exe, "same bytes");
+    struct stat before{};
+    REQUIRE(::stat(exe.c_str(), &before) == 0);
+    CHECK(install_update_tarball(tarball, exe));
+    struct stat after{};
+    REQUIRE(::stat(exe.c_str(), &after) == 0);
+    CHECK(after.st_ino != before.st_ino); // fresh inode
+    CHECK(slurp(exe) == "same bytes");
+}
+
 } // namespace test_selfupdate_release
 } // namespace den

@@ -56,7 +56,8 @@ them. A non-default `DEN_PREFIX` is recorded as `store.prefix` in
 need not stay exported; if `config.json` already names a different
 `store.prefix`, the installer leaves it and says so (`DEN_PREFIX_OVERWRITE=1`
 replaces it). An installed den moves to another release with
-`den self-update --version X.Y.Z[-rc.N]`.
+`den self-update --version X.Y.Z[-rc.N]`; asking for the release that is
+already installed (identical binary) is a no-op unless you add `--force`.
 
 Or with Homebrew (macOS, Apple Silicon):
 

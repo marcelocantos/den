@@ -275,6 +275,7 @@ struct Cli::M {
     // self-update
     bool selfupdate_check = false;
     std::string selfupdate_version;
+    bool selfupdate_force = false;
 
     // run
     std::vector<std::string> run_argv;
@@ -1752,6 +1753,9 @@ void Cli::M::setup() {
     selfupdate->add_option("--version", selfupdate_version,
                            "Install this release instead of the latest (e.g. 0.15.0, "
                            "v0.15.0-rc.1); release candidates and downgrades are allowed");
+    selfupdate->add_flag("--force", selfupdate_force,
+                         "Reinstall even when the requested release's binary is identical to "
+                         "the installed one (and restart the daemon onto it)");
     selfupdate->callback([this] {
         // Validate an explicit version before anything touches the network.
         const std::string wanted_tag =
@@ -1769,8 +1773,8 @@ void Cli::M::setup() {
                           << ").\n";
                 return;
             }
-            apply_update(info, cfg);
-            restart_daemon_after_update(cfg, std::cout);
+            if (apply_update(info, cfg, selfupdate_force))
+                restart_daemon_after_update(cfg, std::cout);
             return;
         }
         if (selfupdate_check) {
@@ -1799,8 +1803,8 @@ void Cli::M::setup() {
             std::cout << "den " << DEN_VERSION << " is up to date.\n";
             return;
         }
-        apply_update(*info, cfg);
-        restart_daemon_after_update(cfg, std::cout);
+        if (apply_update(*info, cfg, selfupdate_force))
+            restart_daemon_after_update(cfg, std::cout);
     });
 
     // --- smoke ---
