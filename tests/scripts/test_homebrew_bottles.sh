@@ -184,14 +184,57 @@ grep 'sha256 cellar:' "$gho" | sed 's/^ *//' >"$_tmp/ga-shas"
 grep 'sha256 cellar:' "$_tmp/den.rb" | sed 's/^ *//' >"$_tmp/rc-shas"
 cmp -s "$_tmp/ga-shas" "$_tmp/rc-shas" && ok "RC and GA bottle shas match" || ko "RC and GA bottle shas match"
 
+# --- tapper-config (GA, scripts/release-tap.sh) ------------------------------
+base="$ROOT/tapper.yaml"
+check "tapper-config renders" 0 tapper-config --version "$V" --release-tag "v$V" --dir "$dist" --base "$base" --out "$_tmp/tc/tapper.yaml"
+tc="$_tmp/tc/tapper.yaml"
+contains "tapper-config keeps the base config" "$tc" "repo: marcelocantos/den"
+contains "tapper-config adds formula_includes" "$tc" "formula_includes: |"
+contains "tapper-config bottle block" "$tc" "  bottle do"
+contains "tapper-config root_url is the GA release" "$tc" "    root_url \"https://github.com/marcelocantos/den/releases/download/v$V\""
+for t in $TAGS; do
+    contains "tapper-config sha256 for $t" "$tc" "    sha256 cellar: \"/opt/homebrew/Cellar\", $t: \"$sha\""
+done
+contains "tapper-config keeps libarchive dep" "$tc" '    depends_on "libarchive"'
+contains "tapper-config keeps service" "$tc" '    run [opt_bin/"den", "daemon", "run"]'
+# The rendered includes are exactly what homebrew-releaser got from promote-rc.
+python3 - "$tc" "$gho" >"$_tmp/out" 2>&1 <<'PY2'
+import re, sys
+tc = open(sys.argv[1]).read()
+inc = tc.split("formula_includes: |\n", 1)[1]
+inc = "".join(l[2:] if l.strip() else l for l in inc.splitlines(True)).rstrip()
+gho = open(sys.argv[2]).read()
+m = re.search(r"^formula_includes<<(EOF_\w+)\n(.*?)\n\1$", gho, re.S | re.M)
+assert m and m.group(2) == inc, (inc, m and m.group(2))
+PY2
+[ $? -eq 0 ] && ok "tapper-config includes == releaser-inputs formula_includes" || ko "tapper-config includes == releaser-inputs formula_includes"
+if command -v ruby >/dev/null 2>&1; then
+    ruby -ryaml -e 'c = YAML.load_file(ARGV[0]); abort "bad" unless c["formula_includes"].start_with?("bottle do\n") && c["install"].include?("bin.install \"den\"")' "$tc" >"$_tmp/out" 2>&1 \
+        && ok "tapper-config is valid YAML" || ko "tapper-config is valid YAML"
+fi
+
+{ cat "$base"; printf 'formula_includes: |\n  depends_on "x"\n'; } >"$_tmp/has-includes.yaml"
+check "tapper-config rejects a base with formula_includes" 1 tapper-config --version "$V" --release-tag "v$V" --dir "$dist" --base "$_tmp/has-includes.yaml" --out "$_tmp/tc/x.yaml"
+{ cat "$base"; printf 'formula_includes_file: inc.rb\n'; } >"$_tmp/has-includes-file.yaml"
+check "tapper-config rejects a base with formula_includes_file" 1 tapper-config --version "$V" --release-tag "v$V" --dir "$dist" --base "$_tmp/has-includes-file.yaml" --out "$_tmp/tc/x.yaml"
+sed 's/bin.install "den"/bin.install "den2"/' "$base" >"$_tmp/install-drift.yaml"
+check "tapper-config rejects install drift" 1 tapper-config --version "$V" --release-tag "v$V" --dir "$dist" --base "$_tmp/install-drift.yaml" --out "$_tmp/tc/x.yaml"
+sed 's/No packages installed/No packages/' "$base" >"$_tmp/test-drift.yaml"
+check "tapper-config rejects test drift" 1 tapper-config --version "$V" --release-tag "v$V" --dir "$dist" --base "$_tmp/test-drift.yaml" --out "$_tmp/tc/x.yaml"
+check "tapper-config rejects -rc version" 1 tapper-config --version "$V-rc.1" --release-tag "v$V-rc.1" --dir "$dist" --base "$base" --out "$_tmp/tc/x.yaml"
+check "tapper-config fails without bottles" 1 tapper-config --version "$V" --release-tag "v$V" --dir "$_tmp/partial" --base "$base" --out "$_tmp/tc/x.yaml"
+
 # --- workflow wiring --------------------------------------------------------
 wf="$ROOT/.github/workflows"
 contains "RC workflow builds bottles" "$wf/release-candidate.yml" "scripts/homebrew-bottles.py build"
 contains "RC workflow verifies bottles" "$wf/release-candidate.yml" "scripts/homebrew-bottles.py verify"
 contains "RC workflow renders den.rb" "$wf/release-candidate.yml" "scripts/homebrew-bottles.py formula"
 contains "promote verifies RC bottles" "$wf/promote-rc.yml" "scripts/homebrew-bottles.py verify"
-contains "promote renders releaser inputs" "$wf/promote-rc.yml" "scripts/homebrew-bottles.py releaser-inputs"
-contains "promote feeds formula_includes from the script" "$wf/promote-rc.yml" 'formula_includes: ${{ steps.formula.outputs.formula_includes }}'
+contains "promote uploads Homebrew-named aliases" "$wf/promote-rc.yml" "brew-assets/den-\${VERSION}-darwin-arm64.tar.gz"
+grep -q 'HOMEBREW_TAP_TOKEN\|homebrew-releaser@' "$wf/promote-rc.yml" \
+    && ko "promote no longer bumps the tap from CI (no tap token in Actions)" \
+    || ok "promote no longer bumps the tap from CI (no tap token in Actions)"
+contains "release-tap renders the per-release tapper config" "$ROOT/scripts/release-tap.sh" "scripts/homebrew-bottles.py tapper-config"
 
 echo ""
 echo "Results: ${_pass} passed, ${_fail} failed"
