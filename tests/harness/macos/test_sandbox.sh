@@ -87,7 +87,9 @@ fi
 
 # --- run: go shim keeps telemetry in the sandbox ----------------------------
 
-GO_OUT=$(PATH="$FAKEBIN:$PATH" HOME="$WORK/realhome" GOENV='' \
+# XDG_CONFIG_HOME is cleared so the default (non-macOS) GOENV derives from HOME;
+# CI runners export their own XDG_CONFIG_HOME.
+GO_OUT=$(PATH="$FAKEBIN:$PATH" HOME="$WORK/realhome" GOENV='' XDG_CONFIG_HOME='' \
     sh "$SANDBOX_SH" run "$SB" -- go version -m x 2>&1)
 if printf '%s\n' "$GO_OUT" | grep -qx "HOME=$E/home"; then
     pass "go runs with HOME inside the sandbox"
@@ -98,6 +100,15 @@ case "$(uname -s)" in
     Darwin) WANT_GOENV="$WORK/realhome/Library/Application Support/go/env" ;;
     *) WANT_GOENV="$WORK/realhome/.config/go/env" ;;
 esac
+if [ "$(uname -s)" != Darwin ]; then
+    XDG_OUT=$(PATH="$FAKEBIN:$PATH" HOME="$WORK/realhome" GOENV='' \
+        XDG_CONFIG_HOME="$WORK/xdgconf" sh "$SANDBOX_SH" run "$SB" -- go 2>&1)
+    if printf '%s\n' "$XDG_OUT" | grep -qxF "GOENV=$WORK/xdgconf/go/env"; then
+        pass "go honours the host's XDG_CONFIG_HOME for GOENV"
+    else
+        fail "go honours the host's XDG_CONFIG_HOME for GOENV" "$XDG_OUT"
+    fi
+fi
 if printf '%s\n' "$GO_OUT" | grep -qxF "GOENV=$WANT_GOENV"; then
     pass "go keeps the host's GOENV file"
 else
