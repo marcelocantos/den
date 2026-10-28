@@ -16,10 +16,23 @@
 #                        (default: $DEN_HOME/prefix). Created if missing; a
 #                        prefix you cannot create (e.g. /opt/homebrew) needs
 #                        sudo, which is offered interactively, never run
-#                        silently.
+#                        silently. A non-default DEN_PREFIX is persisted as
+#                        store.prefix in $DEN_HOME/config.json (see below),
+#                        so it need not stay exported.
+#   DEN_PREFIX_OVERWRITE 1 to replace a different store.prefix already in
+#                        config.json (default: leave it and say so)
 #   DEN_INSTALL_INTERACTIVE  1 to prompt, 0 to never prompt (default: prompt
 #                        when a terminal is available)
 #   DEN_NO_MODIFY_PATH   Set to 1 to skip shell profile modification
+#
+# Persisting DEN_PREFIX: the installed den writes the setting itself
+# (`den set store.prefix`), which merges into an existing config.json
+# (every other key is kept), writes it atomically with mode 0600, and refuses
+# to touch a config.json it cannot parse. The current value is read with
+# `den get store.prefix`. Nothing is written when DEN_PREFIX is unset or the
+# default, or when store.prefix already names it. A den too old for `den get`
+# only gets the setting when no config.json exists yet; otherwise the
+# installer prints the command to run instead of editing the file itself.
 #
 set -eu
 
@@ -104,6 +117,7 @@ main() {
             if [ "$existing_tag" = "$tag" ] || { [ -z "$existing_tag" ] && [ "$tag" = "v$asset_version" ]; }; then
                 ensure_prefix "$prefix"
                 say "den $tag is already installed."
+                persist_prefix "$bin_dir/den"
                 exit 0
             fi
         fi
@@ -163,6 +177,9 @@ main() {
     installed_version="$("$bin_dir/den" --version 2>/dev/null)" || err "installed binary failed to run"
     say "$installed_version"
 
+    # --- Persist a non-default DEN_PREFIX ---
+    persist_prefix "$bin_dir/den"
+
     # --- Shell integration ---
     if [ "${DEN_NO_MODIFY_PATH:-}" = "1" ]; then
         say "skipping shell profile modification (DEN_NO_MODIFY_PATH=1)"
@@ -173,7 +190,7 @@ main() {
     # --- Done ---
     say ""
     say "den installed to $bin_dir/den"
-    if [ -n "${DEN_PREFIX:-}" ] && [ "$DEN_PREFIX" != "$den_home/prefix" ]; then
+    if [ "$prefix_persisted" = no ]; then
         say ""
         say "den reads its prefix from DEN_PREFIX; keep it set in your shell profile:"
         say "  export DEN_PREFIX=\"$DEN_PREFIX\""
@@ -308,6 +325,83 @@ ensure_prefix() {
     sudo chown "$_user:$_group" "$_prefix" || err "sudo chown $_user:$_group $_prefix failed"
     [ -d "$_prefix" ] && [ -w "$_prefix" ] || err "prefix $_prefix is still not writable"
     say "created prefix $_prefix"
+}
+
+# same_dir A B: A and B are the same path, or both exist and resolve to the
+# same directory.
+same_dir() {
+    [ "$1" = "$2" ] && return 0
+    [ -d "$1" ] && [ -d "$2" ] || return 1
+    [ "$(cd "$1" && pwd -P)" = "$(cd "$2" && pwd -P)" ]
+}
+
+# persist_prefix DEN: record a non-default DEN_PREFIX as store.prefix in
+# $den_home/config.json, using den itself to read and write the file (see the
+# header). Sets prefix_persisted to "no" when DEN_PREFIX still has to stay
+# exported. Never fails the install.
+prefix_persisted=n/a
+persist_prefix() {
+    _den="$1"
+    if [ -z "${DEN_PREFIX:-}" ] || [ "$DEN_PREFIX" = "$den_home/prefix" ]; then
+        return 0
+    fi
+    prefix_persisted=no
+    # den resolves a relative store.prefix against its working directory, so
+    # record the absolute path (ensure_prefix has created it by now).
+    _want="$DEN_PREFIX"
+    case "$_want" in
+        /*) ;;
+        *) _want="$(cd "$_want" && pwd)" || return 0 ;;
+    esac
+    _cfg="$den_home/config.json"
+    _cmd="DEN_HOME=\"$den_home\" \"$_den\" set store.prefix \"$_want\""
+
+    if ! DEN_HOME="$den_home" "$_den" get --help >/dev/null 2>&1; then
+        # Too old for `den get`: only write when there is nothing to merge.
+        if [ -e "$_cfg" ]; then
+            say "this den cannot read $_cfg safely; not changing it. To persist the prefix, run:"
+            say "  $_cmd"
+            return 0
+        fi
+        _have=""
+        _st=1
+    elif _have="$(DEN_HOME="$den_home" "$_den" get store.prefix 2>/dev/null)"; then
+        _st=0
+    else
+        _st=$?
+    fi
+
+    case "$_st" in
+        0)
+            if same_dir "$_have" "$_want"; then
+                say "store.prefix is already $_have in $_cfg"
+                prefix_persisted=yes
+                return 0
+            fi
+            if [ "${DEN_PREFIX_OVERWRITE:-}" != "1" ]; then
+                say "$_cfg already sets store.prefix to $_have; leaving it."
+                say "den uses DEN_PREFIX ($_want) only while it is exported, otherwise $_have."
+                say "To switch for good, re-run with DEN_PREFIX_OVERWRITE=1, or run:"
+                say "  $_cmd"
+                return 0
+            fi
+            say "replacing store.prefix $_have -> $_want (DEN_PREFIX_OVERWRITE=1)"
+            ;;
+        1) ;;
+        *)
+            say "could not read $_cfg (is it valid JSON?); not changing it. To persist the prefix, fix it and run:"
+            say "  $_cmd"
+            return 0
+            ;;
+    esac
+
+    if DEN_HOME="$den_home" "$_den" set store.prefix "$_want" >/dev/null; then
+        say "recorded store.prefix = $_want in $_cfg"
+        prefix_persisted=yes
+    else
+        say "could not record store.prefix in $_cfg. To persist the prefix, run:"
+        say "  $_cmd"
+    fi
 }
 
 add_shell_integration() {

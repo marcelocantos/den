@@ -9,6 +9,11 @@
 # and network are unreachable and a "missing sha256 tool" host can be
 # simulated by leaving shasum/sha256sum out.
 #
+# The store.prefix cases that depend on den's own config.json merge run the
+# real den binary behind the canned release: DEN_TEST_BIN (set by ctest),
+# else build/den. Without one they are skipped; the fallback for a den too
+# old for `den get` always runs against the fake.
+#
 # Run:
 #   sh tests/scripts/test_install_sh.sh
 # or via ctest (name: script_test_install_sh).
@@ -98,18 +103,42 @@ TOOL
 chmod +x "$_fake/curl" "$_fake/uname" "$_fake/sudo"
 
 # --- canned releases ---------------------------------------------------------
-# mkrel TAG ASSET_VERSION OS ARCH
+_real_den="${DEN_TEST_BIN:-}"
+if [ -z "$_real_den" ] && [ -x "$ROOT/build/den" ]; then
+    _real_den="$ROOT/build/den"
+fi
+if [ -n "$_real_den" ]; then
+    _real_den=$(CDPATH= cd -- "$(dirname "$_real_den")" && pwd -P)/$(basename "$_real_den")
+    "$_real_den" get --help >/dev/null 2>&1 || _real_den=""
+fi
+
+# mkrel TAG ASSET_VERSION OS ARCH [real]
+# The default fake den is "old": it has `--version` and `set` (logged, and
+# writing a minimal config.json) but no `get`. With "real", everything except
+# --version runs the real den binary.
 mkrel() {
     _d="$_tmp/rel/$1"
     _s="$_tmp/stage/$1-$3-$4"
     mkdir -p "$_d" "$_s/share/den"
-    cat >"$_s/den" <<DEN
+    if [ "${5:-}" = real ]; then
+        cat >"$_s/den" <<DEN
 #!/bin/sh
 case "\$1" in
     --version) echo "$2" ;;
-    *) echo "den $1 \$*" ;;
+    *) exec "$_real_den" "\$@" ;;
 esac
 DEN
+    else
+        cat >"$_s/den" <<DEN
+#!/bin/sh
+[ -n "\${FAKE_DEN_LOG:-}" ] && echo "\$*" >>"\$FAKE_DEN_LOG"
+case "\$1" in
+    --version) echo "$2" ;;
+    set) mkdir -p "\$DEN_HOME" && printf '{"store":{"prefix":"%s"}}\\n' "\$3" >"\$DEN_HOME/config.json" ;;
+    *) echo "unknown command: \$1" >&2; exit 109 ;;
+esac
+DEN
+    fi
     chmod +x "$_s/den"
     echo "{\"tag\":\"$1\"}" >"$_s/share/den/known_hashes.json"
     _a="den-$2-$3-$4.tar.gz"
@@ -121,6 +150,7 @@ mkrel v0.14.0-rc.3 0.14.0 linux x86_64
 mkrel v0.15.0-rc.1 0.15.0 linux x86_64
 mkrel v0.15.0-rc.1 0.15.0 darwin aarch64
 mkrel v0.13.0 0.13.0 linux x86_64
+[ -n "$_real_den" ] && mkrel v0.16.0 0.16.0 linux x86_64 real
 # A release whose checksum does not match its tarball.
 mkrel v0.12.0 0.12.0 linux x86_64
 printf '%s  %s\n' 0000000000000000000000000000000000000000000000000000000000000000 \
@@ -139,9 +169,10 @@ newhome() {
 inst() {
     : >"$_tmp/curl.log"
     : >"$_tmp/sudo.log"
+    : >"$_tmp/den.log"
     env -i PATH="$_fake:$_tools:${INST_SHA:-$_shabin}" HOME="$H" SHELL=/bin/sh \
         DEN_NO_MODIFY_PATH=1 DEN_INSTALL_INTERACTIVE=0 \
-        FAKE_CURL_LOG="$_tmp/curl.log" FAKE_SUDO_LOG="$_tmp/sudo.log" \
+        FAKE_CURL_LOG="$_tmp/curl.log" FAKE_SUDO_LOG="$_tmp/sudo.log" FAKE_DEN_LOG="$_tmp/den.log" \
         FAKE_REL="$_tmp/rel" FAKE_LATEST=v0.14.0 FAKE_OS=Linux FAKE_ARCH=x86_64 \
         "$@" sh "$SCRIPT" </dev/null >"$_tmp/out" 2>&1
     _rc=$?
@@ -256,11 +287,117 @@ newhome
 inst DEN_VERSION=0.14.0 DEN_PREFIX="$H/custom/prefix"
 check "DEN_PREFIX writable: created without sudo" \
     '[ "$_rc" -eq 0 ] && [ -d "$H/custom/prefix" ] && [ ! -s "$_tmp/sudo.log" ]'
-check "DEN_PREFIX: tells the user to keep it exported" 'out_has "export DEN_PREFIX=\"$H/custom/prefix\""'
+check "DEN_PREFIX, old den, no config: den set records it" \
+    'grep -qxF "set store.prefix $H/custom/prefix" "$_tmp/den.log"'
+check "DEN_PREFIX, old den, no config: config written" \
+    'grep -qF "\"prefix\":\"$H/custom/prefix\"" "$H/.den/config.json"'
+check "DEN_PREFIX, old den, no config: no export hint" '! out_has "export DEN_PREFIX="'
+
+newhome
+mkdir -p "$H/.den"
+printf '{"daemon":{"auto_upgrade":true}}\n' >"$H/.den/config.json"
+cp "$H/.den/config.json" "$_tmp/cfg.before"
+inst DEN_VERSION=0.14.0 DEN_PREFIX="$H/custom/prefix"
+check "DEN_PREFIX, old den, existing config: install succeeds" '[ "$_rc" -eq 0 ]'
+check "DEN_PREFIX, old den, existing config: not touched" 'cmp -s "$_tmp/cfg.before" "$H/.den/config.json"'
+check "DEN_PREFIX, old den, existing config: den set not run" '! grep -q "^set " "$_tmp/den.log"'
+check "DEN_PREFIX, old den, existing config: prints the command" \
+    'out_has "\"$H/.den/bin/den\" set store.prefix \"$H/custom/prefix\""'
+check "DEN_PREFIX, old den, existing config: tells the user to keep it exported" \
+    'out_has "export DEN_PREFIX=\"$H/custom/prefix\""'
+
+for _dp in unset default; do
+    newhome
+    if [ "$_dp" = unset ]; then
+        inst DEN_VERSION=0.14.0
+    else
+        inst DEN_VERSION=0.14.0 DEN_PREFIX="$H/.den/prefix"
+    fi
+    check "DEN_PREFIX $_dp, old den: no config written" '[ "$_rc" -eq 0 ] && [ ! -e "$H/.den/config.json" ]'
+    check "DEN_PREFIX $_dp, old den: den set not run" '! grep -q "^set " "$_tmp/den.log"'
+done
 newhome
 inst DEN_VERSION=0.14.0 DEN_HOME="$H/dh"
 check "DEN_HOME: binary and prefix follow it" \
     '[ "$_rc" -eq 0 ] && [ -x "$H/dh/bin/den" ] && [ -d "$H/dh/prefix" ]'
+
+# --- DEN_PREFIX persisted by the real den (config.json merge) -----------------
+if [ -z "$_real_den" ]; then
+    _skip=$((_skip + 1))
+    echo "SKIP: store.prefix persistence with the real den (no DEN_TEST_BIN or build/den)"
+else
+    # cfg_prefix: the store.prefix den itself reads back.
+    cfg_prefix() { env -i HOME="$H" DEN_HOME="$H/.den" "$_real_den" get store.prefix 2>/dev/null; }
+    cfg_mode() { ls -l "$H/.den/config.json" | cut -c1-10; }
+    newhome
+    P="$H/custom/prefix"
+    inst DEN_VERSION=0.16.0 DEN_PREFIX="$P"
+    check "persist, no config: exit 0" '[ "$_rc" -eq 0 ]'
+    check "persist, no config: store.prefix recorded" '[ "$(cfg_prefix)" = "$P" ]'
+    check "persist, no config: written 0600" '[ "$(cfg_mode)" = "-rw-------" ]'
+    check "persist, no config: reported" 'out_has "recorded store.prefix = $P"'
+    check "persist, no config: no export hint" '! out_has "export DEN_PREFIX="'
+
+    # Re-running with the same prefix (already installed) is a no-op.
+    cp "$H/.den/config.json" "$_tmp/cfg.before"
+    inst DEN_VERSION=0.16.0 DEN_PREFIX="$P"
+    check "persist, same prefix: exit 0" '[ "$_rc" -eq 0 ] && out_has "already installed"'
+    check "persist, same prefix: says so" 'out_has "store.prefix is already $P"'
+    check "persist, same prefix: file unchanged" 'cmp -s "$_tmp/cfg.before" "$H/.den/config.json"'
+    check "persist, same prefix: no export hint" '! out_has "export DEN_PREFIX="'
+
+    newhome
+    P="$H/custom/prefix"
+    mkdir -p "$H/.den"
+    printf '%s\n' '{"daemon":{"auto_upgrade":true,"interval_secs":60},"taps":{"a/b":"https://example.invalid/b"},"casks":{"c":"1"},"future":{"x":[1,2]}}' \
+        >"$H/.den/config.json"
+    inst DEN_VERSION=0.16.0 DEN_PREFIX="$P"
+    _k() { env -i HOME="$H" DEN_HOME="$H/.den" "$_real_den" get "$1" 2>/dev/null; }
+    check "persist, existing config: exit 0" '[ "$_rc" -eq 0 ]'
+    check "persist, existing config: store.prefix added" '[ "$(cfg_prefix)" = "$P" ]'
+    check "persist, existing config: other keys kept" \
+        '[ "$(_k daemon.auto_upgrade)" = true ] && [ "$(_k daemon.interval_secs)" = 60 ] &&
+         [ "$(_k taps.a/b)" = https://example.invalid/b ] && [ "$(_k casks.c)" = 1 ] &&
+         [ "$(_k future.x)" = "[1,2]" ]'
+
+    newhome
+    P="$H/custom/prefix"
+    mkdir -p "$H/.den"
+    printf '%s\n' '{"store":{"prefix":"/elsewhere"},"daemon":{"auto_upgrade":true}}' >"$H/.den/config.json"
+    cp "$H/.den/config.json" "$_tmp/cfg.before"
+    inst DEN_VERSION=0.16.0 DEN_PREFIX="$P"
+    check "persist, different prefix: exit 0" '[ "$_rc" -eq 0 ]'
+    check "persist, different prefix: not overwritten" 'cmp -s "$_tmp/cfg.before" "$H/.den/config.json"'
+    check "persist, different prefix: explains" \
+        'out_has "already sets store.prefix to /elsewhere; leaving it." && out_has "DEN_PREFIX_OVERWRITE=1"'
+    check "persist, different prefix: export hint" 'out_has "export DEN_PREFIX=\"$P\""'
+
+    inst DEN_VERSION=0.16.0 DEN_PREFIX="$P" DEN_PREFIX_OVERWRITE=1
+    check "persist, DEN_PREFIX_OVERWRITE=1: replaced" \
+        '[ "$_rc" -eq 0 ] && [ "$(cfg_prefix)" = "$P" ] && out_has "replacing store.prefix /elsewhere -> $P"'
+    check "persist, DEN_PREFIX_OVERWRITE=1: other keys kept" \
+        '[ "$(env -i HOME="$H" DEN_HOME="$H/.den" "$_real_den" get daemon.auto_upgrade)" = true ]'
+
+    newhome
+    P="$H/custom/prefix"
+    mkdir -p "$H/.den"
+    printf '{"daemon": {\n' >"$H/.den/config.json"
+    cp "$H/.den/config.json" "$_tmp/cfg.before"
+    inst DEN_VERSION=0.16.0 DEN_PREFIX="$P"
+    check "persist, invalid config: install still succeeds" '[ "$_rc" -eq 0 ]'
+    check "persist, invalid config: left untouched" 'cmp -s "$_tmp/cfg.before" "$H/.den/config.json"'
+    check "persist, invalid config: explains" 'out_has "could not read $H/.den/config.json"'
+
+    for _dp in unset default; do
+        newhome
+        if [ "$_dp" = unset ]; then
+            inst DEN_VERSION=0.16.0
+        else
+            inst DEN_VERSION=0.16.0 DEN_PREFIX="$H/.den/prefix"
+        fi
+        check "persist, DEN_PREFIX $_dp: no config written" '[ "$_rc" -eq 0 ] && [ ! -e "$H/.den/config.json" ]'
+    done
+fi
 
 # --- missing prefix that needs privileges ------------------------------------
 if [ "$(id -u)" -eq 0 ]; then

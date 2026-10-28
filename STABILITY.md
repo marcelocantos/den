@@ -39,6 +39,7 @@ Snapshot as of v0.10.0.
 | `den init [--shell <shell>]` | Stable | |
 | `den status` | Stable | Environment + daemon summary |
 | `den set <key> <value>` | Stable | |
+| `den get <key>` | Stable | Exit 0 = set, 1 = not set, 2 = unreadable/invalid `config.json` |
 | `den settings` | Stable | |
 | `den migrate` | Needs review | Records formulae in the root manifest (`manifests/ROOT/manifest.json`) and casks/taps in `config.json` |
 | `den daemon run\|stop\|status\|install\|uninstall` | Stable | |

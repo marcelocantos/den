@@ -15,6 +15,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <sys/wait.h>
@@ -215,6 +216,36 @@ TEST_SUITE("cli::integration") {
         const auto out = run_den("settings", tmp.path.string());
         CHECK(out.find("daemon") != std::string::npos);
         CHECK(out.find("auto_download") != std::string::npos);
+    }
+
+    // -----------------------------------------------------------------------
+    // 6b. get — exit 0 with the value, 1 when unset, 2 for a damaged
+    // config.json (install.sh relies on this split to persist DEN_PREFIX).
+    // -----------------------------------------------------------------------
+    TEST_CASE("get store.prefix: unset, set, and damaged config") {
+        TempDir tmp;
+        const std::string home = tmp.path.string();
+        auto r = run_den_with_cellar("get store.prefix", home, home + "/p/Cellar");
+        CHECK(r.exit_code == 1);
+        CHECK(r.output.find("store.prefix is not set") != std::string::npos);
+
+        run_den("set store.prefix /x/prefix", home);
+        r = run_den_with_cellar("get store.prefix", home, home + "/p/Cellar");
+        CHECK(r.exit_code == 0);
+        CHECK(r.output == "/x/prefix\n");
+
+        {
+            std::ofstream f(tmp.path / "config.json");
+            f << "{not json";
+        }
+        r = run_den_with_cellar("get store.prefix", home, home + "/p/Cellar");
+        CHECK(r.exit_code == 2);
+        CHECK(r.output.find("not valid JSON") != std::string::npos);
+        r = run_den_with_cellar("set store.prefix /y", home, home + "/p/Cellar");
+        CHECK(r.exit_code != 0);
+        std::ifstream f(tmp.path / "config.json");
+        std::string body((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        CHECK(body == "{not json");
     }
 
     // -----------------------------------------------------------------------

@@ -246,9 +246,10 @@ struct Cli::M {
     std::string init_shell;
     std::string shell_env_name;
 
-    // set
+    // set / get
     std::string set_key;
     std::string set_value;
+    std::string get_key;
 
     // cleanup
     bool cleanup_dry_run = false;
@@ -1210,8 +1211,30 @@ void Cli::M::setup() {
     set->add_option("value", set_value, "Setting value")->required();
     set->callback([this] {
         auto cfg = Config::detect();
-        set_setting(cfg.den_home, set_key, set_value);
+        try {
+            set_setting(cfg.den_home, set_key, set_value);
+        } catch (const SettingsFileError& e) {
+            throw UserError(e.what());
+        }
         std::cout << set_key << " = " << set_value << "\n";
+    });
+
+    // --- get ---
+    // Exit status: 0 = set (value on stdout), 1 = not set, 2 = config.json
+    // unreadable/invalid or bad key. install.sh relies on this split.
+    auto* get = app.add_subcommand("get", "Print a configuration value");
+    get->add_option("key", get_key, "Setting key")->required();
+    get->callback([this] {
+        auto cfg = Config::detect();
+        try {
+            std::cout << get_setting(cfg.den_home, get_key) << "\n";
+        } catch (const SettingNotFound&) {
+            std::cerr << "den: " << get_key << " is not set\n";
+            throw CLI::RuntimeError(1);
+        } catch (const std::exception& e) {
+            std::cerr << "error: " << e.what() << "\n";
+            throw CLI::RuntimeError(2);
+        }
     });
 
     // --- settings ---

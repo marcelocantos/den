@@ -51,7 +51,11 @@ verifies the release checksum and installs `den` into `~/.den/bin`
 candidates included (`DEN_VERSION=0.15.0-rc.1`). If the den prefix
 (`~/.den/prefix`, or `DEN_PREFIX`) can't be created without `sudo`, it prints
 the `sudo mkdir`/`chown` commands and, when run interactively, offers to run
-them. An installed den moves to another release with
+them. A non-default `DEN_PREFIX` is recorded as `store.prefix` in
+`$DEN_HOME/config.json` (via `den set`, keeping every other setting), so it
+need not stay exported; if `config.json` already names a different
+`store.prefix`, the installer leaves it and says so (`DEN_PREFIX_OVERWRITE=1`
+replaces it). An installed den moves to another release with
 `den self-update --version X.Y.Z[-rc.N]`.
 
 Or with Homebrew (macOS, Apple Silicon):
@@ -181,6 +185,7 @@ All settings in `~/.den/config.json`, managed via `den set`:
 den set daemon.auto_download false       # disable background downloads
 den set daemon.auto_upgrade true         # auto-apply upgrades
 den set daemon.upgrade_window "3:00-5:00"  # when to apply
+den get store.prefix                     # print one setting (exit 1 if unset)
 den settings                             # show all settings
 ```
 

@@ -167,6 +167,9 @@ file(GLOB SCRIPT_TESTS ${CMAKE_SOURCE_DIR}/tests/scripts/test_*.sh)
 foreach(script_test ${SCRIPT_TESTS})
     get_filename_component(script_test_name "${script_test}" NAME_WE)
     add_test(NAME script_${script_test_name} COMMAND sh "${script_test}")
+    # Lets test_install_sh.sh exercise the real den's config.json handling.
+    set_tests_properties(script_${script_test_name} PROPERTIES
+        ENVIRONMENT "DEN_TEST_BIN=$<TARGET_FILE:den>")
 endforeach()
 
 # --- Install ---
