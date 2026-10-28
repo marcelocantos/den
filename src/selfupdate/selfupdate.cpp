@@ -166,6 +166,37 @@ void refresh_packaged_replica(const fs::path& extracted_root, const fs::path& ex
     }
 }
 
+void update_installed_tag_record(const fs::path& exe, const std::string& tag) {
+    auto record = (exe.parent_path() / ".." / "share" / "den" / "installed-tag").lexically_normal();
+    std::error_code ec;
+    if (!fs::is_regular_file(record, ec)) {
+        return;
+    }
+    std::string sha;
+    try {
+        sha = hash_file(exe);
+    } catch (const std::exception& e) {
+        SPDLOG_WARN("could not hash {} for {}: {}", exe.string(), record.string(), e.what());
+        return;
+    }
+    auto staging = record;
+    staging += ".new";
+    {
+        std::ofstream out(staging, std::ios::binary | std::ios::trunc);
+        out << tag << "\nsha256 " << sha << "\n";
+        if (!out) {
+            fs::remove(staging, ec);
+            SPDLOG_WARN("could not update {}", record.string());
+            return;
+        }
+    }
+    fs::rename(staging, record, ec);
+    if (ec) {
+        fs::remove(staging, ec);
+        SPDLOG_WARN("could not update {}", record.string());
+    }
+}
+
 std::string normalize_release_tag(const std::string& version) {
     static const std::regex re(R"(^v?([0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?)$)");
     std::smatch m;
@@ -364,7 +395,12 @@ bool apply_update(const UpdateInfo& info, const Config& cfg, bool force) {
     }
 
     const bool same_version = is_same_version_request(info, DEN_VERSION);
-    if (!install_update_tarball(tarball_path, exe, same_version && !force)) {
+    const std::string installed_tag = info.tag.empty() ? "v" + info.latest_version : info.tag;
+    const bool replaced = install_update_tarball(tarball_path, exe, same_version && !force);
+    // Either way the bytes at exe are now exactly installed_tag's: record it
+    // for install.sh (`den --version` omits -rc.N).
+    update_installed_tag_record(exe, installed_tag);
+    if (!replaced) {
         std::cout << "den " << (info.tag.empty() ? info.latest_version : info.tag)
                   << " is already installed (its binary is identical to " << exe.string()
                   << "); nothing to do. Use --force to reinstall it and restart the daemon.\n";

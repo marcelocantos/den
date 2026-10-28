@@ -112,4 +112,13 @@ bool install_update_tarball(const std::filesystem::path& tarball, const std::fil
 void refresh_packaged_replica(const std::filesystem::path& extracted_root,
                               const std::filesystem::path& exe);
 
+/// Keep install.sh's installed-tag record (<exe_dir>/../share/den/
+/// installed-tag) in step with a binary self-update just put at `exe`:
+/// rewrite it as `<tag>\nsha256 <hex of exe>\n`, so install.sh still knows
+/// the exact release (`den --version` omits -rc.N). A missing record is not
+/// created (den was not installed by install.sh). Best effort: a failure is
+/// logged, and install.sh then sees the sha mismatch and treats the record
+/// as stale rather than trusting it.
+void update_installed_tag_record(const std::filesystem::path& exe, const std::string& tag);
+
 } // namespace den
