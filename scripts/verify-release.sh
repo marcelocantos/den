@@ -378,6 +378,41 @@ s_cleanup() {
 # the step (which runs in a subshell) dies part-way.
 LA_LABEL="den.verify-release.$$"
 LA_PLIST="$VR_ROOT/$LA_LABEL.plist"
+# launchctl with a scrubbed environment: nothing from this session
+# (SSH_AUTH_SOCK, SSH_*, TERM, shell variables) can reach the agent, which gets
+# only its plist's EnvironmentVariables. Mirrors den's own restart path
+# (src/selfupdate/launchd_restart.h).
+lctl() { /usr/bin/env -i HOME="$HOME" USER="${USER:-$(id -un)}" PATH=/usr/bin:/bin:/usr/sbin:/sbin launchctl "$@"; }
+la_pid() { lctl print "gui/$(id -u)/$LA_LABEL" 2>/dev/null | sed -n 's/^[[:space:]]*pid = //p' | head -1; }
+# Restart the agent the way den does: bootout gui/<uid>/<label>, then
+# bootstrap gui/<uid> <plist>, then a new pid within 15s, tolerating exactly
+# one codesigning spawn failure (kickstart once). STOPGAP: relies on observed
+# macOS 27 behaviour (bootstrap drops the recorded launch constraint), not a
+# guarantee; the real fix is signing den with a team identity.
+la_restart() {
+    local uid old=$1 i=0 t=0 pid st cs=0 runs seen=
+    uid=$(id -u)
+    lctl bootout "gui/$uid/$LA_LABEL" >/dev/null 2>&1 || true
+    until lctl bootstrap "gui/$uid" "$LA_PLIST"; do
+        i=$((i + 1)); [ "$i" -ge 3 ] && { echo "bootstrap failed"; return 1; }
+        sleep 1
+    done
+    while [ "$t" -lt 30 ]; do
+        st=$(lctl print "gui/$uid/$LA_LABEL" 2>/dev/null)
+        pid=$(echo "$st" | sed -n 's/^[[:space:]]*pid = //p' | head -1)
+        if [ -n "$pid" ] && [ "$pid" != "$old" ]; then
+            echo "restarted: pid $old -> $pid (codesign failures tolerated: $cs)"; return 0
+        fi
+        runs=$(echo "$st" | sed -n 's/^[[:space:]]*runs = //p' | head -1)
+        if [ -z "$pid" ] && echo "$st" | grep -qi 'exit.*codesign' && [ "$runs" != "$seen" ]; then
+            seen=$runs; cs=$((cs + 1))
+            [ "$cs" -le 1 ] || { echo "$st"; echo "codesigning spawn failure twice"; return 1; }
+            lctl kickstart "gui/$uid/$LA_LABEL" || true
+        fi
+        sleep 0.5; t=$((t + 1))
+    done
+    echo "$st"; echo "no new pid within 15s"; return 1
+}
 la_teardown() {
     [ "$(uname)" = Darwin ] || return 0
     launchctl bootout "gui/$(id -u)/$LA_LABEL" >/dev/null 2>&1 || true
@@ -392,7 +427,10 @@ s_launchd() {
     [ "$(uname)" = Darwin ] || { echo "launchd step is macOS-only"; return 1; }
     local stub=$VR_ROOT/stub-bin src=$VR_HOME/Library/LaunchAgents/dev.den.daemon.plist
     mkdir -p "$stub"
-    printf '#!/bin/sh\necho "launchctl $*" >>"%s/launchctl.log"\n' "$VR_ROOT" >"$stub/launchctl"
+    # The stub also answers `print` with a pid, so den's restart confirmation
+    # succeeds at once instead of waiting out its timeout (its own pid: new
+    # on every call, so never the "old" one).
+    printf '#!/bin/sh\necho "launchctl $*" >>"%s/launchctl.log"\n[ "$1" = print ] && printf "x = {\\n\\tpid = %%s\\n}\\n" $$\nexit 0\n' "$VR_ROOT" >"$stub/launchctl"
     chmod +x "$stub/launchctl"
     PATH="$stub:$PATH" den daemon install
     [ -f "$src" ] || { echo "den daemon install wrote no $src"; return 1; }
@@ -420,7 +458,7 @@ s_launchd() {
     done
     # No Homebrew on the agent's PATH either.
     plutil -replace EnvironmentVariables.PATH -string "/usr/bin:/bin:/usr/sbin:/sbin" "$LA_PLIST"
-    launchctl bootstrap "gui/$uid" "$LA_PLIST"
+    lctl bootstrap "gui/$uid" "$LA_PLIST"
     echo "bootstrapped gui/$uid/$LA_LABEL"
 
     sleep 3
@@ -440,6 +478,13 @@ s_launchd() {
     cat "$VR_DEN_HOME/daemon.log"
     grep -q "daemon started (pid $pid0, den $VERSION)" "$VR_DEN_HOME/daemon.log" \
         || { echo "daemon.log lacks start line for pid $pid0 / den $VERSION"; return 1; }
+    # Restart onto the same binary as den self-update does, from a session
+    # whose environment must not leak into the agent.
+    SSH_AUTH_SOCK=/tmp/vr-leak.sock TERM=vr-leak VR_LEAK=1 la_restart "$pid0" || return 1
+    pid=$(la_pid)
+    if ps -E -p "$pid" -o command= 2>/dev/null | grep -Eq 'SSH_AUTH_SOCK=/tmp/vr-leak|TERM=vr-leak|VR_LEAK='; then
+        echo "caller session environment leaked into the agent (pid $pid)"; return 1
+    fi
     la_teardown
     ! launchctl print "gui/$uid/$LA_LABEL" >/dev/null 2>&1
 }
