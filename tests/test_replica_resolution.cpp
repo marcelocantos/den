@@ -213,16 +213,19 @@ TEST_SUITE("replica_resolution") {
         CHECK(report.replica_source == src.describe());
     }
 
-    TEST_CASE("self-update refreshes an installed share copy, never creates one") {
+    TEST_CASE("self-update installs the shipped share copy, creating it when missing") {
         ReplTmp t;
         auto extracted = t.path / "extract";
         write(extracted / "share" / "den" / "known_hashes.json", replica_doc("new", kSha));
         auto exe = fake_exe(t.path / "home" / ".den" / "bin" / "den");
         auto installed = t.path / "home" / ".den" / "share" / "den" / "known_hashes.json";
 
+        // No installed copy (an install that predates the shipped replica):
+        // self-update creates one.
         refresh_packaged_replica(extracted, exe);
-        CHECK_FALSE(fs::exists(installed));
+        CHECK(slurp(installed) == replica_doc("new", kSha));
 
+        // An existing (stale) copy is refreshed.
         write(installed, replica_doc("old", kSha));
         refresh_packaged_replica(extracted, exe);
         CHECK(slurp(installed) == replica_doc("new", kSha));

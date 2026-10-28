@@ -55,6 +55,39 @@ Login, key-based auth).
 
 **Expected output**: `RESULT: PASS` with zero FAIL lines.
 
+### Verify the RC with verify-release
+
+`make verify-release RELEASE_TAG=vX.Y.0-rc.N` runs the end-to-end battery
+against the RC exactly as a user gets it: `install.sh` installs the tag
+(`DEN_VERSION=vX.Y.0-rc.N`, which fetches the RC's GA-named
+`den-X.Y.0-<os>-<arch>.tar.gz`) into a scratch root. Homebrew is not used or
+needed:
+
+- `HOME`, `DEN_HOME`, `DEN_PREFIX` and `DEN_INSTALL_DIR` all live under a
+  fresh `mktemp -d` root (or `VR_ROOT`); a scratch path under `/opt/homebrew`,
+  `/usr/local`, Linuxbrew, `$HOMEBREW_PREFIX` or the real home is refused.
+- `/opt/homebrew` and Linuxbrew directories are dropped from `PATH`, and
+  every `DYLD_*` variable is unset, for install.sh and den alike.
+
+Steps (`VR_ONLY` / `VR_SKIP` pick a subset):
+
+| Step | Checks |
+|---|---|
+| `install` | install.sh installs the tag into the scratch `DEN_INSTALL_DIR` (never skipped) |
+| `version` | `den --version` prints `X.Y.0` (an RC reports its GA version) |
+| `isolation` | `den config` keeps `den_home`, `store` and `prefix` under the scratch root (never skipped) |
+| `links` | `scripts/check-links.sh`: the binary links only base-OS libraries |
+| `checksum` | the release tarball matches its `.sha256` and `den-X.Y.0-checksums.txt`, and its `den` and trust replica are the bytes install.sh installed |
+| `self-update` | install the previous GA (`VR_PREV_TAG`, default: the newest earlier `vX.Y.Z` tag) with install.sh, then `den self-update --version <tag>`; the result must match the `install` bytes, replica included. SKIP when that GA predates `self-update --version` and the tag isn't Latest |
+| `empty-store` | `den list` in a fresh store reports no packages |
+| `update` … `cleanup` | index update, bottle install, opt link, trust replica, pin, upgrade, dependents, tap, font and app casks (macOS), uninstall, doctor, cleanup |
+| `launchd` | macOS: `den daemon install` writes `dev.den.daemon.plist` into the scratch `~/Library/LaunchAgents` (its own `launchctl` load is stubbed so the real agent is untouched); that plist is checked, relabelled `den.verify-release.<pid>`, loaded, watched for `VR_LAUNCHD_SECS` and removed |
+
+A failed `install`, `version` or `isolation` stops the run before den writes
+anything; any other failure is reported and the run carries on. The scratch
+root is removed on success and kept (path printed) on failure or with
+`VR_KEEP=1`. See the header of `scripts/verify-release.sh` for every knob.
+
 ### If the macOS harness fails
 
 1. Do not promote.
@@ -143,49 +176,8 @@ the RC's own darwin-aarch64 tarball (nothing is recompiled):
 - `den.rb` on the RC release is a complete formula for that RC with its
   `bottle do` block. To try it, put it in a local tap
   (`brew tap-new <you>/den-rc`, then copy it to that tap's `Formula/`),
-  `brew install <you>/den-rc/den`, and run
-  `make verify-release VR_FORMULA=<you>/den-rc/den RELEASE_TAG=vX.Y.0`.
-  The `poured` step fails unless brew poured the bottle.
-
-### Testing an RC with verify-release
-
-`VR_FORMULA` picks the formula verify-release checks. It defaults to
-`marcelocantos/tap/den` (the GA tap); for an RC, point it at the RC tap, e.g.
-`VR_FORMULA=marcelocantos/den-rc/den` (or your own `<you>/den-rc/den`):
-
-```sh
-make verify-release VR_FORMULA=marcelocantos/den-rc/den RELEASE_TAG=vX.Y.0
-```
-
-Homebrew 7 refuses to load a formula from a third-party tap it has not been
-told to trust (`Refusing to load formula ... from untrusted tap ...`), which
-breaks `brew test`, `brew info` and `brew --prefix <formula>`. So on brew 7
-and later, before anything else touches the formula, verify-release runs
-`brew trust --formula "$VR_FORMULA"` for that one formula (never the whole
-tap) and reports it as the `brew-trust` step. If the trust fails, or
-`VR_BREW_TRUST=0` and the formula is not already trusted, it stops with the
-`brew trust --formula ...` command to run. On brew older than 7, or for an
-official (homebrew/core) formula, nothing changes. Brew keeps its trust list
-under your `HOME` (`~/.homebrew/trust.json`, or
-`$XDG_CONFIG_HOME/homebrew/trust.json`), but verify-release runs brew under a
-scratch `HOME`. It therefore copies that trust store into the scratch `HOME`
-read-only (file 0400 in a 0500 directory), so `brew test` and the `poured`
-check see the trust while brew can't write to either trust store. `brew-trust`
-then confirms that brew under the scratch `HOME` loads the formula, before
-`brew-test` runs.
-
-Only a failed `version` (wrong binary) or `isolation` (den's config escapes
-the scratch root) stops the run before den writes anything. A `brew-trust`,
-`brew-test` or other step failure is reported and the run carries on.
-
-`brew-test` runs `brew test` on the formula. On macOS 27, brew 7 refuses
-`brew test` (and any source build) for every formula unless Xcode/CLT 27 is
-installed. Only when brew refuses for that reason (`Your Xcode (...) is too
-outdated` or `Your Command Line Tools are too outdated`) is `brew-test`
-reported as `SKIP` with brew's message; any other `brew test` failure is a
-`FAIL`. The separate `formula-test` step runs the formula's own test commands
-directly (`den --version` and `den list` against a scratch
-`DEN_HOME`/`DEN_PREFIX`), so the formula's checks still run when brew won't.
+  then `brew install <you>/den-rc/den`. (verify-release no longer goes
+  through Homebrew; see [Verify the RC](#verify-the-rc-with-verify-release).)
 
 Homebrew only pours a bottle whose tag it can name. A brew older than 6.0
 has no symbol for macOS 27, so on macOS 27 it pours no bottles at all (not
@@ -200,7 +192,7 @@ at the GA release.
 ## How to abort
 
 Simply don't promote. The RC prerelease is harmless — `install.sh` ignores
-prereleases. If you want to free the tag and clean up the release list:
+prereleases unless `DEN_VERSION` names one. If you want to free the tag and clean up the release list:
 
 ```sh
 gh release delete v0.12.0-rc.1 --cleanup-tag

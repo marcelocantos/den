@@ -270,6 +270,7 @@ struct Cli::M {
 
     // self-update
     bool selfupdate_check = false;
+    std::string selfupdate_version;
 
     // run
     std::vector<std::string> run_argv;
@@ -1694,11 +1695,29 @@ void Cli::M::setup() {
     auto* selfupdate = app.add_subcommand("self-update", "Update den to the latest version");
     selfupdate->add_flag("--check,--dry-run", selfupdate_check,
                          "Print the latest available version without downloading or applying it");
+    selfupdate->add_option("--version", selfupdate_version,
+                           "Install this release instead of the latest (e.g. 0.15.0, "
+                           "v0.15.0-rc.1); release candidates and downgrades are allowed");
     selfupdate->callback([this] {
+        // Validate an explicit version before anything touches the network.
+        const std::string wanted_tag =
+            selfupdate_version.empty() ? std::string() : normalize_release_tag(selfupdate_version);
         auto cfg = Config::detect();
         // A brew-installed den is upgraded by brew, never in place.
         const auto exe = running_exe_path();
         const bool brew_managed = exe && brew_keg_for_exe(*exe).has_value();
+        if (!wanted_tag.empty()) {
+            if (brew_managed && !selfupdate_check)
+                refuse_self_update_if_brew_managed(*exe);
+            auto info = fetch_release_for_version(cfg, wanted_tag);
+            if (selfupdate_check) {
+                std::cout << "den " << info.tag << " is available (current: " << DEN_VERSION
+                          << ").\n";
+                return;
+            }
+            apply_update(info, cfg);
+            return;
+        }
         if (selfupdate_check) {
             auto latest = resolve_latest_version();
             if (latest.empty()) {
