@@ -1,20 +1,25 @@
 # den trust model (🎯T64 / 🎯T42 / 🎯T44)
 
-den's bottle-integrity guarantee does not rest on a single party. Every
-install cross-checks a bottle's SHA256 against **two independent hash
-sources**, each rooted in a different origin/CDN:
+Every install cross-checks a bottle's SHA256 against **two hash sources**:
 
-| Source | Origin | Role |
-|--------|--------|------|
-| A. Homebrew API | `formulae.brew.sh` | The hash baked into den's package index. |
-| B. den replica | `raw.githubusercontent.com` (`data/known_hashes.json`) | An independent, GHCR-verified copy maintained by den. |
+| Source | Where den reads it | Role |
+|--------|--------------------|------|
+| A. Homebrew API | `formulae.brew.sh`, via den's package index | The hash Homebrew publishes for the bottle. |
+| B. den replica | the local snapshot shipped with den (`data/known_hashes.json` → `share/den/known_hashes.json`, also compiled into the binary), or `~/.den/trust/known_hashes.json` | A GHCR-confirmed copy maintained in den's repo. |
 
-`raw.githubusercontent.com` is a separate origin and CDN from
-`formulae.brew.sh`. To swap a bottle undetected an attacker must compromise
-**both**: forge a matching SHA256 in Homebrew's API *and* land a matching
-forged hash in den's GitHub repo. The latter is gated by CI
-(`.github/workflows/replica-verify.yml`), which re-downloads each changed
-bottle from GHCR and recomputes its digest before the hash is ever committed.
+Nothing is fetched at install time: source B is always the local snapshot.
+It reaches users with each den release (or a user-placed override), not from
+`raw.githubusercontent.com` at install time.
+
+**What source B is, and is not.** Replica entries are seeded by CI
+(`.github/workflows/replica-verify.yml`) from formulae.brew.sh's own hashes;
+each new or changed hash is confirmed by pulling that bottle from GHCR and
+recomputing its digest before it is committed. So B is an *earlier,
+GHCR-confirmed copy of A*, not an independent root of trust. It detects
+Homebrew's API changing a covered bottle's hash after the snapshot was taken
+(an attacker would also have to land the forged hash in den's repo and a den
+release), but it cannot detect a bottle that was already bad when it was
+seeded, and it covers only the bottles in the snapshot.
 
 ## Install-time cross-check
 
@@ -25,27 +30,41 @@ extraction:
 | A vs B | Decision | Behaviour |
 |--------|----------|-----------|
 | agree | `Proceed` | install continues |
-| disagree (both reachable) | `Refuse` | throws `UserError`, no extraction |
-| one source absent | `WarnProceed` | `SPDLOG_WARN`, install continues (degraded trust) |
-| neither reachable | `Refuse` | cannot verify integrity |
+| disagree | `Refuse` | throws `UserError`, no extraction |
+| snapshot exists but is unreadable/corrupt | `Refuse` | fails closed: "replica snapshot … is unreadable" |
+| snapshot has no entry for the bottle | `WarnProceed` | "no replica entry for this bottle"; recorded as a degraded install |
+| no snapshot at all | `WarnProceed` | "no replica snapshot available"; recorded as a degraded install |
+| neither source has a hash | `Refuse` | cannot verify integrity |
 
-Source B is read from the bundled snapshot (resolved via the candidate list in
-`local_replica_path()`); the hot install path never blocks on a live network
-fetch. A corrupt snapshot fails closed — `parse_replica_document()` rejects
-malformed JSON and any digest that is not 64 lowercase hex characters.
+Source B is resolved by `locate_local_replica()` (den_home override, then the
+`share/den` beside the executable, then the build tree's `data/`, then the
+embedded copy). `parse_replica_document()` rejects malformed JSON and any
+digest that is not 64 lowercase hex characters; such a snapshot refuses
+installs rather than being treated as absent, so corrupting the file cannot
+switch the cross-check off.
+
+Every `WarnProceed` install that pours is recorded in
+`~/.den/trust/degraded_installs.json` (name, version, reason, bottle tag,
+keg). Re-pouring the same version with both sources agreeing clears it, and
+kegs no longer on disk are not counted.
 
 ## Observability — `den doctor`
 
 `den doctor` prints a trust block (`src/doctor/trust_checks.*`):
 
 ```
-[trust] sources: formulae.brew.sh + den-replica-cdn
+[trust] sources: formulae.brew.sh + den-replica-snapshot
 [trust] replica: active, entries: 12, last sync: bundled-with-den-0.12.0
+[trust] replica source: /opt/homebrew/share/den/known_hashes.json
+[trust] degraded installs: 2 (no-replica-entry: 2)
 [trust] layers: cross-source-hash-agreement
 ```
 
-It also emits findings when the replica is inactive/degraded or when no
-advanced trust layer is wired (🎯T44).
+Findings: an **error** when the snapshot is unreadable (installs are refused
+until it is repaired or removed), a warning when there is no snapshot, a
+warning listing kegs installed on one hash source, and a warning when no
+advanced trust layer is wired (🎯T44). `den daemon status` prints the same
+degraded-install count (`Degraded-trust installs: …`).
 
 ## The replica snapshot (`data/known_hashes.json`)
 

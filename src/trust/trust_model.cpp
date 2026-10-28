@@ -5,7 +5,6 @@
 
 #include "../core/error.h"
 #include "../core/self_exe.h"
-#include "../download/http.h"
 #include "../download/sha256.h"
 
 #include <nlohmann/json.hpp>
@@ -18,12 +17,6 @@
 namespace den {
 
 namespace {
-
-// den's replica snapshot lives in the source repo and is served from
-// raw.githubusercontent.com — a SEPARATE CDN/origin from formulae.brew.sh.
-// This is the second independent root of trust required by 🎯T42.
-constexpr const char* kReplicaUrl =
-    "https://raw.githubusercontent.com/marcelocantos/den/master/data/known_hashes.json";
 
 // A SHA256 hex digest is exactly 64 lowercase hex characters.  We validate
 // every hash crossing the trust boundary (replica file, network response)
@@ -44,14 +37,38 @@ bool is_sha256_hex(const std::string& s) {
 
 } // namespace
 
-TrustCheckResult cross_check_hashes(const MaybeHash& homebrew_hash, const MaybeHash& replica_hash) {
-    // Neither source reachable: cannot verify anything.
-    if (!homebrew_hash && !replica_hash) {
+const char* replica_status_tag(ReplicaLookupStatus status) {
+    switch (status) {
+    case ReplicaLookupStatus::Found:
+        return "found";
+    case ReplicaLookupStatus::NoEntry:
+        return "no-replica-entry";
+    case ReplicaLookupStatus::Inactive:
+        return "replica-inactive";
+    case ReplicaLookupStatus::Unreadable:
+        return "replica-unreadable";
+    }
+    return "unknown";
+}
+
+TrustCheckResult cross_check_hashes(const MaybeHash& homebrew_hash, const ReplicaAnswer& replica) {
+    // A snapshot that exists but cannot be read is not "no replica": treating
+    // it that way would let anyone who can corrupt the file switch the
+    // cross-check off. Fail closed.
+    if (replica.status == ReplicaLookupStatus::Unreadable) {
         return {TrustDecision::Refuse,
-                "both hash sources unreachable — cannot verify bottle integrity"};
+                "replica snapshot " + replica.source + " is unreadable (" + replica.error +
+                    ") — refusing rather than installing on a single hash source; repair or "
+                    "remove it (or reinstall den)"};
     }
 
-    // Both reachable: require agreement.
+    const MaybeHash& replica_hash = replica.hash;
+    if (!homebrew_hash && !replica_hash) {
+        return {TrustDecision::Refuse,
+                "no hash from formulae.brew.sh and no replica entry — cannot verify bottle "
+                "integrity"};
+    }
+
     if (homebrew_hash && replica_hash) {
         if (*homebrew_hash == *replica_hash) {
             return {TrustDecision::Proceed, "hashes agree"};
@@ -60,10 +77,27 @@ TrustCheckResult cross_check_hashes(const MaybeHash& homebrew_hash, const MaybeH
                 "hash mismatch: formulae.brew.sh=" + *homebrew_hash + " replica=" + *replica_hash};
     }
 
-    // Exactly one reachable: degraded-trust fallback.
+    if (!homebrew_hash) {
+        return {TrustDecision::WarnProceed,
+                "formulae.brew.sh gave no hash — using the replica hash only"};
+    }
+    if (replica.status == ReplicaLookupStatus::Inactive) {
+        return {TrustDecision::WarnProceed,
+                "no replica snapshot available — using the Homebrew hash only"};
+    }
     return {TrustDecision::WarnProceed,
-            homebrew_hash ? "replica unreachable — using Homebrew hash only"
-                          : "formulae.brew.sh unreachable — using replica hash only"};
+            "no replica entry for this bottle" +
+                (replica.source.empty() ? std::string()
+                                        : " in " + replica.source + " (" +
+                                              std::to_string(replica.entries) + " entries)") +
+                " — using the Homebrew hash only"};
+}
+
+TrustCheckResult cross_check_hashes(const MaybeHash& homebrew_hash, const MaybeHash& replica_hash) {
+    ReplicaAnswer answer;
+    answer.status = replica_hash ? ReplicaLookupStatus::Found : ReplicaLookupStatus::NoEntry;
+    answer.hash = replica_hash;
+    return cross_check_hashes(homebrew_hash, answer);
 }
 
 std::string replica_key(const std::string& formula, const std::string& version,
@@ -213,21 +247,42 @@ MaybeHash replica_lookup(const std::map<std::string, std::string>& replica,
     return it->second;
 }
 
-std::optional<std::map<std::string, std::string>> fetch_replica_hashes() {
-    std::string text;
-    try {
-        SPDLOG_INFO("fetching trust replica from {}", kReplicaUrl);
-        text = fetch_url(kReplicaUrl);
-    } catch (const std::exception& e) {
-        SPDLOG_WARN("trust replica fetch failed: {}", e.what());
-        return std::nullopt;
+ReplicaAnswer lookup_replica(const ReplicaSource& source, std::string_view embedded,
+                             const std::string& formula, const std::string& version,
+                             const std::string& platform_tag) {
+    ReplicaAnswer answer;
+    answer.source = source.describe();
+    if (source.kind == ReplicaSource::Kind::None) {
+        answer.status = ReplicaLookupStatus::Inactive;
+        return answer;
     }
+    std::map<std::string, std::string> replica;
     try {
-        return parse_replica_document(text);
+        replica = load_replica(source, embedded);
     } catch (const std::exception& e) {
-        SPDLOG_WARN("trust replica parse failed: {}", e.what());
-        return std::nullopt;
+        answer.status = ReplicaLookupStatus::Unreadable;
+        answer.error = e.what();
+        return answer;
     }
+    answer.entries = replica.size();
+    answer.hash = replica_lookup(replica, formula, version, platform_tag);
+    answer.status = answer.hash ? ReplicaLookupStatus::Found : ReplicaLookupStatus::NoEntry;
+    return answer;
+}
+
+ReplicaAnswer lookup_local_replica(const Config& config, const std::string& formula,
+                                   const std::string& version, const std::string& platform_tag) {
+    ReplicaSource source;
+    try {
+        source = locate_local_replica(config);
+    } catch (const std::exception& e) {
+        ReplicaAnswer answer;
+        answer.status = ReplicaLookupStatus::Unreadable;
+        answer.error = e.what();
+        answer.source = "unknown";
+        return answer;
+    }
+    return lookup_replica(source, embedded_replica_json(), formula, version, platform_tag);
 }
 
 DiffVerifyOutcome verify_diff_entry(const ReplicaDiffEntry& entry, const fs::path& bottle_path) {

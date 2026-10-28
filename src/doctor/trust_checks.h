@@ -14,6 +14,7 @@
 //   • Which advanced trust layers (🎯T44) are wired in.
 
 #include "../core/config.h"
+#include "../trust/degraded_installs.h"
 #include "doctor.h"
 
 #include <optional>
@@ -24,9 +25,9 @@ namespace den {
 
 /// State of the den replica hash source.
 enum class ReplicaStatus {
-    Active,   // replica reachable / snapshot present and in sync
-    Degraded, // replica unreachable; falling back to Homebrew-only
-    Unknown,  // never synced
+    Active,     // snapshot present and readable
+    Unreadable, // a snapshot exists but cannot be read: installs are refused
+    Unknown,    // no snapshot at all (installs degrade to Homebrew-only)
 };
 
 /// A snapshot of the trust model's current configuration and health.
@@ -38,6 +39,8 @@ struct TrustReport {
     std::vector<std::string> active_advanced_layers;      // 🎯T44 layers
     size_t replica_entry_count = 0;                       // entries in the snapshot
     std::string replica_source = "none"; // ReplicaSource::describe(): path or "embedded snapshot"
+    std::optional<std::string> replica_error; // why an Unreadable snapshot could not be read
+    DegradedInstallSummary degraded_installs; // kegs installed on a single hash source
 };
 
 /// Inspect the live configuration and build a trust report.

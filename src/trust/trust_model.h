@@ -5,23 +5,29 @@
 
 // 🎯T64 / 🎯T42 / 🎯T44: independently-verifiable trust model.
 //
-// den consults TWO independent hash sources on every install:
+// den consults TWO hash sources on every install:
 //
 //   Source A: formulae.brew.sh / Homebrew's API   (the bottle metadata index)
-//   Source B: den's own replica on a SEPARATE CDN  (raw.githubusercontent.com)
+//   Source B: den's replica snapshot (data/known_hashes.json), shipped with
+//             the den release (share/den/known_hashes.json or the copy
+//             compiled into the binary), or a user override in
+//             <den_home>/trust/known_hashes.json.
 //
-// raw.githubusercontent.com is a different origin and CDN from
-// formulae.brew.sh, so an attacker must compromise BOTH to swap a bottle:
-// they would have to forge a matching SHA256 in Homebrew's API *and* land a
-// matching forged hash in den's GitHub repo (which is diff-verified against
-// GHCR by a CI pipeline before it is committed — see verify_diff_entry).
+// Nothing is fetched at install time: B is the LOCAL snapshot. Its entries
+// are seeded by CI (replica-verify.yml) from formulae.brew.sh's own hashes,
+// each confirmed by pulling that bottle from GHCR, so B is an earlier,
+// GHCR-confirmed copy of A rather than an independent root: it catches A
+// changing a hash after the snapshot was taken, not a bottle that was bad
+// when it was seeded.
 //
 // The cross-check decision table:
-//   A == B                 → Proceed     (both sources agree)
-//   A != B (both reachable) → Refuse      (mismatch — hard error)
-//   A reachable, B absent   → WarnProceed (degraded trust)
-//   A absent, B reachable   → WarnProceed (degraded trust)
-//   neither reachable       → Refuse      (cannot verify integrity)
+//   A == B                     → Proceed     (both sources agree)
+//   A != B                     → Refuse      (mismatch — hard error)
+//   A present, no replica entry → WarnProceed (degraded: bottle not covered)
+//   A present, no snapshot      → WarnProceed (degraded: replica inactive)
+//   snapshot unreadable/corrupt → Refuse      (fail closed)
+//   A absent, B present         → WarnProceed (degraded trust)
+//   neither                     → Refuse      (cannot verify integrity)
 
 #include "../core/config.h"
 
@@ -34,6 +40,8 @@
 namespace den {
 
 namespace fs = std::filesystem;
+
+struct ReplicaSource;
 
 /// Result of a cross-source hash check.
 enum class TrustDecision {
@@ -50,11 +58,47 @@ struct TrustCheckResult {
 /// Source of a bottle hash.  nullopt means "unreachable / unavailable".
 using MaybeHash = std::optional<std::string>;
 
+/// Why the replica did (or did not) yield a hash for a bottle.
+enum class ReplicaLookupStatus {
+    Found,      ///< the snapshot has an entry for this bottle
+    NoEntry,    ///< the snapshot loaded but does not cover this bottle
+    Inactive,   ///< no snapshot at all (none on disk, none embedded)
+    Unreadable, ///< a snapshot exists but cannot be read or parsed
+};
+
+/// The replica's answer for one bottle.
+struct ReplicaAnswer {
+    ReplicaLookupStatus status = ReplicaLookupStatus::Inactive;
+    MaybeHash hash;     ///< set iff status == Found
+    std::string source; ///< ReplicaSource::describe() of the snapshot consulted
+    std::string error;  ///< set iff status == Unreadable
+    size_t entries = 0; ///< entries in the snapshot (0 unless it loaded)
+};
+
+/// Short machine-readable tag for a degraded reason ("no-replica-entry",
+/// "replica-inactive", "replica-unreadable", "homebrew-hash-missing").
+const char* replica_status_tag(ReplicaLookupStatus status);
+
 /// Pure cross-check logic, dependency-injected so it is testable without
 /// network access.  Callers supply the Homebrew-API hash (already known from
-/// the index) and the replica hash (from fetch_replica_hash / the local
-/// replica snapshot).  See the decision table above.
+/// the index) and the replica's answer.  See the decision table above. An
+/// Unreadable replica refuses (fail closed): a corrupted snapshot must not
+/// quietly turn every install into a single-source one.
+TrustCheckResult cross_check_hashes(const MaybeHash& homebrew_hash, const ReplicaAnswer& replica);
+
+/// Two-hash form: a missing replica hash is treated as NoEntry.
 TrustCheckResult cross_check_hashes(const MaybeHash& homebrew_hash, const MaybeHash& replica_hash);
+
+/// Look a bottle up in the local replica snapshot, reporting why there is no
+/// hash when there isn't one. Never throws: a corrupt snapshot comes back as
+/// Unreadable with the error text.
+ReplicaAnswer lookup_local_replica(const Config& config, const std::string& formula,
+                                   const std::string& version, const std::string& platform_tag);
+
+/// lookup_local_replica against an explicit source (testable).
+ReplicaAnswer lookup_replica(const ReplicaSource& source, std::string_view embedded,
+                             const std::string& formula, const std::string& version,
+                             const std::string& platform_tag);
 
 // ---------------------------------------------------------------------------
 // Replica snapshot (known_hashes.json).
@@ -126,13 +170,6 @@ MaybeHash replica_lookup(const std::map<std::string, std::string>& replica,
                          const std::string& formula, const std::string& version,
                          const std::string& platform_tag);
 
-/// Fetch the replica snapshot from den's separate CDN
-/// (raw.githubusercontent.com).  Returns nullopt on any network/parse failure
-/// so the caller can fall back to the local snapshot or degrade gracefully.
-/// This performs network I/O; install_one() prefers the bundled snapshot and
-/// only reaches for the network when explicitly enabled.
-std::optional<std::map<std::string, std::string>> fetch_replica_hashes();
-
 // ---------------------------------------------------------------------------
 // Diff-based replica verifier (used by the replica-verify CI pipeline).
 // ---------------------------------------------------------------------------
@@ -152,8 +189,9 @@ enum class DiffVerifyOutcome {
 };
 
 /// Verify a single diff entry against a bottle file on disk.  In production
-/// the file is freshly downloaded from GHCR, so an attacker must control both
-/// formulae.brew.sh AND den's replica CDN to pass this check.  A file that
+/// the file is freshly downloaded from GHCR, so a hash formulae.brew.sh claims
+/// is only committed to the replica if GHCR serves a bottle with that digest.
+/// A file that
 /// cannot be hashed is treated as a mismatch (fail closed).
 DiffVerifyOutcome verify_diff_entry(const ReplicaDiffEntry& entry, const fs::path& bottle_path);
 

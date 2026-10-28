@@ -12,8 +12,9 @@
 // Decision table:
 //   A == B                → install proceeds
 //   A != B (both reachable)→ install refused (mismatch error)
-//   A reachable, B absent  → warn and proceed (degraded trust)
-//   A absent, B reachable  → warn and proceed (degraded trust)
+//   A present, no B entry  → warn and proceed (degraded trust)
+//   A absent, B present    → warn and proceed (degraded trust)
+//   B snapshot unreadable  → install refused (fail closed; test_trust_honesty)
 //
 // 🎯T42 ships the replica + cross-check on the install path and 🎯T44 wires
 // the foundational advanced trust layer (cross-source hash agreement) into it.
@@ -56,7 +57,7 @@ TEST_SUITE("trust_model::cross_check_hashes") {
         CHECK(result.message.find(*replica_hash) != std::string::npos);
     }
 
-    TEST_CASE("fallback: replica unreachable → warn and proceed") {
+    TEST_CASE("fallback: no replica entry → warn and proceed") {
         const MaybeHash homebrew_hash =
             "abc123def456abc123def456abc123def456abc123def456abc123def456abcd";
         const MaybeHash replica_hash = std::nullopt;
@@ -77,7 +78,7 @@ TEST_SUITE("trust_model::cross_check_hashes") {
     TEST_CASE("neither source reachable → refuse (cannot verify)") {
         auto result = cross_check_hashes(std::nullopt, std::nullopt);
         CHECK(result.decision == TrustDecision::Refuse);
-        CHECK(result.message.find("unreachable") != std::string::npos);
+        CHECK(result.message.find("cannot verify") != std::string::npos);
     }
 
     // -----------------------------------------------------------------------
