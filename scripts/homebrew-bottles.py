@@ -14,6 +14,10 @@ nothing is recompiled). Subcommands:
   formula          print a complete den.rb (the RC formula asset)
   releaser-inputs  write formula_includes/install/test for
                    homebrew-releaser to $GITHUB_OUTPUT (GA formula)
+  tapper-config    write a tapper.yaml for one GA release: the static
+                   repo-root tapper.yaml plus this release's
+                   formula_includes (bottle block); used by
+                   scripts/release-tap.sh
 
 Homebrew facts this relies on (cited in the PR that introduced it):
   * For a non-GHCR root_url, brew downloads
@@ -386,6 +390,37 @@ def cmd_releaser_inputs(a):
         with open(a.github_output, "a") as out:
             emit(out)
 
+def yaml_block(key, text):
+    """A YAML literal block scalar (`key: |`) holding text verbatim."""
+    body = "".join("  " + l if l.strip() else "\n" for l in text.splitlines(True))
+    return f"{key}: |\n{body.rstrip()}\n"
+
+
+def cmd_tapper_config(a):
+    """tapper.yaml for one GA release.
+
+    tapper's formula_includes is static, but the bottle block's root_url
+    and sha256s change every release, so the per-release config is the
+    committed tapper.yaml plus a freshly rendered formula_includes. The
+    committed install/test must match INSTALL/TEST here (the same strings
+    promote-rc fed homebrew-releaser), so the two cannot drift.
+    """
+    check_version(a.version)
+    with open(a.base) as fh:
+        base = fh.read()
+    if re.search(r"^formula_includes(_file)?:", base, re.M):
+        die(f"{a.base} must not set formula_includes; it is rendered per release")
+    for key, val in (("install", INSTALL), ("test", TEST)):
+        if yaml_block(key, val) not in base:
+            die(f"{a.base}: `{key}: |` block is out of sync with scripts/homebrew-bottles.py")
+    out = (base.rstrip() + "\n\n"
+           + f"# Rendered by scripts/homebrew-bottles.py tapper-config for {a.release_tag}.\n"
+           + yaml_block("formula_includes", formula_includes(a.version, a.release_tag, a.dir)))
+    os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
+    with open(a.out, "w") as fh:
+        fh.write(out)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -423,6 +458,14 @@ def main(argv=None):
     r.add_argument("--dir", required=True)
     r.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT"))
     r.set_defaults(fn=cmd_releaser_inputs)
+
+    t = sub.add_parser("tapper-config")
+    t.add_argument("--version", required=True)
+    t.add_argument("--release-tag", required=True)
+    t.add_argument("--dir", required=True)
+    t.add_argument("--base", required=True, help="the repo-root tapper.yaml")
+    t.add_argument("--out", required=True)
+    t.set_defaults(fn=cmd_tapper_config)
 
     a = p.parse_args(argv)
     a.fn(a)

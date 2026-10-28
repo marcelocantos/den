@@ -29,11 +29,35 @@ profile: cli
 ## Release
 
 homebrew_tap: disabled
+<!-- The tap is published by `make release-tap` after promote-rc (below), never by /release or a bare `tapper push`. -->
 
-den replaces Homebrew, so distributing den via a Homebrew tap is
-circular. Binaries ship via GitHub Releases and the `install.sh`
-installer. The `/release` skill honours this directive and skips all
-tap-related phases.
+The generic `/release` skill honours this directive and skips all of its
+own tap-related phases. den's release pipeline is its own: RCs are cut by
+`release-candidate.yml`, promoted to GA by `promote-rc.yml`, and binaries
+ship via GitHub Releases and the `install.sh` installer.
+
+den also publishes a bottled formula, `marcelocantos/tap/den`
+(`Formula/den.rb` in marcelocantos/homebrew-tap), but not from CI: there
+is no tap token in Actions. After `promote-rc.yml` succeeds, run on the
+dev Mac:
+
+```bash
+make release-tap RELEASE_TAG=vX.Y.Z                          # publish
+make release-tap RELEASE_TAG=vX.Y.Z RELEASE_TAP_FLAGS=--dry-run  # preview
+```
+
+`scripts/release-tap.sh` downloads the GA assets, checks them against
+the release checksums, re-runs `homebrew-bottles.py verify`, renders a
+per-release tapper config (`homebrew-bottles.py tapper-config`: the
+committed `tapper.yaml` plus this release's bottle block) and runs
+`tapper push`, then fetches the tap's `Formula/den.rb` back and fails
+unless it has this release's `bottle do` block (root_url and all four
+tags). Never run a bare `tapper push` from the repo root: the
+committed `tapper.yaml` has no bottle block, so it would publish a
+formula that builds from source on macOS. tapper takes the token from
+`$HOMEBREW_TAP_TOKEN`, then `$TAPPER_GITHUB_TOKEN`, then the keychain
+entry `tapper` / `marcelocantos/homebrew-tap` (the normal case; check with
+`tapper token status`/`verify`, renew with `tapper token import-op`).
 
 ## Architecture
 

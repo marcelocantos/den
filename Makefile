@@ -6,7 +6,7 @@
 BUILD_DIR := build
 CMAKE_FLAGS := -G Ninja -DCMAKE_BUILD_TYPE=Release
 
-.PHONY: bullseye configure build test format format-fix clean-tree harness-linux harness-macos soak-macos remote-check verify-release
+.PHONY: bullseye configure build test format format-fix clean-tree harness-linux harness-macos soak-macos remote-check verify-release release-tap
 
 bullseye: configure build test format clean-tree
 
@@ -70,3 +70,9 @@ build/den: build
 # see scripts/verify-release.sh for the full list.
 verify-release:
 	scripts/verify-release.sh
+
+# Publish Formula/den.rb to marcelocantos/homebrew-tap for a GA release
+# (default: the latest vX.Y.Z tag) via tapper on the dev Mac. Run after
+# promote-rc. RELEASE_TAP_FLAGS=--dry-run to preview.
+release-tap:
+	scripts/release-tap.sh $(RELEASE_TAG) $(RELEASE_TAP_FLAGS)
