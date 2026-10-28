@@ -11,6 +11,9 @@
 #   BREW               brew executable used for read-only lookups/`brew test` (default: brew)
 #   VR_FORMULA         formula name (default: marcelocantos/tap/den)
 #   VR_BREW_TEST       1 = run `brew test $VR_FORMULA` (default: 1 when DEN_BIN came from brew)
+#   VR_POURED          1 = require the formula to have been poured from a bottle
+#                      (default: 1 when DEN_BIN came from brew on macOS; Linux
+#                      has no bottles and installs from the release tarball)
 #   VR_ROOT            scratch root (default: mktemp -d /tmp/den-verify-release.XXXXXX)
 #   VR_HOME VR_DEN_HOME VR_PREFIX VR_APPDIR VR_FONTDIR VR_PKG_ROOT
 #                      individual scratch paths (default: under VR_ROOT)
@@ -31,7 +34,7 @@
 #                      none; a clean release needs no allowlist)
 #   VR_KEEP            1 = keep the scratch root (default: kept only on failure)
 #
-# Steps: version brew-test isolation update bottle opt-link trust pin upgrade
+# Steps: version brew-test isolation poured update bottle opt-link trust pin upgrade
 #        dependents tap font-cask app-cask uninstall doctor cleanup launchd
 set -uo pipefail
 
@@ -56,10 +59,13 @@ if [ -z "${DEN_BIN:-}" ]; then
     FORMULA_PREFIX=$("$BREW" --prefix "$VR_FORMULA")
     DEN_BIN="$FORMULA_PREFIX/bin/den"
     : "${VR_BREW_TEST:=1}"
+    [ "$(uname)" = Darwin ] && : "${VR_POURED:=1}"
 fi
 [ -x "$DEN_BIN" ] || die "DEN_BIN not executable: $DEN_BIN"
 DEN_BIN=$(cd "$(dirname "$DEN_BIN")" && pwd)/$(basename "$DEN_BIN")
 : "${VR_BREW_TEST:=0}"
+: "${VR_POURED:=0}"
+[ "$VR_POURED" = 0 ] || [ -n "$FORMULA_PREFIX" ] || die "VR_POURED=1 needs a brew-installed den (unset DEN_BIN)"
 if [ -z "${VR_SERVICE_PLIST:-}" ] && [ -n "$FORMULA_PREFIX" ]; then
     # Homebrew names the generated plist after its service label, which has
     # been homebrew.mxcl.<name> and, more recently, sh.brew.<name>.
@@ -163,6 +169,13 @@ s_version() {
     [ "$got" = "$VERSION" ]
 }
 s_brew_test() { "$BREW" test "$VR_FORMULA"; }
+# INSTALL_RECEIPT.json and `brew info --json=v2` must both say the keg was
+# poured from a bottle (a tarball/source install records false). brew
+# derives its own prefix, but drop the scratch overrides anyway.
+s_poured() {
+    env -u HOMEBREW_PREFIX -u HOMEBREW_CELLAR BREW="$BREW" \
+        sh "$SCRIPT_DIR/check-poured.sh" "$FORMULA_PREFIX" "$VR_FORMULA"
+}
 s_isolation() {
     local cfg; cfg=$(den config); echo "$cfg"
     local key val
@@ -339,6 +352,7 @@ if [ "$FAILED" -gt 0 ]; then
     echo "verify-release: wrong binary or scratch not isolated — aborting before den writes anything"
     exit 1
 fi
+if [ "$VR_POURED" = 1 ]; then step poured s_poured; else VR_SKIP="${VR_SKIP:-} poured"; step poured true; fi
 step update s_update
 step bottle s_bottle
 step opt-link s_opt_link
