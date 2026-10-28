@@ -110,6 +110,19 @@ The harness enforces strict guards before any smoke step runs:
   `DEN_HOME` always points there — never to `~/.den` or `/opt/homebrew`.
 - **Darwin check**: aborts immediately if `uname -s` on the remote is not `Darwin`.
 - **Collision check**: aborts if the generated sandbox path already exists (per-run nonce prevents this in practice).
+- **Toolchain caches stay in the sandbox**: smoke runs through `sandbox.sh run`, which
+  points `TMPDIR`, `NODE_COMPILE_CACHE`, `npm_config_cache` (and turns off npm's update
+  notifier), `UV_CACHE_DIR`, `PIP_CACHE_DIR`, `XDG_CACHE_HOME`/`XDG_DATA_HOME`/`XDG_STATE_HOME`,
+  `GOCACHE`, `GOMODCACHE`, `GOPATH` and `CARGO_HOME` at `<sandbox>/.harness-env/`.
+  Go telemetry can't be redirected or disabled from the environment (`GOTELEMETRY` and
+  `GOTELEMETRYDIR` are read-only), so a `go` shim runs the real `go` with `HOME` inside the
+  sandbox and `GOENV` pinned to the host's real go env file. macOS's per-user cache dir
+  (`DARWIN_USER_CACHE_DIR`, used by `xcrun`) can't be moved and may still be touched.
+- **Verified cleanup**: `sandbox.sh cleanup` runs `chmod -R u+w` before `rm -rf` (Go's
+  module cache is read-only) and then checks the directory is gone. If it isn't, run.sh
+  prints an error and exits non-zero (`RESULT: FAIL (smoke passed, but sandbox cleanup
+  failed)`) rather than reporting `cleaned up`. `--reset` uses the same path.
+  Regression tests: `sh tests/harness/macos/test_sandbox.sh` (ctest: `harness_macos_sandbox`).
 
 The harness does **not** take destructive cleanup actions against `/opt/homebrew` if smoke fails.
 The smoke set's own `uninstall` step cleans up installed packages.
