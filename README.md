@@ -45,6 +45,18 @@ everything — not just Python, but every package on your system.
 curl -fsSL https://raw.githubusercontent.com/marcelocantos/den/master/install.sh | sh
 ```
 
+Or with Homebrew (macOS, Apple Silicon):
+
+```bash
+brew install marcelocantos/tap/den
+brew trust --formula marcelocantos/tap/den   # Homebrew 7 and later
+```
+
+Homebrew 7 only loads formulae from third-party taps you have trusted.
+`brew install marcelocantos/tap/den` trusts it as it installs, but if you
+installed before Homebrew 7 (or `brew upgrade` skips den), run the
+`brew trust` line once. It trusts this one formula, not the whole tap.
+
 Or build from source:
 
 ```bash

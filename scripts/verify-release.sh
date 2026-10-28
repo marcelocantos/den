@@ -11,6 +11,9 @@
 #   BREW               brew executable used for read-only lookups/`brew test` (default: brew)
 #   VR_FORMULA         formula name (default: marcelocantos/tap/den)
 #   VR_BREW_TEST       1 = run `brew test $VR_FORMULA` (default: 1 when DEN_BIN came from brew)
+#   VR_BREW_TRUST      brew >= 7 only: 1 = run `brew trust --formula $VR_FORMULA`
+#                      before any brew lookup (default); 0 = do not trust, just
+#                      fail clearly if brew refuses to load the formula
 #   VR_POURED          1 = require the formula to have been poured from a bottle
 #                      (default: 1 when DEN_BIN came from brew on macOS; Linux
 #                      has no bottles and installs from the release tarball)
@@ -34,8 +37,20 @@
 #                      none; a clean release needs no allowlist)
 #   VR_KEEP            1 = keep the scratch root (default: kept only on failure)
 #
-# Steps: version brew-test isolation poured update bottle opt-link trust pin upgrade
-#        dependents tap font-cask app-cask uninstall doctor cleanup launchd
+# Homebrew 7 refuses to load formulae from a non-official tap until they are
+# trusted, and keeps that trust list under the caller's $HOME
+# (~/.homebrew/trust.json, or $XDG_CONFIG_HOME/homebrew). verify-release
+# therefore trusts the one formula under test (never the whole tap) before
+# its first brew lookup, then hands a read-only copy of that trust store to
+# the scratch HOME, under which the later brew commands run. brew-test is reported SKIP, not FAIL, only
+# when brew refuses because Xcode or the Command Line Tools are below its
+# minimum (brew 7 on macOS 27 refuses `brew test` for every formula without
+# Xcode/CLT 27); formula-test runs the formula's test commands directly so
+# that coverage is kept either way.
+#
+# Steps: version brew-trust brew-test formula-test isolation poured update bottle
+#        opt-link trust pin upgrade dependents tap font-cask app-cask uninstall
+#        doctor cleanup launchd
 set -uo pipefail
 
 die() { echo "verify-release: $*" >&2; exit 2; }
@@ -47,16 +62,80 @@ REPO_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 # The account's home from the password database, not $HOME (which a caller
 # may already have pointed at scratch).
 REAL_HOME=$(python3 -c 'import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)')
+# The caller's HOME before scratch takes over: brew 7 keeps its trust store
+# relative to it (see brew_trust_file).
+BREW_HOME=${HOME:-$REAL_HOME}
 BREW=${BREW:-brew}
 VR_FORMULA=${VR_FORMULA:-marcelocantos/tap/den}
+VR_BREW_TRUST=${VR_BREW_TRUST:-1}
+# Every brew call, minus the scratch prefix overrides. Before scratch is set
+# up (trust preflight, keg discovery) brew sees the caller's own HOME and
+# config. Once scratch is set up, brew_scratch_ runs it under the scratch
+# HOME, with brew's config dir pinned there too, so it reads the read-only
+# trust handoff and can write nothing back to the caller's brew config.
+brew_() { env -u HOMEBREW_PREFIX -u HOMEBREW_CELLAR HOMEBREW_NO_AUTO_UPDATE=1 "$BREW" "$@"; }
+brew_scratch_() { env -u XDG_CONFIG_HOME -u HOMEBREW_XDG_CONFIG_HOME -u HOMEBREW_PREFIX -u HOMEBREW_CELLAR HOMEBREW_NO_AUTO_UPDATE=1 "$BREW" "$@"; }
+# Where brew 7 reads its trust store for the current environment: under
+# $XDG_CONFIG_HOME/homebrew (or $HOMEBREW_XDG_CONFIG_HOME/homebrew), else
+# $HOME/.homebrew (Library/Homebrew/trust.rb trust_file; bin/brew sets
+# HOMEBREW_USER_CONFIG_HOME).
+brew_trust_file() {
+    if [ -n "${XDG_CONFIG_HOME:-}" ]; then echo "$XDG_CONFIG_HOME/homebrew/trust.json"
+    elif [ -n "${HOMEBREW_XDG_CONFIG_HOME:-}" ]; then echo "$HOMEBREW_XDG_CONFIG_HOME/homebrew/trust.json"
+    else echo "$BREW_HOME/.homebrew/trust.json"; fi
+}
+
+# ---- brew >= 7: trust the formula under test ----------------------------
+# Needed before the first lookup: `brew --prefix`, `info` and `test` all
+# load the formula, and brew 7 refuses an untrusted non-official one.
+TRUST_NOTE=""
+TRUST_PROBE=0 # 1 = brew >= 7 and a third-party formula: re-check under scratch
+TRUST_SRC=$(brew_trust_file)
+brew_major() { brew_ --version 2>/dev/null | sed -n 's/^Homebrew \([0-9][0-9]*\)\..*/\1/p' | head -1; }
+needs_trust() { # fully-qualified formula from a non-official tap
+    case "$1" in
+        homebrew/*|Homebrew/*) return 1 ;;
+        */*/*) return 0 ;;
+    esac
+    return 1
+}
+trust_formula() {
+    local major out rc=0
+    major=$(brew_major)
+    if [ -z "$major" ] || [ "$major" -lt 7 ]; then
+        TRUST_NOTE="brew ${major:-unknown} < 7: no tap trust needed"; return 0
+    fi
+    if ! needs_trust "$VR_FORMULA"; then
+        TRUST_NOTE="$VR_FORMULA is not from a third-party tap: no trust needed"; return 0
+    fi
+    if [ "$VR_BREW_TRUST" = 1 ]; then
+        out=$(brew_ trust --formula "$VR_FORMULA" 2>&1) || rc=$?
+        [ "$rc" -eq 0 ] || die "brew $major: 'brew trust --formula $VR_FORMULA' failed (exit $rc):
+$out
+Fix the tap (brew tap ${VR_FORMULA%/*}), then run: brew trust --formula $VR_FORMULA"
+        TRUST_NOTE="brew $major: $out"
+    fi
+    TRUST_PROBE=1
+    # Prove brew will now load it (also covers VR_BREW_TRUST=0).
+    out=$(brew_ info --json=v2 "$VR_FORMULA" 2>&1) || true
+    if echo "$out" | grep -Eq 'Refusing to load .* from untrusted tap|untrusted tap'; then
+        die "brew $major refuses to load $VR_FORMULA because it is not trusted.
+Run: brew trust --formula $VR_FORMULA
+(or rerun verify-release with VR_BREW_TRUST=1, the default)"
+    fi
+    TRUST_NOTE="${TRUST_NOTE:-brew $major: $VR_FORMULA already trusted}; brew loads $VR_FORMULA"
+}
+if [ -z "${DEN_BIN:-}" ] || [ "${VR_BREW_TEST:-0}" = 1 ] || [ "${VR_POURED:-0}" = 1 ]; then
+    command -v "$BREW" >/dev/null 2>&1 || die "DEN_BIN unset and no brew on PATH"
+    trust_formula
+fi
 
 # ---- binary under test --------------------------------------------------
 FORMULA_PREFIX=""
 if [ -z "${DEN_BIN:-}" ]; then
-    command -v "$BREW" >/dev/null 2>&1 || die "DEN_BIN unset and no brew on PATH"
-    "$BREW" list --versions "$VR_FORMULA" >/dev/null 2>&1 \
+    brew_ list --versions "$VR_FORMULA" >/dev/null 2>&1 \
         || die "$VR_FORMULA is not installed; run: brew install $VR_FORMULA (or set DEN_BIN)"
-    FORMULA_PREFIX=$("$BREW" --prefix "$VR_FORMULA")
+    FORMULA_PREFIX=$(brew_ --prefix "$VR_FORMULA")
     DEN_BIN="$FORMULA_PREFIX/bin/den"
     : "${VR_BREW_TEST:=1}"
     [ "$(uname)" = Darwin ] && : "${VR_POURED:=1}"
@@ -94,7 +173,7 @@ LOGDIR=$VR_ROOT/logs
 
 FORBIDDEN="/opt/homebrew /usr/local /home/linuxbrew/.linuxbrew $REAL_HOME"
 if command -v "$BREW" >/dev/null 2>&1; then
-    FORBIDDEN="$FORBIDDEN $("$BREW" --prefix 2>/dev/null)"
+    FORBIDDEN="$FORBIDDEN $(brew_ --prefix 2>/dev/null)"
 fi
 for p in "$VR_ROOT" "$VR_HOME" "$VR_DEN_HOME" "$VR_PREFIX" "$VR_APPDIR" "$VR_FONTDIR" "$VR_PKG_ROOT"; do
     for f in $FORBIDDEN; do
@@ -112,6 +191,21 @@ export HOMEBREW_PREFIX="$VR_PREFIX" HOMEBREW_CELLAR="$VR_PREFIX/Cellar"
 export DEN_APPDIR="$VR_APPDIR" DEN_FONTDIR="$VR_FONTDIR" DEN_CASK_PKG_ROOT="$VR_PKG_ROOT"
 export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ANALYTICS=1
 
+# Hand brew's trust store to the scratch HOME, read-only. brew under the
+# scratch HOME (brew_scratch_) reads $VR_HOME/.homebrew/trust.json; without
+# it brew 7 refuses the formula trusted in the caller's store. The file is
+# 0400 in a 0500 dir: brew reads the store with no ownership or lock checks
+# (trust.rb trust_store), and any attempted trust write (atomic_write into
+# the dir, plus its .lock file) fails rather than touching either store.
+TRUST_HANDOFF=""
+if [ -f "$TRUST_SRC" ]; then
+    mkdir -p "$VR_HOME/.homebrew"
+    cp "$TRUST_SRC" "$VR_HOME/.homebrew/trust.json"
+    chmod 0400 "$VR_HOME/.homebrew/trust.json"
+    chmod 0500 "$VR_HOME/.homebrew"
+    TRUST_HANDOFF="trust store handed to scratch read-only ($TRUST_SRC)"
+fi
+
 VR_BOTTLE=${VR_BOTTLE:-tree}
 VR_DEP_PARENT=${VR_DEP_PARENT:-jq}
 VR_DEP_CHILD=${VR_DEP_CHILD:-oniguruma}
@@ -126,6 +220,8 @@ VR_REPLICA_ROOT=${VR_REPLICA_ROOT:-$(dirname "$(dirname "$(realpath_ "$DEN_BIN")
 
 # ---- step runner ----------------------------------------------------------
 PASSED=0; FAILED=0; SKIPPED=0; FAILS=""; N=0
+SKIP_RC=77
+skip_because() { echo "skip-reason: $*"; exit "$SKIP_RC"; }
 den() { "$DEN_BIN" "$@"; }
 wanted() {
     [ "$1" = isolation ] && return 0 # safety check: never skippable
@@ -145,7 +241,11 @@ step() {
     # Not inside `if`: bash ignores set -e in a tested subshell.
     local rc=0
     ( set -e; "$@" ) >"$log" 2>&1 || rc=$?
-    if [ "$rc" -eq 0 ]; then
+    if [ "$rc" -eq "$SKIP_RC" ]; then
+        # A step may decline with `skip_because <reason>` (exit $SKIP_RC).
+        printf 'SKIP  %-12s (%s)\n' "$name" "$(sed -n 's/^skip-reason: //p' "$log" | tail -1)"
+        SKIPPED=$((SKIPPED + 1))
+    elif [ "$rc" -eq 0 ]; then
         printf 'PASS  %-12s (%ds)\n' "$name" $((SECONDS - t0)); PASSED=$((PASSED + 1))
     else
         printf 'FAIL  %-12s (%ds) — log: %s\n' "$name" $((SECONDS - t0)) "$log"
@@ -168,12 +268,49 @@ s_version() {
     echo "den --version: $got (expected $VERSION)"
     [ "$got" = "$VERSION" ]
 }
-s_brew_test() { "$BREW" test "$VR_FORMULA"; }
+s_brew_trust() {
+    echo "$TRUST_NOTE"
+    [ -z "$TRUST_HANDOFF" ] || echo "$TRUST_HANDOFF"
+    [ "$TRUST_PROBE" = 1 ] || return 0
+    # Under the scratch HOME, as brew-test and poured will run brew.
+    local out; out=$(brew_scratch_ info --json=v2 "$VR_FORMULA" 2>&1) || true
+    if echo "$out" | grep -q 'untrusted tap'; then
+        echo "brew under the scratch HOME still refuses $VR_FORMULA as untrusted"
+        echo "(trust store: ${TRUST_SRC}; handoff: ${TRUST_HANDOFF:-none})"
+        echo "$out" | grep 'untrusted tap' | head -1
+        return 1
+    fi
+    echo "brew under the scratch HOME loads $VR_FORMULA"
+}
+# brew refuses to set up any test (or build) environment when Xcode or the
+# CLT is below its minimum (Homebrew::Diagnostic fatal_setup_build_environment_checks).
+# That is the host, not den: report SKIP with brew's reason. Anything else fails.
+BREW_DEVTOOLS_RE='^(Error: )?Your (Xcode \(.*\).* is too outdated|Command Line Tools are too outdated)'
+s_brew_test() {
+    local out rc=0
+    out=$(brew_scratch_ test "$VR_FORMULA" 2>&1) || rc=$?
+    echo "$out"
+    [ "$rc" -ne 0 ] || return 0
+    local why; why=$(echo "$out" | grep -E "$BREW_DEVTOOLS_RE" | head -1 | sed 's/^Error: //' || true)
+    [ -z "$why" ] || skip_because "brew refuses to test: $why"
+    echo "brew test exit $rc"; return 1
+}
+# The formula's own test block, run directly (mirrors TEST in
+# scripts/homebrew-bottles.py), so den.rb's checks still run when brew-test
+# is skipped.
+s_formula_test() {
+    local t=$VR_ROOT/formula-test got
+    mkdir -p "$t"
+    got=$(den --version); echo "den --version: $got"
+    [ "$got" = "$VERSION" ] || { echo "expected $VERSION"; return 1; }
+    got=$(DEN_HOME="$t/.den" DEN_PREFIX="$t/prefix" den list); echo "den list: $got"
+    echo "$got" | grep -q "No packages installed" || { echo "den list did not report 'No packages installed'"; return 1; }
+}
 # INSTALL_RECEIPT.json and `brew info --json=v2` must both say the keg was
 # poured from a bottle (a tarball/source install records false). brew
 # derives its own prefix, but drop the scratch overrides anyway.
 s_poured() {
-    env -u HOMEBREW_PREFIX -u HOMEBREW_CELLAR BREW="$BREW" \
+    env -u HOMEBREW_PREFIX -u HOMEBREW_CELLAR -u XDG_CONFIG_HOME -u HOMEBREW_XDG_CONFIG_HOME BREW="$BREW" \
         sh "$SCRIPT_DIR/check-poured.sh" "$FORMULA_PREFIX" "$VR_FORMULA"
 }
 s_isolation() {
@@ -345,14 +482,20 @@ trap finish EXIT
 trap 'exit 130' INT TERM
 
 echo "verify-release: den=$DEN_BIN tag=$RELEASE_TAG root=$VR_ROOT"
+[ -z "$TRUST_NOTE" ] || echo "verify-release: brew-trust: $TRUST_NOTE"
+[ -z "$TRUST_HANDOFF" ] || echo "verify-release: brew-trust: $TRUST_HANDOFF"
 step version s_version
+if [ -n "$TRUST_NOTE" ]; then step brew-trust s_brew_trust; else VR_SKIP="${VR_SKIP:-} brew-trust"; step brew-trust true; fi
 if [ "$VR_BREW_TEST" = 1 ]; then step brew-test s_brew_test; else VR_SKIP="${VR_SKIP:-} brew-test"; step brew-test true; fi
 step isolation s_isolation
-if [ "$FAILED" -gt 0 ]; then
-    echo "verify-release: wrong binary or scratch not isolated — aborting before den writes anything"
-    exit 1
-fi
+# Abort only on the safety checks themselves (brew-trust/brew-test results
+# are reported, not fatal): a wrong binary or an unconfined den.
+case " $FAILS " in
+    *" version "*) echo "verify-release: version failed (den under test is not $VERSION) — aborting before den writes anything"; exit 1 ;;
+    *" isolation "*) echo "verify-release: isolation failed (den config escapes $VR_ROOT) — aborting before den writes anything"; exit 1 ;;
+esac
 if [ "$VR_POURED" = 1 ]; then step poured s_poured; else VR_SKIP="${VR_SKIP:-} poured"; step poured true; fi
+step formula-test s_formula_test
 step update s_update
 step bottle s_bottle
 step opt-link s_opt_link

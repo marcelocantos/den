@@ -113,6 +113,46 @@ the RC's own darwin-aarch64 tarball (nothing is recompiled):
   `make verify-release VR_FORMULA=<you>/den-rc/den RELEASE_TAG=vX.Y.0`.
   The `poured` step fails unless brew poured the bottle.
 
+### Testing an RC with verify-release
+
+`VR_FORMULA` picks the formula verify-release checks. It defaults to
+`marcelocantos/tap/den` (the GA tap); for an RC, point it at the RC tap, e.g.
+`VR_FORMULA=marcelocantos/den-rc/den` (or your own `<you>/den-rc/den`):
+
+```sh
+make verify-release VR_FORMULA=marcelocantos/den-rc/den RELEASE_TAG=vX.Y.0
+```
+
+Homebrew 7 refuses to load a formula from a third-party tap it has not been
+told to trust (`Refusing to load formula ... from untrusted tap ...`), which
+breaks `brew test`, `brew info` and `brew --prefix <formula>`. So on brew 7
+and later, before anything else touches the formula, verify-release runs
+`brew trust --formula "$VR_FORMULA"` for that one formula (never the whole
+tap) and reports it as the `brew-trust` step. If the trust fails, or
+`VR_BREW_TRUST=0` and the formula is not already trusted, it stops with the
+`brew trust --formula ...` command to run. On brew older than 7, or for an
+official (homebrew/core) formula, nothing changes. Brew keeps its trust list
+under your `HOME` (`~/.homebrew/trust.json`, or
+`$XDG_CONFIG_HOME/homebrew/trust.json`), but verify-release runs brew under a
+scratch `HOME`. It therefore copies that trust store into the scratch `HOME`
+read-only (file 0400 in a 0500 directory), so `brew test` and the `poured`
+check see the trust while brew can't write to either trust store. `brew-trust`
+then confirms that brew under the scratch `HOME` loads the formula, before
+`brew-test` runs.
+
+Only a failed `version` (wrong binary) or `isolation` (den's config escapes
+the scratch root) stops the run before den writes anything. A `brew-trust`,
+`brew-test` or other step failure is reported and the run carries on.
+
+`brew-test` runs `brew test` on the formula. On macOS 27, brew 7 refuses
+`brew test` (and any source build) for every formula unless Xcode/CLT 27 is
+installed. Only when brew refuses for that reason (`Your Xcode (...) is too
+outdated` or `Your Command Line Tools are too outdated`) is `brew-test`
+reported as `SKIP` with brew's message; any other `brew test` failure is a
+`FAIL`. The separate `formula-test` step runs the formula's own test commands
+directly (`den --version` and `den list` against a scratch
+`DEN_HOME`/`DEN_PREFIX`), so the formula's checks still run when brew won't.
+
 Homebrew only pours a bottle whose tag it can name. A brew older than 6.0
 has no symbol for macOS 27, so on macOS 27 it pours no bottles at all (not
 even homebrew-core's) and builds everything from source.
