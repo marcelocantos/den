@@ -50,6 +50,15 @@ PrefixLinkResult link_into_prefix(const PrefixLinkContext& ctx, const fs::path& 
                                   const std::string& name, const std::vector<std::string>& subdirs,
                                   bool overwrite);
 
+/// The conflicts link_into_prefix would report for this package, without
+/// writing anything. Links den's ledgers own (an older version of the same
+/// package, say) are replaceable, so this answers "would swapping to
+/// `pkg_path` succeed?" while the old version is still linked.
+std::vector<fs::path> prefix_link_conflicts(const PrefixLinkContext& ctx, const fs::path& pkg_path,
+                                            const std::string& name,
+                                            const std::vector<std::string>& subdirs,
+                                            bool overwrite);
+
 /// Point `<prefix>/opt/<name>` at `pkg_path` for a package whose root is not a
 /// Homebrew Cellar keg (pip, npm, cargo, go). Created when missing or
 /// dangling, or when den's ledger owns it; recorded in the ledger. Returns

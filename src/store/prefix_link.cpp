@@ -256,16 +256,12 @@ PrefixLinkContext make_prefix_link_context(const fs::path& den_home, const fs::p
     return ctx;
 }
 
-PrefixLinkResult link_into_prefix(const PrefixLinkContext& ctx, const fs::path& pkg_path,
-                                  const std::string& name, const std::vector<std::string>& subdirs,
-                                  bool overwrite) {
-    if (!is_valid_package_name(name)) {
-        throw UserError("invalid package name: " + name);
-    }
-    PrefixLinkResult result;
-    const auto ledger_links = all_ledger_links(ctx);
-    Planner planner{ctx, ledger_links, overwrite, {}, {}};
+namespace {
 
+/// Plan linking `subdirs` of `pkg_path` into the prefix. Writes nothing.
+void plan_package(Planner& planner, const fs::path& pkg_path,
+                  const std::vector<std::string>& subdirs) {
+    const auto& ctx = planner.ctx;
     for (const auto& dir : subdirs) {
         auto src = (pkg_path / dir).lexically_normal();
         std::error_code ec;
@@ -284,6 +280,33 @@ PrefixLinkResult link_into_prefix(const PrefixLinkContext& ctx, const fs::path& 
         }
         planner.plan(src, dst, dir == "etc" || dir == "var");
     }
+}
+
+} // namespace
+
+std::vector<fs::path> prefix_link_conflicts(const PrefixLinkContext& ctx, const fs::path& pkg_path,
+                                            const std::string& name,
+                                            const std::vector<std::string>& subdirs,
+                                            bool overwrite) {
+    if (!is_valid_package_name(name)) {
+        throw UserError("invalid package name: " + name);
+    }
+    const auto ledger_links = all_ledger_links(ctx);
+    Planner planner{ctx, ledger_links, overwrite, {}, {}};
+    plan_package(planner, pkg_path, subdirs);
+    return std::move(planner.conflicts);
+}
+
+PrefixLinkResult link_into_prefix(const PrefixLinkContext& ctx, const fs::path& pkg_path,
+                                  const std::string& name, const std::vector<std::string>& subdirs,
+                                  bool overwrite) {
+    if (!is_valid_package_name(name)) {
+        throw UserError("invalid package name: " + name);
+    }
+    PrefixLinkResult result;
+    const auto ledger_links = all_ledger_links(ctx);
+    Planner planner{ctx, ledger_links, overwrite, {}, {}};
+    plan_package(planner, pkg_path, subdirs);
 
     if (!planner.conflicts.empty()) {
         result.conflicts = std::move(planner.conflicts);
