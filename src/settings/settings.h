@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <map>
 #include <optional>
+#include <stdexcept>
 #include <string>
 
 namespace den {
@@ -61,14 +62,32 @@ Settings read_settings(const fs::path& den_home);
 // Atomically write settings to <den_home>/config.json.
 void write_settings(const fs::path& den_home, const Settings& s);
 
+/// Thrown by get_setting when the key is not present in config.json.
+class SettingNotFound : public std::invalid_argument {
+  public:
+    using std::invalid_argument::invalid_argument;
+};
+
+/// Thrown by get_setting / set_setting when config.json exists but cannot be
+/// read or is not a JSON object. Unlike read_settings (which falls back to
+/// defaults), single-key access must not silently treat a damaged file as
+/// empty: set_setting would otherwise overwrite every other key.
+class SettingsFileError : public std::runtime_error {
+  public:
+    using std::runtime_error::runtime_error;
+};
+
 // Read a single dotted key, e.g. "daemon.auto_upgrade".
 // Returns the JSON representation of the value as a string.
-// Throws std::invalid_argument if the key does not exist.
+// Throws SettingNotFound if the key does not exist, SettingsFileError if
+// config.json is unreadable or invalid.
 std::string get_setting(const fs::path& den_home, const std::string& key);
 
 // Write a single dotted key.  The type is inferred from the existing
 // value (bool, number, string).  New keys are always stored as strings.
-// Throws std::invalid_argument if a parent path is not an object.
+// Every other key in config.json is preserved.
+// Throws std::invalid_argument if a parent path is not an object, and
+// SettingsFileError (writing nothing) if config.json is unreadable or invalid.
 void set_setting(const fs::path& den_home, const std::string& key, const std::string& value);
 
 // Return a pretty-printed JSON representation of all settings.

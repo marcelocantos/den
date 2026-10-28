@@ -141,6 +141,31 @@ nlohmann::json load_json(const fs::path& den_home) {
     }
 }
 
+// Strict variant for single-key access: an absent file is an empty object,
+// but an unreadable or invalid one is an error rather than "no settings".
+nlohmann::json load_json_strict(const fs::path& den_home) {
+    fs::path p = config_path(den_home);
+    std::error_code ec;
+    if (!fs::exists(p, ec)) {
+        if (ec)
+            throw SettingsFileError("cannot access " + p.string() + ": " + ec.message());
+        return nlohmann::json::object();
+    }
+    std::ifstream f(p);
+    if (!f)
+        throw SettingsFileError("cannot open " + p.string());
+    nlohmann::json j;
+    try {
+        j = nlohmann::json::parse(f);
+    } catch (const nlohmann::json::parse_error& e) {
+        throw SettingsFileError(p.string() + " is not valid JSON (" + e.what() +
+                                "); fix or remove it");
+    }
+    if (!j.is_object())
+        throw SettingsFileError(p.string() + " is not a JSON object; fix or remove it");
+    return j;
+}
+
 void save_json_atomic(const fs::path& den_home, const nlohmann::json& j) {
     fs::path p = config_path(den_home);
     fs::path tmp = p;
@@ -229,12 +254,12 @@ void write_settings(const fs::path& den_home, const Settings& s) {
 
 std::string get_setting(const fs::path& den_home, const std::string& key) {
     auto parts = split_key(key);
-    nlohmann::json j = load_json(den_home);
+    nlohmann::json j = load_json_strict(den_home);
 
     const nlohmann::json* cur = &j;
     for (const auto& part : parts) {
         if (!cur->is_object() || !cur->contains(part)) {
-            throw std::invalid_argument("key not found: " + key);
+            throw SettingNotFound("key not found: " + key);
         }
         cur = &(*cur)[part];
     }
@@ -248,7 +273,7 @@ std::string get_setting(const fs::path& den_home, const std::string& key) {
 
 void set_setting(const fs::path& den_home, const std::string& key, const std::string& value) {
     auto parts = split_key(key);
-    nlohmann::json j = load_json(den_home);
+    nlohmann::json j = load_json_strict(den_home);
 
     // Navigate to the parent object, creating intermediate objects as needed.
     nlohmann::json* cur = &j;

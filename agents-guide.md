@@ -61,6 +61,7 @@ den daemon status            # background maintenance status
 den daemon run --once        # run one maintenance cycle now
 den config                   # show den configuration
 den set <key> <value>        # configure settings
+den get <key>                # print one setting (exit 1 if unset)
 den settings                 # show all settings
 den doctor                   # system health checks
 den smoke                    # run smoke tests
