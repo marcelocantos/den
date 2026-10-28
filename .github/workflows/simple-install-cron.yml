@@ -56,7 +56,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, ubuntu-latest]
+        os: [macos-15, ubuntu-latest]
         # The formula list is declared statically so the matrix is readable
         # without a separate job. Mirrors tests/corpus/simple_install_subset.txt
         # (confirmed SIMPLE entries only — proposed candidates are excluded
