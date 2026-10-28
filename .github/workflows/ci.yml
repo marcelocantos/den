@@ -6,13 +6,25 @@ on:
   pull_request:
     branches: [master]
 
+# Supersede in-flight runs for the same PR only. Pushes to master get a
+# per-run group (github.run_id), so a master run is never cancelled or
+# held pending behind another — every master commit is checked.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   check:
     name: Check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [macos-14, ubuntu-latest]
+        # macos-15, not macos-14: GitHub retires the macOS 14 image on
+        # 2026-11-02 and has cut its capacity in the run-up, so macos-14
+        # jobs were failing with "not acquired by Runner of type hosted".
+        # The binary's floor is CMAKE_OSX_DEPLOYMENT_TARGET (14.0), not
+        # the runner OS.
+        os: [macos-15, ubuntu-latest]
     steps:
       - uses: actions/checkout@v6
         with:

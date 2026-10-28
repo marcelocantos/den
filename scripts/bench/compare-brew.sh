@@ -123,7 +123,7 @@ DEN_VERSION="$("${DEN_BIN}" --version 2>/dev/null | tail -1 || echo unknown)"
 BREW_VERSION="$(brew --version 2>&1 | head -1 || echo unknown)"
 HOST_OS="$(uname -s)-$(uname -m)"
 
-# Stable host class for regression comparisons. GitHub Actions macos-14
+# Stable host class for regression comparisons. GitHub Actions macos-15
 # runners and a local M4 Max are both Darwin/arm64, but their absolute
 # times are not comparable — so CI must not treat a local snapshot as
 # its baseline (that is what made weekly bench.yml fail after T68).

@@ -42,7 +42,7 @@ concurrency:
 jobs:
   verify:
     name: Diff-verify replica against GHCR
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v6
         with:

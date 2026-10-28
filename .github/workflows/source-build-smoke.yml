@@ -42,9 +42,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, ubuntu-latest]
+        os: [macos-15, ubuntu-latest]
         exclude:
-          - os: ${{ (github.event.inputs.platform == 'linux') && 'macos-14' || 'skip' }}
+          - os: ${{ (github.event.inputs.platform == 'linux') && 'macos-15' || 'skip' }}
           - os: ${{ (github.event.inputs.platform == 'macos') && 'ubuntu-latest' || 'skip' }}
     steps:
       - uses: actions/checkout@v6
@@ -80,7 +80,7 @@ jobs:
   # ------------------------------------------------------------------
   source-build-macos:
     name: Source-build smoke — macOS (${{ github.event.inputs.formula || 'tree' }})
-    runs-on: macos-14
+    runs-on: macos-15
     needs: build
     # 🎯T11/🎯T65 live: the daily macOS source build now gates.
     if: >-
@@ -258,7 +258,7 @@ jobs:
   # ------------------------------------------------------------------
   tap-source-build:
     name: Tap resolution smoke (🎯T67/🎯T17)
-    runs-on: macos-14
+    runs-on: macos-15
     needs: build
     steps:
       - uses: actions/checkout@v6

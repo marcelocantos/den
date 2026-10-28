@@ -20,7 +20,7 @@ jobs:
       matrix:
         include:
           - target: darwin-aarch64
-            os: macos-14
+            os: macos-15
           - target: linux-x86_64
             os: ubuntu-latest
           - target: linux-aarch64
