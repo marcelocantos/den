@@ -27,8 +27,22 @@ System libraries (linked dynamically):
 libcurl - MIT/X-style
   https://curl.se/docs/copyright.html
 
+Statically linked (built from pinned upstream releases, see
+cmake/VendorLibarchive.cmake):
+
 libarchive - BSD-2-Clause
   https://github.com/libarchive/libarchive
+
+liblzma (XZ Utils) - 0BSD
+  https://github.com/tukaani-project/xz
+
+zstd - BSD-3-Clause
+  Copyright (c) Meta Platforms, Inc. and affiliates.
+  https://github.com/facebook/zstd
+
+lz4 (library) - BSD-2-Clause
+  Copyright (c) Yann Collet
+  https://github.com/lz4/lz4
 
 Bundled (embedded in binary, unpacked on first source build):
 

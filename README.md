@@ -253,7 +253,7 @@ cmake --build build
 cd build && ctest --output-on-failure
 ```
 
-Requires: cmake, ninja, libcurl, libarchive (all available via Homebrew).
+Requires: cmake, ninja and libcurl (plus zlib and bzip2 headers on Linux). libarchive and its xz/zstd/lz4 codecs are fetched from pinned sources and linked statically (`-DDEN_VENDOR_LIBARCHIVE=OFF` uses a system libarchive instead).
 
 To report a security vulnerability, see [SECURITY.md](SECURITY.md).
 

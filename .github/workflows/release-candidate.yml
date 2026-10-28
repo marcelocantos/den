@@ -159,24 +159,24 @@ jobs:
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install cmake ninja libarchive
+        run: brew install cmake ninja
 
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev libarchive-dev
+          sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev zlib1g-dev libbz2-dev
 
       - name: Configure
-        run: |
-          cmake_args="-B build -G Ninja -DCMAKE_BUILD_TYPE=Release"
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            cmake_args="$cmake_args -DCMAKE_PREFIX_PATH=$(brew --prefix libarchive)"
-          fi
-          cmake $cmake_args
+        # libarchive (+xz/zstd/lz4) is vendored and linked statically
+        # (DEN_VENDOR_LIBARCHIVE=ON, the default): no Homebrew/apt libarchive.
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
         run: cmake --build build
+
+      - name: Check binary links only base-OS libraries
+        run: scripts/check-links.sh build/den
 
       - name: Test
         run: cd build && ctest --output-on-failure
