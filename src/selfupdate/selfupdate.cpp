@@ -14,6 +14,7 @@
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cerrno>
 #include <cstdlib>
@@ -334,7 +335,12 @@ bool is_sha256_hex(const std::string& s) {
 
 } // namespace
 
-void apply_update(const UpdateInfo& info, const Config& cfg) {
+bool is_same_version_request(const UpdateInfo& info, const std::string& running) {
+    const std::string v = info.tag.empty() ? info.latest_version : asset_version_for_tag(info.tag);
+    return !v.empty() && v == running;
+}
+
+bool apply_update(const UpdateInfo& info, const Config& cfg, bool force) {
     (void)cfg;
     auto exe = self_exe();
     // Defence in depth: the CLI refuses first, before any network access.
@@ -388,14 +394,25 @@ void apply_update(const UpdateInfo& info, const Config& cfg) {
         }
     }
 
-    install_update_tarball(tarball_path, exe);
-    update_installed_tag_record(exe, info.tag.empty() ? "v" + info.latest_version : info.tag);
+    const bool same_version = is_same_version_request(info, DEN_VERSION);
+    const std::string installed_tag = info.tag.empty() ? "v" + info.latest_version : info.tag;
+    const bool replaced = install_update_tarball(tarball_path, exe, same_version && !force);
+    // Either way the bytes at exe are now exactly installed_tag's: record it
+    // for install.sh (`den --version` omits -rc.N).
+    update_installed_tag_record(exe, installed_tag);
+    if (!replaced) {
+        std::cout << "den " << (info.tag.empty() ? info.latest_version : info.tag)
+                  << " is already installed (its binary is identical to " << exe.string()
+                  << "); nothing to do. Use --force to reinstall it and restart the daemon.\n";
+        return false;
+    }
 
     std::cout << "Updated den " << DEN_VERSION << " → " << info.latest_version;
     if (!info.tag.empty() && asset_version_for_tag(info.tag) != info.tag.substr(1)) {
         std::cout << " (" << info.tag << ")";
     }
     std::cout << "\n";
+    return true;
 }
 
 fs::path make_private_temp_dir(const std::string& stem) {
@@ -414,7 +431,34 @@ fs::path make_private_temp_dir(const std::string& stem) {
     return fs::path(buf.data());
 }
 
-void install_update_tarball(const fs::path& tarball, const fs::path& exe) {
+namespace {
+
+// True when both files exist and hold the same bytes.
+bool files_identical(const fs::path& a, const fs::path& b) {
+    std::error_code ec;
+    const auto sa = fs::file_size(a, ec);
+    if (ec)
+        return false;
+    const auto sb = fs::file_size(b, ec);
+    if (ec || sa != sb)
+        return false;
+    std::ifstream fa(a, std::ios::binary), fb(b, std::ios::binary);
+    if (!fa || !fb)
+        return false;
+    std::vector<char> ba(1 << 16), bb(1 << 16);
+    while (fa && fb) {
+        fa.read(ba.data(), static_cast<std::streamsize>(ba.size()));
+        fb.read(bb.data(), static_cast<std::streamsize>(bb.size()));
+        if (fa.gcount() != fb.gcount() ||
+            !std::equal(ba.begin(), ba.begin() + fa.gcount(), bb.begin()))
+            return false;
+    }
+    return fa.eof() && fb.eof();
+}
+
+} // namespace
+
+bool install_update_tarball(const fs::path& tarball, const fs::path& exe, bool skip_if_identical) {
     auto work = make_private_temp_dir("den-self-update-x");
     struct Cleanup {
         fs::path dir;
@@ -438,6 +482,11 @@ void install_update_tarball(const fs::path& tarball, const fs::path& exe) {
     std::error_code ec;
     if (!fs::is_regular_file(fs::symlink_status(new_binary, ec))) {
         throw UserError("extracted tarball does not contain a regular 'den' binary");
+    }
+
+    if (skip_if_identical && files_identical(new_binary, exe)) {
+        SPDLOG_INFO("release binary is identical to {}; not reinstalling", exe.string());
+        return false;
     }
 
     // Make executable and writable (owner needs write for future updates).
@@ -472,6 +521,7 @@ void install_update_tarball(const fs::path& tarball, const fs::path& exe) {
     }
 
     refresh_packaged_replica(work, exe);
+    return true;
 }
 
 } // namespace den

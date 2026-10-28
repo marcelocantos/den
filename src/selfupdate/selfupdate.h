@@ -74,9 +74,20 @@ std::string resolve_latest_version();
 /// Returns nullopt if already up to date or unable to determine.
 std::optional<UpdateInfo> check_for_update(const Config& cfg);
 
+/// True when `info` names a release with the same version as `running` (the
+/// binary's DEN_VERSION). Release candidates report their GA version, so
+/// v0.15.0-rc.2, v0.15.0-rc.3 and v0.15.0 all count as the same version as a
+/// running 0.15.0: whether the request is really a reinstall is then decided
+/// by comparing the release's binary with the installed one.
+bool is_same_version_request(const UpdateInfo& info, const std::string& running);
+
 /// Download and install a new den binary, replacing the current one.
 /// The running binary is atomically replaced via rename.
-void apply_update(const UpdateInfo& info, const Config& cfg);
+/// When the release has the same version as the running den
+/// (is_same_version_request) and its binary is byte-identical to the
+/// installed one, nothing is replaced and false is returned, unless `force`
+/// is set. Returns true when the binary was replaced.
+bool apply_update(const UpdateInfo& info, const Config& cfg, bool force = false);
 
 /// Create a fresh, private (0700) temporary directory under the system temp
 /// dir with mkdtemp(3), named `<stem>.XXXXXX`. Throws UserError on failure.
@@ -87,8 +98,12 @@ std::filesystem::path make_private_temp_dir(const std::string& stem);
 /// replace `exe` with the tarball's `den` (a rename onto a fresh inode, never
 /// an in-place write, so a running daemon's mapped binary is untouched) and
 /// refresh the trust replica.
+/// With `skip_if_identical`, an extracted `den` byte-identical to `exe`
+/// leaves `exe` (and the replica) untouched and returns false.
+/// Returns true when `exe` was replaced.
 /// The temp dir is always removed. Throws UserError on failure.
-void install_update_tarball(const std::filesystem::path& tarball, const std::filesystem::path& exe);
+bool install_update_tarball(const std::filesystem::path& tarball, const std::filesystem::path& exe,
+                            bool skip_if_identical = false);
 
 /// After extracting an update tarball into `extracted_root`, install the
 /// tarball's share/den/known_hashes.json as <exe_dir>/../share/den/
