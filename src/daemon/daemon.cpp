@@ -187,7 +187,8 @@ bool in_maintenance_window(const std::string& window) {
     }
 }
 
-std::string launchd_plist(const fs::path& den_binary, const fs::path& den_home) {
+std::string launchd_plist(const fs::path& den_binary, const fs::path& den_home,
+                          const fs::path& prefix) {
     std::string bin = xml_escape(den_binary.string());
     std::string home = xml_escape(den_home.string());
     // Carry an explicit DEN_PREFIX into the agent so the daemon maintains
@@ -196,6 +197,14 @@ std::string launchd_plist(const fs::path& den_binary, const fs::path& den_home) 
     if (const char* dp = std::getenv("DEN_PREFIX"); dp && *dp) {
         prefix_env =
             "        <key>DEN_PREFIX</key>\n        <string>" + xml_escape(dp) + "</string>\n";
+    }
+
+    std::string path = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
+    if (!prefix.empty()) {
+        const auto prefix_bin = (prefix / "bin").lexically_normal().string();
+        if (prefix_bin != "/opt/homebrew/bin" && prefix_bin != "/usr/local/bin") {
+            path = prefix_bin + ":" + path;
+        }
     }
 
     std::ostringstream o;
@@ -222,7 +231,8 @@ std::string launchd_plist(const fs::path& den_binary, const fs::path& den_home) 
       << home << R"(</string>
 )" << prefix_env
       << R"(        <key>PATH</key>
-        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <string>)"
+      << xml_escape(path) << R"(</string>
     </dict>
 
     <key>RunAtLoad</key>
@@ -614,7 +624,7 @@ void run_daemon(const Config& config, bool once) {
     // Keep pid_fd open (holds the lock) until we exit.
 
     // ---- SIGTERM handler ---------------------------------------------------
-    struct sigaction sa{};
+    struct sigaction sa {};
     sa.sa_handler = sigterm_handler;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;

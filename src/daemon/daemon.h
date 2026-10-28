@@ -162,8 +162,10 @@ bool in_maintenance_window(const std::string& window);
 
 /// Generate a launchd plist XML string for the daemon service.
 /// Label: dev.den.daemon. RunAtLoad and KeepAlive are both true.
-/// Interpolated strings are XML-escaped.
-std::string launchd_plist(const fs::path& den_binary, const fs::path& den_home);
+/// Interpolated strings are XML-escaped. When `prefix` is den's own prefix
+/// (not Homebrew's), `<prefix>/bin` leads the agent's PATH.
+std::string launchd_plist(const fs::path& den_binary, const fs::path& den_home,
+                          const fs::path& prefix = {});
 
 /// Append a timestamped log line to den_home/daemon.log.
 void log_daemon(const fs::path& den_home, const std::string& msg);
