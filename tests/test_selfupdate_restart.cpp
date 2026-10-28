@@ -113,11 +113,19 @@ TEST_SUITE("selfupdate_restart") {
     }
 
     TEST_CASE("doctor points broken links at den migrate-prefix without repairing") {
-        auto many = broken_symlinks_hint(311);
+        auto many = broken_symlinks_hint(311, true);
         CHECK(many.find("311 broken symlinks") != std::string::npos);
-        CHECK(many.find("`den migrate-prefix` (coming)") != std::string::npos);
+        CHECK(many.find("`den migrate-prefix`") != std::string::npos);
+        CHECK(many.find("(coming)") == std::string::npos);
         CHECK(many.find("does not repair") != std::string::npos);
-        CHECK(broken_symlinks_hint(1).find("1 broken symlink in") != std::string::npos);
+        CHECK(broken_symlinks_hint(1, true).find("1 broken symlink in") != std::string::npos);
+        auto own = broken_symlinks_hint(3, false);
+        CHECK(own.find("migrate-prefix") == std::string::npos);
+        CHECK(own.find("does not repair") != std::string::npos);
+        CHECK(shared_prefix_hint() ==
+              "den is still installing into Homebrew's folder, so Homebrew upgrades can break "
+              "your den environments. Run `den migrate-prefix` to see what moving would do. It "
+              "changes nothing until you add --apply.");
     }
 
     TEST_CASE("profile_has_den_init recognises every den init form, not comments") {

@@ -49,4 +49,10 @@ class HomebrewProvider : public PackageProvider {
 /// cross-check still runs at install time, before extraction.
 std::optional<fs::path> prefetch_bottle(const Config& config, const Package& pkg);
 
+/// Pour one formula keg (no dependency resolution, no manifest change) into
+/// config.store, write its DEN_RECEIPT and opt link. Used by `den
+/// migrate-prefix`, which plans versions and dependencies itself. Returns
+/// false when the keg was already installed.
+bool pour_formula_keg(const Config& config, const Package& pkg);
+
 } // namespace den

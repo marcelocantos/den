@@ -197,13 +197,41 @@ resolved in this order — the first match wins:
 1. **`DEN_PREFIX`** environment variable.
 2. **`store.prefix`** in `$DEN_HOME/config.json` (`den set store.prefix
    /path`; `den migrate` writes this to pin Homebrew's prefix).
-3. **`$DEN_HOME/prefix`**, if `$DEN_HOME/prefix/Cellar` already exists.
+3. **`$DEN_HOME/prefix`**, if `$DEN_HOME/prefix/Cellar` already exists
+   (skipped while an unfinished `den migrate-prefix` is still pouring
+   into it).
 4. **Legacy shared Cellar** — a den home created before store isolation
    (no `$DEN_HOME/prefix/Cellar` yet) whose manifests list packages that
    Homebrew's Cellar has keeps using that Cellar (detected read-only;
-   nothing is written to decide this). Run `den migrate` or
+   nothing is written to decide this). Run `den migrate-prefix` to give
+   den its own folder (see below), or `den migrate` /
    `den set store.prefix …` to make the choice explicit.
 5. **`$DEN_HOME/prefix`** (default).
+
+### Moving off Homebrew's folder: `den migrate-prefix`
+
+An older den home that installs into Homebrew's prefix can be moved into a
+prefix of its own (`--to`, default `$DEN_HOME/prefix`). With no flags the
+command is a dry run: it lists every keg it would reinstall (and who owns
+the old copy), manifest drift and pins, the disk it would write per keg and
+in total next to the free space at the destination, and the den service
+specs, daemon plist and shell rc files it would touch. Nothing changes until
+`--apply`.
+
+- Homebrew's prefix is never written. Den-poured kegs there stay in place
+  for a follow-up `den cleanup --prefix` to reclaim; Homebrew's own kegs and
+  `homebrew.mxcl.*` plists stay Homebrew's.
+- A keg whose manifest version is missing is re-poured at the index
+  version and reported; den never downgrades, and a pin the index no longer
+  offers blocks the move.
+- `--apply` refuses when the destination lacks space, or while den services
+  or the den daemon run (`--stop-services` stops them, moves, rewrites
+  their specs and the daemon's PATH, then restarts them).
+- Kegs are poured and linked first and the switch of `store.prefix` comes
+  last, so a failure before it leaves den unchanged. Progress is journalled
+  in `$DEN_HOME/migrate-prefix.json`: `--resume` continues (re-verifying
+  what was poured), `--rollback` restores the old prefix and keeps the new
+  one on disk, and `--only a,b` pours a subset first.
 
 `DEN_HOME` (default `~/.den`) holds manifests, envs, cache, caskroom and
 config. So setting **`DEN_HOME` alone gives a fully isolated den** — its
@@ -243,6 +271,7 @@ Run `den --help` for the full list. Key commands:
 | `den whence <file-or-name>` | Show which package owns a file or command |
 | `den self-update` | Update den to the latest release |
 | `den cleanup` | Remove unused versions den installed, and clear the archive cache. Kegs den did not install (including Homebrew's) are left untouched. `--dry-run` previews the removal |
+| `den migrate-prefix [--to <dir>] [--apply\|--resume\|--rollback] [--only a,b] [--stop-services]` | Move an older den home off Homebrew's prefix into its own. Dry run unless `--apply`; see [Moving off Homebrew's folder](#moving-off-homebrews-folder-den-migrate-prefix) |
 | `den autoremove` | Remove unused dependencies |
 | `den services list` | Show managed services |
 | `den log [-n] [--json]` | Show upgrade activity log |

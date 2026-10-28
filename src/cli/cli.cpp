@@ -21,6 +21,7 @@
 #include "../index/index.h"
 #include "../index/sat_solver.h"
 #include "../migrate/migrate.h"
+#include "../migrate/migrate_prefix.h"
 #include "../platform/platform.h"
 #include "../provider/exec.h"
 #include "../provider/homebrew_provider.h"
@@ -969,7 +970,12 @@ void Cli::M::setup() {
         auto na = [](const std::optional<std::string>& v) { return v ? *v : std::string("n/a"); };
 
         std::cout << "den_home:          " << cfg.den_home.string() << "\n"
-                  << "prefix:            " << cfg.prefix.string() << "\n"
+                  << "prefix:            " << cfg.prefix.string()
+                  << (cfg.shares_homebrew_cellar()
+                          ? " (shared with Homebrew. This is an older den setup. Run `den "
+                            "migrate-prefix` to give den its own folder.)"
+                          : "")
+                  << "\n"
                   << "prefix_source:     " << to_string(cfg.prefix_source) << "\n"
                   << "store:             " << cfg.store.string() << "\n"
                   << "cache:             " << cfg.cache.string() << "\n"
@@ -1323,6 +1329,52 @@ void Cli::M::setup() {
         }
     });
 
+    // --- migrate-prefix ---
+    auto* migrate_prefix = app.add_subcommand(
+        "migrate-prefix",
+        "Move den out of Homebrew's prefix into its own (dry run unless --apply)");
+    static std::string mp_to;
+    static bool mp_apply = false;
+    static bool mp_resume = false;
+    static bool mp_rollback = false;
+    static bool mp_stop_services = false;
+    static std::vector<std::string> mp_only;
+    migrate_prefix->add_option("--to", mp_to, "Den's new prefix (default: $DEN_HOME/prefix)");
+    migrate_prefix->add_flag("--apply", mp_apply,
+                             "Reinstall den's kegs into the new prefix and switch to it");
+    migrate_prefix
+        ->add_option("--only", mp_only,
+                     "Pour only these kegs this run (den switches once all are in)")
+        ->delimiter(',');
+    migrate_prefix->add_flag("--resume", mp_resume, "Continue a run that stopped part-way");
+    migrate_prefix->add_flag("--rollback", mp_rollback,
+                             "Switch den back to the old prefix (keeps the new one on disk)");
+    migrate_prefix->add_flag("--stop-services", mp_stop_services,
+                             "Stop running den services and the daemon for the move, then "
+                             "restart them");
+    migrate_prefix->callback([] {
+        if (static_cast<int>(mp_apply) + static_cast<int>(mp_resume) +
+                static_cast<int>(mp_rollback) >
+            1) {
+            throw UserError("use one of --apply, --resume, --rollback");
+        }
+        auto cfg = Config::detect();
+        MigratePrefixOptions opts;
+        opts.to = mp_to;
+        opts.apply = mp_apply;
+        opts.resume = mp_resume;
+        opts.rollback = mp_rollback;
+        opts.stop_services = mp_stop_services;
+        opts.only = std::set<std::string>(mp_only.begin(), mp_only.end());
+        const char* home = std::getenv("HOME");
+        opts.home = home ? fs::path(home) : fs::path("/tmp");
+        int rc = run_migrate_prefix(cfg, opts, std::cout);
+        std::cout.flush();
+        if (rc != 0) {
+            throw CLI::RuntimeError(rc);
+        }
+    });
+
     // --- daemon ---
     auto* daemon = app.add_subcommand("daemon", "Manage the background daemon");
     daemon->require_subcommand(1);
@@ -1378,7 +1430,7 @@ void Cli::M::setup() {
                 exe = fs::path(buf);
             }
         }
-        auto plist = launchd_plist(exe, cfg.den_home);
+        auto plist = launchd_plist(exe, cfg.den_home, cfg.prefix);
         auto home = fs::path(std::getenv("HOME") ? std::getenv("HOME") : "/tmp");
         auto plist_path = home / "Library" / "LaunchAgents" / "dev.den.daemon.plist";
         fs::create_directories(plist_path.parent_path());

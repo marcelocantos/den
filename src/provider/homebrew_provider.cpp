@@ -275,6 +275,10 @@ bool install_one(const Config& config, const Package& pkg) {
 
 } // namespace
 
+bool pour_formula_keg(const Config& config, const Package& pkg) {
+    return install_one_qualified(config, pkg);
+}
+
 HomebrewProvider::HomebrewProvider(const PackageIndex* idx) : idx_(idx) {}
 
 std::string_view HomebrewProvider::provider_name() const {
