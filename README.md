@@ -225,6 +225,14 @@ specs, daemon plist and shell rc files it would touch. Nothing changes until
 - A keg whose manifest version is missing is re-poured at the index
   version and reported; den never downgrades, and a pin the index no longer
   offers blocks the move.
+- A keg whose bottle only pours into Homebrew's Cellar (a hardcoded
+  cellar) stays brew-owned: the plan lists it as `brew-owned`, `--apply`
+  links `<to>/opt/<name>` to Homebrew's `opt/<name>`, and every den keg that
+  will load it from there gets a `brew-link` line. It stays blocked when
+  Homebrew is not installed, when Homebrew's Cellar has no such keg, or when
+  the keg there was poured by den, so den never depends on brew silently.
+  `den doctor` then lists these as "remaining brew dependencies", along with
+  any den keg whose Mach-O load commands point into Homebrew's prefix.
 - `--apply` refuses when the destination lacks space, or while den services
   or the den daemon run (`--stop-services` stops them, moves, rewrites
   their specs and the daemon's PATH, then restarts them).

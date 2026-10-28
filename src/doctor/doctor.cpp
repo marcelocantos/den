@@ -3,6 +3,7 @@
 
 #include "doctor.h"
 
+#include "../build/macho_scan.h"
 #include "../core/error.h"
 #include "../env/environment.h"
 #include "../env/manifest.h"
@@ -20,6 +21,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <set>
 #include <sstream>
 #include <string>
 #include <sys/stat.h>
@@ -293,6 +295,38 @@ void check_missing_packages(const Config& config, std::vector<Finding>& findings
 }
 
 // ---------------------------------------------------------------------------
+// Check: remaining brew dependencies
+// Kegs den's own prefix still takes from Homebrew's: an [info] count and
+// list, or a warning when any of them no longer resolves.
+// ---------------------------------------------------------------------------
+void check_brew_dependencies(const Config& config, std::vector<Finding>& findings,
+                             std::vector<std::string>& notes) {
+    SPDLOG_DEBUG("check: remaining brew dependencies");
+    std::vector<BrewDependency> deps;
+    try {
+        deps = remaining_brew_dependencies(config);
+    } catch (const std::exception& e) {
+        SPDLOG_DEBUG("brew dependency check skipped: {}", e.what());
+        return;
+    }
+    if (deps.empty()) {
+        return;
+    }
+    auto text = format_brew_dependencies(deps);
+    const auto broken =
+        std::count_if(deps.begin(), deps.end(), [](const BrewDependency& d) { return d.broken; });
+    if (broken == 0) {
+        notes.push_back(std::move(text));
+        return;
+    }
+    text += "\n  " + std::to_string(broken) + " of them no longer resolve in " +
+            config.homebrew_prefix.string() +
+            " (Homebrew removed or upgraded the keg, or is not installed); `brew install` it "
+            "again for den's kegs that load it.";
+    warn(findings, std::move(text));
+}
+
+// ---------------------------------------------------------------------------
 // Check 7: file permissions on sensitive files
 // config.json and any *.key / *.pem files should be mode 0600.
 // ---------------------------------------------------------------------------
@@ -452,6 +486,116 @@ std::vector<std::string> kegs_with_mismatched_cellar(const fs::path& store, cons
 // Public API
 // ---------------------------------------------------------------------------
 
+namespace {
+
+bool lexically_within(const fs::path& p, const fs::path& root) {
+    const auto rel = p.lexically_normal().lexically_relative(root.lexically_normal());
+    return !rel.empty() && rel.native().rfind("..", 0) != 0;
+}
+
+} // namespace
+
+std::vector<BrewDependency> remaining_brew_dependencies(const Config& config) {
+    std::vector<BrewDependency> out;
+    const auto& brew = config.homebrew_prefix;
+    if (brew.empty() || config.shares_homebrew_cellar() ||
+        config.prefix.lexically_normal() == brew.lexically_normal()) {
+        return out;
+    }
+    std::error_code ec;
+    const auto brew_canon = fs::weakly_canonical(brew, ec);
+    auto into_brew = [&](const fs::path& p) {
+        if (lexically_within(p, brew)) {
+            return true;
+        }
+        std::error_code cec;
+        auto canon = fs::weakly_canonical(p, cec);
+        return !cec && !brew_canon.empty() && lexically_within(canon, brew_canon);
+    };
+
+    // Manifest kegs den left with brew.
+    std::set<std::string> names;
+    for (const auto& env : list_all(config.den_home)) {
+        auto m = read_manifest(config.den_home, env);
+        for (const auto& [entry, _] : m.packages["homebrew"]) {
+            names.insert(fs::path(entry).filename().string());
+        }
+        for (const auto& entry : m.auto_deps["homebrew"]) {
+            names.insert(fs::path(entry).filename().string());
+        }
+    }
+    for (const auto& name : names) {
+        const auto opt = config.prefix / "opt" / name;
+        std::error_code lec;
+        if (!fs::is_symlink(fs::symlink_status(opt, lec))) {
+            continue;
+        }
+        auto target = fs::read_symlink(opt, lec);
+        if (lec) {
+            continue;
+        }
+        if (target.is_relative()) {
+            target = opt.parent_path() / target;
+        }
+        if (!into_brew(target)) {
+            continue;
+        }
+        std::error_code cec;
+        const auto keg = fs::canonical(opt, cec);
+        BrewDependency d;
+        d.keg = name + (cec ? "" : " " + keg.filename().string());
+        d.detail =
+            "stays with brew (" + opt.string() + " -> " + target.lexically_normal().string() + ")";
+        d.broken = static_cast<bool>(cec);
+        out.push_back(std::move(d));
+    }
+
+    // Kegs in den's store that load from Homebrew's prefix.
+    for (const auto& pkg : fs::directory_iterator(config.store, ec)) {
+        std::error_code vec;
+        if (!pkg.is_directory(vec)) {
+            continue;
+        }
+        std::vector<fs::path> kegs;
+        for (const auto& ver : fs::directory_iterator(pkg.path(), vec)) {
+            std::error_code dec;
+            if (ver.is_directory(dec) && !fs::is_symlink(ver.symlink_status(dec))) {
+                kegs.push_back(ver.path());
+            }
+        }
+        std::sort(kegs.begin(), kegs.end());
+        for (const auto& keg : kegs) {
+            auto refs = keg_brew_links(keg, brew);
+            if (refs.empty()) {
+                continue;
+            }
+            std::string what;
+            for (const auto& f : brew_link_formulae(refs)) {
+                what += (what.empty() ? "" : ", ") + f;
+            }
+            BrewDependency d;
+            d.keg = pkg.path().filename().string() + "/" + keg.filename().string();
+            d.detail = "loads " + what + " from " + brew.string();
+            d.broken = std::any_of(refs.begin(), refs.end(), [](const BrewLinkRef& r) {
+                std::error_code xec;
+                return !fs::exists(r.brew_path, xec);
+            });
+            out.push_back(std::move(d));
+        }
+    }
+    std::sort(out.begin() + 0, out.end(),
+              [](const BrewDependency& a, const BrewDependency& b) { return a.keg < b.keg; });
+    return out;
+}
+
+std::string format_brew_dependencies(const std::vector<BrewDependency>& deps) {
+    std::string s = "remaining brew dependencies: " + std::to_string(deps.size());
+    for (const auto& d : deps) {
+        s += "\n    " + d.keg + ": " + d.detail + (d.broken ? " [missing]" : "");
+    }
+    return s;
+}
+
 std::string root_path_order_problem(const std::string& path_env, const fs::path& prefix,
                                     const fs::path& den_bin) {
     const auto bin = (prefix / "bin").lexically_normal();
@@ -504,6 +648,7 @@ std::vector<Finding> doctor(const Config& config) {
     check_root_prefix_layout(config, findings);
     check_broken_symlinks(config, findings);
     check_missing_packages(config, findings);
+    check_brew_dependencies(config, findings, notes);
     check_file_permissions(config, findings);
     check_host_toolchain(config, findings);
     check_trust_model(config, findings);

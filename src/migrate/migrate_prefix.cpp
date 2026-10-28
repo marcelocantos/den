@@ -3,6 +3,7 @@
 
 #include "migrate_prefix.h"
 
+#include "../build/macho_scan.h"
 #include "../cask/cask.h"
 #include "../core/error.h"
 #include "../core/version.h"
@@ -226,6 +227,94 @@ std::map<std::string, Owned> owned_kegs(const fs::path& den_home) {
         }
     }
     return out;
+}
+
+/// The fixed Cellar `pkg`'s best bottle was built for when that is why it
+/// cannot pour into `store`, else empty.
+std::string fixed_cellar_for(const Config& cfg, const Package& pkg, const fs::path& store) {
+    std::vector<std::string> tags;
+    for (const auto& [tag, _] : pkg.archives) {
+        tags.push_back(tag);
+    }
+    auto best = best_archive_tag(cfg.arch, cfg.macos_version, tags);
+    if (!best) {
+        return {};
+    }
+    const auto& archive = pkg.archives.at(*best);
+    if (bottle_pours_into(*best, archive, store)) {
+        return {};
+    }
+    return required_bottle_cellar(*best, archive);
+}
+
+std::string normal_dir(const fs::path& p) {
+    auto s = p.lexically_normal().string();
+    while (s.size() > 1 && s.back() == '/') {
+        s.pop_back();
+    }
+    return s;
+}
+
+/// A keg whose bottle only pours into `cellar` keeps using Homebrew's copy
+/// when that is Homebrew's Cellar here, brew is installed, and brew's Cellar
+/// holds a keg of it brew owns. Sets `k` to BrewOwned, or extends its
+/// Blocked reason with why not (never a silent dependency).
+void keep_with_brew(const Config& cfg, const std::string& cellar, KegPlan& k) {
+    std::error_code ec;
+    const fs::path brew_cellar =
+        cfg.homebrew_cellar.empty() ? cfg.homebrew_prefix / "Cellar" : cfg.homebrew_cellar;
+    if (cfg.homebrew_prefix.empty() || normal_dir(cellar) != normal_dir(brew_cellar)) {
+        k.reason += " (not Homebrew's Cellar here, so brew cannot keep it)";
+        return;
+    }
+    const auto brew = cfg.homebrew_prefix / "bin" / "brew";
+    if (!fs::exists(brew, ec)) {
+        k.reason +=
+            "; Homebrew is not installed (no " + brew.string() + "), so nothing would provide it";
+        return;
+    }
+    // Prefer the manifest version brew's opt link selects, then any manifest
+    // version brew still has, then whatever brew's opt link selects.
+    std::string opt_version;
+    if (auto opt = fs::canonical(cfg.homebrew_prefix / "opt" / k.name, ec); !ec) {
+        std::error_code cec;
+        auto canon_cellar = fs::canonical(brew_cellar / k.name, cec);
+        if (!cec && opt.parent_path() == canon_cellar) {
+            opt_version = opt.filename().string();
+        }
+    }
+    std::vector<std::string> candidates;
+    if (!opt_version.empty() && k.manifest_versions.count(opt_version)) {
+        candidates.push_back(opt_version);
+    }
+    for (auto it = k.manifest_versions.rbegin(); it != k.manifest_versions.rend(); ++it) {
+        candidates.push_back(*it);
+    }
+    if (!opt_version.empty()) {
+        candidates.push_back(opt_version);
+    }
+    bool den_poured = false;
+    for (const auto& v : candidates) {
+        const auto keg = brew_cellar / k.name / v;
+        const auto owner = keg_owner(keg);
+        if (owner == KegOwner::Missing) {
+            continue;
+        }
+        if (owner == KegOwner::Den) {
+            den_poured = true; // `den cleanup --prefix` reclaims these: not brew's to keep
+            continue;
+        }
+        k.action = KegAction::BrewOwned;
+        k.target = v;
+        k.owner = owner;
+        k.brew_keg = keg;
+        k.reason = "bottle only pours into " + cellar + "; stays with brew";
+        return;
+    }
+    k.reason += den_poured ? "; the only " + k.name + " keg in " + brew_cellar.string() +
+                                 " was poured by den, so brew does not own it"
+                           : "; " + brew_cellar.string() + " has no " + k.name +
+                                 " keg for brew to keep providing";
 }
 
 /// Why `pkg` cannot be poured into `store`, or empty.
@@ -452,12 +541,14 @@ planned_manifest_changes(const fs::path& den_home, const MigratePrefixPlan& plan
         auto& bucket = m.packages["homebrew"];
         for (const auto& [entry, ver] : bucket) {
             auto it = by_name.find(keg_name(entry));
-            if (it != by_name.end() && it->second->target != ver) {
+            if (it != by_name.end() && it->second->action != KegAction::BrewOwned &&
+                it->second->target != ver) {
                 out.push_back({env, entry, ver, it->second->target});
             }
         }
         for (const auto& k : plan.kegs) {
-            if (k.new_dep && k.envs.count(env) && !bucket.count(k.entry)) {
+            if (k.new_dep && k.action != KegAction::BrewOwned && k.envs.count(env) &&
+                !bucket.count(k.entry)) {
                 out.push_back({env, k.entry, "", k.target});
             }
         }
@@ -739,7 +830,7 @@ std::optional<uint64_t> free_bytes_at(const fs::path& p, fs::path* at) {
     if (const char* o = std::getenv("DEN_MIGRATE_PREFIX_FREE_BYTES"); o && *o) {
         return std::stoull(o);
     }
-    struct statvfs st{};
+    struct statvfs st {};
     if (::statvfs(probe.c_str(), &st) != 0) {
         return std::nullopt;
     }
@@ -801,13 +892,45 @@ void discard_keg(const fs::path& store, const std::string& name, const std::stri
     }
 }
 
+/// `<to>/opt/<name>` -> `<brew_prefix>/opt/<name>`, so kegs den pours that
+/// load a brew-owned dependency through den's opt link reach brew's copy (and
+/// follow brew's upgrades of it). Only ever writes inside <to>; an existing
+/// entry is left alone.
+void link_brew_owned(const fs::path& to, const fs::path& brew_prefix, const std::string& name,
+                     std::ostream& out) {
+    std::error_code ec;
+    const auto link = to / "opt" / name;
+    const auto target = brew_prefix / "opt" / name;
+    const auto st = fs::symlink_status(link, ec);
+    if (!fs::exists(st)) {
+        fs::create_directories(link.parent_path());
+        fs::create_symlink(target, link);
+        out << "linked     " << link.string() << " -> " << target.string() << " (brew-owned)\n";
+    } else if (!fs::is_symlink(st) || fs::read_symlink(link, ec) != target) {
+        out << "kept       " << link.string() << " (already there; not repointed at "
+            << target.string() << ")\n";
+    }
+}
+
 } // namespace
+
+std::string keg_display_version(const KegPlan& k) {
+    std::string v;
+    for (const auto& s : k.manifest_versions) {
+        v += (v.empty() ? "" : ",") + s;
+    }
+    if (v.empty()) {
+        v = k.target;
+    }
+    return v.empty() ? "(no version recorded)" : v;
+}
 
 MigratePrefixPlan plan_migrate_prefix(const Config& cfg, const PackageIndex& idx,
                                       const fs::path& to, const fs::path& home, bool measure) {
     MigratePrefixPlan plan;
     plan.from = cfg.prefix;
     plan.to = to;
+    plan.brew_prefix = cfg.homebrew_prefix;
     const auto from_cellar = cfg.prefix / "Cellar";
     const auto to_cellar = to / "Cellar";
     const Config cfg_to = config_for(cfg, to);
@@ -883,7 +1006,15 @@ MigratePrefixPlan plan_migrate_prefix(const Config& cfg, const PackageIndex& idx
             if (auto problem = pour_problem(cfg, *pkg, to_cellar); !problem.empty()) {
                 k.action = KegAction::Blocked;
                 k.reason = problem;
+                if (auto cellar = fixed_cellar_for(cfg, *pkg, to_cellar);
+                    !cellar.empty() && !pins.count(name)) {
+                    keep_with_brew(cfg, cellar, k);
+                }
             }
+        }
+        if (k.action == KegAction::BrewOwned) {
+            kegs[name] = k;
+            return;
         }
         if (k.action != KegAction::Blocked && name + "/" + k.target != pouring &&
             keg_problem(to_cellar, name, k.target).empty()) {
@@ -919,8 +1050,8 @@ MigratePrefixPlan plan_migrate_prefix(const Config& cfg, const PackageIndex& idx
         queue.pop_back();
         const auto parent = kegs.at(name);
         const Package* pkg = idx.find(parent.entry);
-        if (!pkg || parent.action == KegAction::Blocked) {
-            continue;
+        if (!pkg || parent.action == KegAction::Blocked || parent.action == KegAction::BrewOwned) {
+            continue; // brew provides a brew-owned keg's own dependencies
         }
         for (const auto& dep : pkg->dependencies) {
             const auto dep_name = keg_name(dep);
@@ -941,9 +1072,35 @@ MigratePrefixPlan plan_migrate_prefix(const Config& cfg, const PackageIndex& idx
             queue.push_back(dep_name);
         }
     }
+    // Which kegs den pours (or poured) will load a brew-owned keg from
+    // Homebrew's prefix.
+    for (auto& [name, k] : kegs) {
+        if (k.action == KegAction::Blocked || k.action == KegAction::BrewOwned) {
+            continue;
+        }
+        if (k.action == KegAction::Done) {
+            k.brew_links_scanned = true;
+            k.brew_links = brew_link_formulae(
+                keg_brew_links(to_cellar / name / k.target, cfg.homebrew_prefix));
+            continue;
+        }
+        const Package* pkg = idx.find(k.entry);
+        if (!pkg) {
+            continue;
+        }
+        std::set<std::string> deps;
+        for (const auto& dep : pkg->dependencies) {
+            auto it = kegs.find(keg_name(dep));
+            if (it != kegs.end() && it->second.action == KegAction::BrewOwned) {
+                deps.insert(it->first);
+            }
+        }
+        k.brew_links.assign(deps.begin(), deps.end());
+    }
     for (auto& [name, k] : kegs) {
         plan.kegs.push_back(std::move(k));
-        if (plan.kegs.back().action == KegAction::Blocked) {
+        if (plan.kegs.back().action == KegAction::Blocked ||
+            plan.kegs.back().action == KegAction::BrewOwned) {
             continue;
         }
         if (plan.kegs.back().bytes) {
@@ -1007,13 +1164,7 @@ MigratePrefixPlan plan_migrate_prefix(const Config& cfg, const PackageIndex& idx
 void print_migrate_prefix_plan(std::ostream& out, const MigratePrefixPlan& plan) {
     const auto from_cellar = plan.from / "Cellar";
     const std::string to = plan.to.string();
-    auto versions = [](const KegPlan& k) {
-        std::string v;
-        for (const auto& s : k.manifest_versions) {
-            v += (v.empty() ? "" : ",") + s;
-        }
-        return v;
-    };
+    auto versions = [](const KegPlan& k) { return keg_display_version(k); };
     for (const auto& k : plan.kegs) {
         const auto old_dir = (from_cellar / k.name).string();
         switch (k.action) {
@@ -1047,6 +1198,28 @@ void print_migrate_prefix_plan(std::ostream& out, const MigratePrefixPlan& plan)
         case KegAction::Blocked:
             out << "blocked    " << k.name << " " << versions(k) << ": " << k.reason << "\n";
             break;
+        case KegAction::BrewOwned:
+            out << "brew-owned " << k.name << " " << k.target << " (" << k.reason << ")\n";
+            break;
+        }
+    }
+    std::size_t brew_linked = 0;
+    for (const auto& k : plan.kegs) {
+        if (k.brew_links.empty()) {
+            continue;
+        }
+        ++brew_linked;
+        std::string deps;
+        for (const auto& d : k.brew_links) {
+            deps += (deps.empty() ? "" : ", ") + d;
+        }
+        if (k.brew_links_scanned) {
+            out << "brew-link  " << k.name << " " << k.target << " loads " << deps << " from "
+                << plan.brew_prefix.string() << " (Mach-O load commands)\n";
+        } else {
+            out << "brew-link  " << k.name << " " << k.target << " will load " << deps << " from "
+                << (plan.brew_prefix / "opt").string() << " through " << to
+                << "/opt links (brew-owned dependency)\n";
         }
     }
     for (const auto& c : plan.casks) {
@@ -1077,7 +1250,7 @@ void print_migrate_prefix_plan(std::ostream& out, const MigratePrefixPlan& plan)
            "after `exec $SHELL`\n";
 
     for (const auto& k : plan.kegs) {
-        if (k.action == KegAction::Blocked) {
+        if (k.action == KegAction::Blocked || k.action == KegAction::BrewOwned) {
             continue;
         }
         out << "disk       " << k.name << " " << k.target << ": "
@@ -1090,12 +1263,16 @@ void print_migrate_prefix_plan(std::ostream& out, const MigratePrefixPlan& plan)
         << plan.free_at.string() << ": "
         << (plan.free_bytes ? bytes_label(*plan.free_bytes) : std::string("unknown")) << "\n";
 
-    const auto pourable =
-        plan.kegs.size() - plan.count(KegAction::Blocked) - plan.count(KegAction::Done);
+    const auto pourable = plan.kegs.size() - plan.count(KegAction::Blocked) -
+                          plan.count(KegAction::Done) - plan.count(KegAction::BrewOwned);
     out << plan.kegs.size() << " kegs, " << plan.count(KegAction::Drift) << " drift, "
         << plan.count(KegAction::Pinned) << " pinned, " << plan.count(KegAction::Blocked)
-        << " blocked, " << plan.count(KegAction::Done) << " already moved; " << pourable
-        << " to reinstall; " << plan.from.string() << " writes: 0\n";
+        << " blocked, " << plan.count(KegAction::BrewOwned) << " brew-owned, "
+        << plan.count(KegAction::Done) << " already moved; " << pourable << " to reinstall";
+    if (brew_linked) {
+        out << "; " << brew_linked << " link into brew-owned kegs";
+    }
+    out << "; " << plan.from.string() << " writes: 0\n";
 }
 
 // ---- Run ----------------------------------------------------------------------
@@ -1404,6 +1581,8 @@ int run_migrate_prefix(const Config& cfg, const MigratePrefixOptions& opts, std:
         }
         if (k.action == KegAction::Blocked) {
             blocked.push_back(&k);
+        } else if (k.action == KegAction::BrewOwned) {
+            continue; // stays in Homebrew's Cellar: nothing to write
         } else if (!k.bytes) {
             unknown.push_back(k.name);
         } else {
@@ -1478,6 +1657,9 @@ int run_migrate_prefix(const Config& cfg, const MigratePrefixOptions& opts, std:
         // 1. pour
         std::size_t remaining = 0;
         for (const auto& k : plan.kegs) {
+            if (k.action == KegAction::BrewOwned) {
+                continue;
+            }
             const auto keg = cfg_to.store / k.name / k.target;
             const auto id = k.name + "/" + k.target;
             if (k.action == KegAction::Done && id != j.pouring &&
@@ -1521,7 +1703,7 @@ int run_migrate_prefix(const Config& cfg, const MigratePrefixOptions& opts, std:
         // Re-verify every receipt the journal claims (a resumed run trusts
         // nothing it did not just check).
         for (const auto& k : plan.kegs) {
-            if (!selected(k)) {
+            if (!selected(k) || k.action == KegAction::BrewOwned) {
                 continue;
             }
             if (auto problem = keg_problem(cfg_to.store, k.name, k.target); !problem.empty()) {
@@ -1544,6 +1726,10 @@ int run_migrate_prefix(const Config& cfg, const MigratePrefixOptions& opts, std:
         write_migrate_prefix_journal(cfg.den_home, j);
         maybe_fault("link");
         for (const auto& k : plan.kegs) {
+            if (k.action == KegAction::BrewOwned) {
+                link_brew_owned(to, plan.brew_prefix, k.name, out);
+                continue;
+            }
             ensure_prefix_opt_link(cfg_to.store, k.name, cfg_to.store / k.name / k.target);
         }
         for (const auto& r : plan.cask_relinks) {
@@ -1567,6 +1753,9 @@ int run_migrate_prefix(const Config& cfg, const MigratePrefixOptions& opts, std:
         // 4. switch, only once every keg verifies in <to>
         phase = "verify";
         for (const auto& k : plan.kegs) {
+            if (k.action == KegAction::BrewOwned) {
+                continue;
+            }
             item = k.name;
             if (auto problem = keg_problem(cfg_to.store, k.name, k.target); !problem.empty()) {
                 throw Error("before switching, " + k.name + " " + k.target + ": " + problem);

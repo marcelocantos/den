@@ -81,6 +81,8 @@ enum class KegAction {
     NewDep,    // a dependency the target version needs that no manifest lists
     Done,      // already poured into <to> by an earlier run
     Blocked,   // cannot be moved safely; the switch refuses while any is blocked
+    BrewOwned, // its bottle only pours into Homebrew's Cellar, where brew keeps
+               // its keg: not moved; <to>/opt/<name> links to brew's opt link
 };
 
 struct KegPlan {
@@ -96,7 +98,18 @@ struct KegPlan {
     bool new_dep = false;          // not in any manifest: the target needs it
     std::optional<uint64_t> bytes; // bytes written into <to>; nullopt = unknown
     std::string bytes_source;      // "old keg", "bottle", "already poured"
+    fs::path brew_keg;             // BrewOwned: the keg in Homebrew's Cellar
+    /// Brew-owned kegs this keg's binaries load from Homebrew's prefix: for a
+    /// keg still to pour, its direct dependencies that stay brew-owned
+    /// (predicted); for a keg already in <to>, what its Mach-O load commands
+    /// actually reach (`brew_links_scanned`).
+    std::vector<std::string> brew_links;
+    bool brew_links_scanned = false;
 };
+
+/// The version a plan line shows for `k`: its manifest versions, else the
+/// version it would pour or keeps, else a placeholder (never blank).
+std::string keg_display_version(const KegPlan& k);
 
 struct CaskRelink {
     std::string token;
@@ -112,6 +125,7 @@ struct ServiceRewrite {
 struct MigratePrefixPlan {
     fs::path from; // old prefix (Homebrew's)
     fs::path to;
+    fs::path brew_prefix; // Homebrew's prefix (brew-owned kegs' opt links)
     std::vector<KegPlan> kegs;
     std::vector<std::string> casks; // manifest casks (stay under den's caskroom)
     std::vector<CaskRelink> cask_relinks;

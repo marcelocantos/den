@@ -74,6 +74,25 @@ std::string format_file_mode(unsigned mode);
 /// is private. The mode is shown in octal.
 std::string sensitive_file_mode_problem(const fs::path& p, unsigned mode);
 
+/// One thing den's own prefix still takes from Homebrew's.
+struct BrewDependency {
+    std::string keg;     // "openssl@3 3.6.3" (kept with brew) or "libssh2/1.11.1_7" (den keg)
+    std::string detail;  // how it reaches Homebrew's prefix
+    bool broken = false; // what it reaches no longer exists
+};
+
+/// What den's prefix still depends on in Homebrew's (`config.homebrew_prefix`):
+/// manifest kegs den left with brew (their `<prefix>/opt/<name>` link points
+/// into Homebrew's prefix, as `den migrate-prefix` makes for bottles that only
+/// pour into Homebrew's Cellar), then kegs in den's store whose Mach-O load
+/// commands reach into Homebrew's prefix, literally or through such a link.
+/// Empty when den shares Homebrew's prefix (everything is brew's then).
+std::vector<BrewDependency> remaining_brew_dependencies(const Config& config);
+
+/// The doctor text for `deps`: "remaining brew dependencies: N" and one
+/// indented line each.
+std::string format_brew_dependencies(const std::vector<BrewDependency>& deps);
+
 /// Run all health checks and print a summary.
 /// Returns the list of findings so callers can set a non-zero exit code
 /// when there are errors.
