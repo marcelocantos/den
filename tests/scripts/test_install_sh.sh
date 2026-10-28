@@ -138,6 +138,7 @@ mkrel() {
     if [ "${5:-}" = real ]; then
         cat >"$_s/den" <<DEN
 #!/bin/sh
+# fake den $1 (real)
 case "\$1" in
     --version) echo "$2" ;;
     *) exec "$_real_den" "\$@" ;;
@@ -146,6 +147,7 @@ DEN
     else
         cat >"$_s/den" <<DEN
 #!/bin/sh
+# fake den $1
 [ -n "\${FAKE_DEN_LOG:-}" ] && echo "\$*" >>"\$FAKE_DEN_LOG"
 for a in "\$@"; do
     [ "\$a" = --help ] && { echo "Usage: den [OPTIONS] [SUBCOMMAND]"; exit 0; }
@@ -167,6 +169,8 @@ mkrel v0.14.0 0.14.0 linux x86_64
 mkrel v0.14.0-rc.3 0.14.0 linux x86_64
 mkrel v0.15.0-rc.1 0.15.0 linux x86_64
 mkrel v0.15.0-rc.1 0.15.0 darwin aarch64
+mkrel v0.15.0-rc.2 0.15.0 linux x86_64
+mkrel v0.15.0-rc.3 0.15.0 linux x86_64
 mkrel v0.13.0 0.13.0 linux x86_64
 [ -n "$_real_den" ] && mkrel v0.16.0 0.16.0 linux x86_64 real
 # A release whose checksum does not match its tarball.
@@ -225,7 +229,7 @@ for v in v0.14.0 0.14.0; do
     check "GA $v: checksums URL" 'curl_has "/releases/download/v0.14.0/den-0.14.0-checksums.txt"'
     check "GA $v: binary installed" '[ "$("$H/.den/bin/den" --version)" = 0.14.0 ]'
     check "GA $v: replica installed" 'grep -q v0.14.0 "$H/.den/share/den/known_hashes.json"'
-    check "GA $v: tag recorded" '[ "$(cat "$H/.den/share/den/installed-tag")" = v0.14.0 ]'
+    check "GA $v: tag recorded" '[ "$(sed -n 1p "$H/.den/share/den/installed-tag")" = v0.14.0 ]'
     check "GA $v: default prefix created" '[ -d "$H/.den/prefix" ]'
     check "GA $v: no sudo" '[ ! -s "$_tmp/sudo.log" ]'
 done
@@ -238,7 +242,7 @@ for v in 0.15.0-rc.1 v0.15.0-rc.1; do
     check "RC $v: RC tag, GA-named asset" \
         'curl_has "/releases/download/v0.15.0-rc.1/den-0.15.0-linux-x86_64.tar.gz"'
     check "RC $v: GA-named checksums" 'curl_has "/releases/download/v0.15.0-rc.1/den-0.15.0-checksums.txt"'
-    check "RC $v: tag recorded" '[ "$(cat "$H/.den/share/den/installed-tag")" = v0.15.0-rc.1 ]'
+    check "RC $v: tag recorded" '[ "$(sed -n 1p "$H/.den/share/den/installed-tag")" = v0.15.0-rc.1 ]'
 done
 
 newhome
@@ -284,6 +288,53 @@ check "installed: different version replaces" \
 rm -f "$H/.den/share/den/installed-tag"
 inst DEN_VERSION=0.13.0
 check "installed: legacy GA install is a no-op" '[ "$_rc" -eq 0 ] && [ ! -s "$_tmp/curl.log" ]'
+
+# --- the installed-tag record must not outlive the binary it describes -------
+# `den self-update` replaces ~/.den/bin/den without install.sh; its record
+# then names a release that is no longer installed. Regression: an rc.1
+# install self-updated to rc.2 was reported as "replacing den v0.15.0-rc.1".
+_tagf() { echo "$H/.den/share/den/installed-tag"; }
+_self_update_to() { # _self_update_to TAG: swap in TAG's binary like self-update
+    cp "$_tmp/stage/$1-linux-x86_64/den" "$H/.den/bin/den.new"
+    mv "$H/.den/bin/den.new" "$H/.den/bin/den"
+}
+newhome
+inst DEN_VERSION=0.15.0-rc.1
+check "record: tag and binary sha recorded" \
+    '[ "$(sed -n 1p "$(_tagf)")" = v0.15.0-rc.1 ] && [ "$(sed -n 2p "$(_tagf)")" = "sha256 $(_sha "$H/.den/bin/den")" ]'
+_self_update_to v0.15.0-rc.2
+inst DEN_VERSION=0.15.0-rc.1
+check "record: stale record never makes a reinstall a no-op" \
+    '[ "$_rc" -eq 0 ] && curl_has "/releases/download/v0.15.0-rc.1/" && ! out_has "already installed"'
+_self_update_to v0.15.0-rc.2
+inst DEN_VERSION=0.15.0-rc.3
+check "record: stale record is not reported as the installed tag" \
+    '[ "$_rc" -eq 0 ] && ! out_has "replacing den v0.15.0-rc.1" && out_has "replacing den 0.15.0 (replaced since install.sh recorded v0.15.0-rc.1; exact release unknown) -> v0.15.0-rc.3"'
+check "record: rewritten for the new binary" \
+    '[ "$(sed -n 1p "$(_tagf)")" = v0.15.0-rc.3 ] && [ "$(sed -n 2p "$(_tagf)")" = "sha256 $(_sha "$H/.den/bin/den")" ]'
+
+# A record kept consistent by self-update (tag + new sha) is believed.
+_self_update_to v0.15.0-rc.2
+printf 'v0.15.0-rc.2\nsha256 %s\n' "$(_sha "$H/.den/bin/den")" >"$(_tagf)"
+inst DEN_VERSION=0.15.0-rc.2
+check "record: consistent record after self-update: same RC is a no-op" \
+    '[ "$_rc" -eq 0 ] && out_has "den v0.15.0-rc.2 is already installed." && [ ! -s "$_tmp/curl.log" ]'
+inst DEN_VERSION=0.15.0-rc.3
+check "record: consistent record after self-update names the real tag" \
+    '[ "$_rc" -eq 0 ] && out_has "replacing den v0.15.0-rc.2 -> v0.15.0-rc.3"'
+
+# Legacy (tag-only) records: believed until the binary is replaced after them.
+printf 'v0.15.0-rc.3\n' >"$(_tagf)"
+touch -t 200001010000 "$H/.den/bin/den"
+inst DEN_VERSION=0.15.0-rc.3
+check "record: legacy record newer than the binary is believed" \
+    '[ "$_rc" -eq 0 ] && [ ! -s "$_tmp/curl.log" ]'
+printf 'v0.15.0-rc.1\n' >"$(_tagf)"
+touch -t 200001010000 "$(_tagf)"
+_self_update_to v0.15.0-rc.2
+inst DEN_VERSION=0.15.0-rc.1
+check "record: legacy record older than the binary is stale" \
+    '[ "$_rc" -eq 0 ] && curl_has "/releases/download/v0.15.0-rc.1/" && out_has "recorded v0.15.0-rc.1; exact release unknown"'
 
 # --- missing sha256 tool is a hard failure -----------------------------------
 newhome
