@@ -29,6 +29,7 @@ profile: cli
 ## Release
 
 homebrew_tap: disabled
+<!-- The tap is published by `make release-tap` after promote-rc (below), never by /release or a bare `tapper push`. -->
 
 The generic `/release` skill honours this directive and skips all of its
 own tap-related phases. den's release pipeline is its own: RCs are cut by
@@ -49,10 +50,14 @@ make release-tap RELEASE_TAG=vX.Y.Z RELEASE_TAP_FLAGS=--dry-run  # preview
 the release checksums, re-runs `homebrew-bottles.py verify`, renders a
 per-release tapper config (`homebrew-bottles.py tapper-config`: the
 committed `tapper.yaml` plus this release's bottle block) and runs
-`tapper push`. Never run a bare `tapper push` from the repo root: the
+`tapper push`, then fetches the tap's `Formula/den.rb` back and fails
+unless it has this release's `bottle do` block (root_url and all four
+tags). Never run a bare `tapper push` from the repo root: the
 committed `tapper.yaml` has no bottle block, so it would publish a
-formula that builds from source on macOS. tapper reads the token from
-the keychain (`tapper token verify`; renew with `tapper token import-op`).
+formula that builds from source on macOS. tapper takes the token from
+`$HOMEBREW_TAP_TOKEN`, then `$TAPPER_GITHUB_TOKEN`, then the keychain
+entry `tapper` / `marcelocantos/homebrew-tap` (the normal case; check with
+`tapper token status`/`verify`, renew with `tapper token import-op`).
 
 ## Architecture
 

@@ -1,6 +1,6 @@
 # Homebrew tap publication for den (Formula/den.rb in marcelocantos/homebrew-tap).
-# The token lives in the macOS keychain, so there is no Actions secret and
-# no CI step. Publish with `make release-tap` (scripts/release-tap.sh), NOT
+# It runs on the dev Mac, not in Actions, so there is no tap token in Actions
+# secrets. Publish with `make release-tap` (scripts/release-tap.sh), NOT
 # a bare `tapper push`: this file deliberately has no formula_includes,
 # because the bottle block (root_url + per-tag sha256) changes every release.
 # release-tap.sh downloads the GA assets, verifies the bottles, and renders
@@ -21,6 +21,15 @@ push:
   linux_arm64: true
   skip_checksum: true
   update_readme_table: true
+# Token lookup (tapper token.Resolve), first non-empty wins:
+#   1. $HOMEBREW_TAP_TOKEN (token.env below)
+#   2. $TAPPER_GITHUB_TOKEN
+#   3. macOS keychain, service "tapper", account "marcelocantos/homebrew-tap"
+#      (no keychain_account override; `tapper token status` shows which).
+# Normally neither env var is set and the keychain entry is used.
+# token.op is NOT read by `tapper push`: it is only where
+# `tapper token import-op` (and `tapper token rotate`, as a fallback) fetch
+# the PAT from 1Password to store it in that keychain entry.
 token:
   env: HOMEBREW_TAP_TOKEN
   op: op://Personal/GitHub Homebrew Tap PAT/token

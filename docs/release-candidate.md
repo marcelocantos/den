@@ -88,8 +88,42 @@ The workflow:
    checks the RC's binary version and Homebrew bottles.
 3. Creates the GA tag (`v0.12.0`) on the same commit as the RC tag.
 4. Creates the GA GitHub release with the same assets.
-5. Bumps the tap formula, with a bottle block pointing at the GA release.
+5. Uploads the Homebrew-named aliases of the tarballs
+   (`den-X.Y.0-darwin-arm64` / `linux-amd64` / `linux-arm64.tar.gz`) that
+   the tap formula's URLs use.
 6. Leaves the RC release in place as a historical record.
+
+It does **not** touch the tap: there is no tap token in Actions.
+
+## Publish the tap formula
+
+After `promote-rc.yml` succeeds, publish `marcelocantos/tap/den` from the
+dev Mac with [tapper](https://github.com/marcelocantos/tapper):
+
+```sh
+make release-tap RELEASE_TAG=v0.12.0 RELEASE_TAP_FLAGS=--dry-run  # preview
+make release-tap RELEASE_TAG=v0.12.0                              # publish
+```
+
+`scripts/release-tap.sh` downloads the GA release's assets, checks the
+aliases are present and every asset matches the release checksums,
+re-verifies the bottles, renders a per-release tapper config (the
+committed `tapper.yaml` plus this release's `bottle do` block, via
+`homebrew-bottles.py tapper-config`), and runs `tapper push` with it.
+After a real push it fetches `Formula/den.rb` from the tap's default
+branch and fails unless it is this version with a `bottle do` block whose
+`root_url` is the GA release and which has all four tags.
+
+> **Never run a bare `tapper push`.** The committed `tapper.yaml`
+> deliberately has no `formula_includes`, so a bare push publishes a
+> formula with no bottle block and macOS installs build from source. If
+> that happens, rerun `make release-tap` for the same tag to fix the tap.
+
+tapper takes the token from `$HOMEBREW_TAP_TOKEN`, then
+`$TAPPER_GITHUB_TOKEN`, then the keychain entry `tapper` /
+`marcelocantos/homebrew-tap` (normally the keychain). `tapper token
+status` shows which is in use; `tapper token import-op` refreshes the
+keychain entry from 1Password.
 
 ## Homebrew bottles
 
@@ -160,7 +194,8 @@ even homebrew-core's) and builds everything from source.
 Promotion checks the RC's bottles (every tag present, matching the RC
 checksums, holding exactly the RC's darwin binary) and refuses an RC
 without them. It copies them to the GA release with the other assets.
-The tap formula's bottle block then points at the GA release.
+`make release-tap` then publishes a tap formula whose bottle block points
+at the GA release.
 
 ## How to abort
 
