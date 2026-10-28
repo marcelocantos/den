@@ -7,6 +7,8 @@
 
 #include <chrono>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 
 namespace den {
@@ -143,6 +145,64 @@ TEST_SUITE("settings::set_setting") {
 
         CHECK_THROWS_AS(set_setting(tmp.path, "daemon.auto_upgrade", "maybe"),
                         std::invalid_argument);
+    }
+}
+
+// store.prefix is what install.sh persists via `den set` / `den get`: other
+// keys must survive, and a damaged config.json must never be replaced.
+TEST_SUITE("settings::store_prefix_single_key") {
+
+    static void write_file(const fs::path& p, const std::string& body) {
+        std::ofstream f(p);
+        f << body;
+    }
+    static std::string read_file(const fs::path& p) {
+        std::ifstream f(p);
+        return {std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()};
+    }
+
+    TEST_CASE("get on a missing config.json throws SettingNotFound") {
+        TmpDir tmp;
+        CHECK_THROWS_AS(get_setting(tmp.path, "store.prefix"), SettingNotFound);
+    }
+
+    TEST_CASE("set store.prefix with no config.json creates it") {
+        TmpDir tmp;
+        set_setting(tmp.path, "store.prefix", "/x/prefix");
+        CHECK(get_setting(tmp.path, "store.prefix") == "/x/prefix");
+        auto st = fs::status(tmp.path / "config.json");
+        CHECK((st.permissions() & fs::perms::all) == fs::perms(kConfigFileMode));
+    }
+
+    TEST_CASE("set store.prefix preserves unrelated and unknown keys") {
+        TmpDir tmp;
+        write_file(tmp.path / "config.json",
+                   R"({"daemon":{"auto_upgrade":true,"interval_secs":60},)"
+                   R"("taps":{"a/b":"https://example.invalid/b"},"future_key":{"x":[1,2]}})");
+        set_setting(tmp.path, "store.prefix", "/x/prefix");
+        auto j = nlohmann::json::parse(read_file(tmp.path / "config.json"));
+        CHECK(j["store"]["prefix"] == "/x/prefix");
+        CHECK(j["daemon"]["auto_upgrade"] == true);
+        CHECK(j["daemon"]["interval_secs"] == 60);
+        CHECK(j["taps"]["a/b"] == "https://example.invalid/b");
+        CHECK(j["future_key"]["x"] == nlohmann::json::array({1, 2}));
+    }
+
+    TEST_CASE("an invalid config.json is reported and left untouched") {
+        TmpDir tmp;
+        const std::string bad = "{\"daemon\": {\"auto_upgrade\": true,\n";
+        write_file(tmp.path / "config.json", bad);
+        CHECK_THROWS_AS(get_setting(tmp.path, "store.prefix"), SettingsFileError);
+        CHECK_THROWS_AS(set_setting(tmp.path, "store.prefix", "/x"), SettingsFileError);
+        CHECK(read_file(tmp.path / "config.json") == bad);
+        CHECK_FALSE(fs::exists(tmp.path / "config.json.tmp"));
+    }
+
+    TEST_CASE("a non-object config.json is reported and left untouched") {
+        TmpDir tmp;
+        write_file(tmp.path / "config.json", "[1,2]\n");
+        CHECK_THROWS_AS(set_setting(tmp.path, "store.prefix", "/x"), SettingsFileError);
+        CHECK(read_file(tmp.path / "config.json") == "[1,2]\n");
     }
 }
 
