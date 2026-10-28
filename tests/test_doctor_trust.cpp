@@ -148,18 +148,19 @@ TEST_SUITE("doctor_trust::trust_report_to_findings") {
         }
     }
 
-    TEST_CASE("degraded replica: active but CDN unreachable → warning with last-sync timestamp") {
+    TEST_CASE("unreadable replica snapshot → error saying installs are refused") {
         TrustReport report;
         report.homebrew_source_active = true;
-        report.replica_source_active = true;
-        report.replica_status = ReplicaStatus::Degraded;
-        report.last_replica_sync_iso8601 = "2026-05-10T12:00:00Z";
+        report.replica_source_active = false;
+        report.replica_status = ReplicaStatus::Unreadable;
+        report.replica_source = "/tmp/known_hashes.json";
+        report.replica_error = "parse error";
 
         auto findings = findings_from_trust_report(report);
         bool found = false;
         for (const auto& f : findings) {
-            if (f.severity == Severity::Warning &&
-                f.message.find("2026-05-10") != std::string::npos) {
+            if (f.severity == Severity::Error &&
+                f.message.find("/tmp/known_hashes.json is unreadable") != std::string::npos) {
                 found = true;
             }
         }
@@ -247,7 +248,8 @@ TEST_SUITE("doctor_trust::trust_report_to_findings") {
         std::vector<Finding> findings;
         std::string out = capture_stdout([&] { check_trust_model(cfg, findings); });
         CHECK(out.find("[trust] sources:") != std::string::npos);
-        CHECK(out.find("den-replica-cdn") != std::string::npos);
+        CHECK(out.find("den-replica-snapshot") != std::string::npos);
+        CHECK(out.find("[trust] degraded installs: 0") != std::string::npos);
         CHECK(out.find("[trust] replica: active") != std::string::npos);
         CHECK(out.find("entries: 1") != std::string::npos);
     }

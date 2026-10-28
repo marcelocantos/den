@@ -1351,6 +1351,7 @@ void Cli::M::setup() {
 
         auto state = read_daemon_state(cfg.den_home);
         format_daemon_status(std::cout, state);
+        format_degraded_trust(std::cout, summarize_degraded_installs(cfg));
 
         auto s = read_settings(cfg.den_home);
         std::cout << "Auto-download: " << (s.daemon.auto_download ? "on" : "off") << "\n";

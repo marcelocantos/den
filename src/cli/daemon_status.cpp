@@ -39,4 +39,16 @@ void format_daemon_status(std::ostream& out, const DaemonState& state) {
     }
 }
 
+void format_degraded_trust(std::ostream& out, const DegradedInstallSummary& summary) {
+    out << "Degraded-trust installs: " << format_degraded_counts(summary) << "\n";
+    constexpr size_t kMaxListed = 5;
+    for (size_t i = 0; i < summary.installs.size() && i < kMaxListed; ++i) {
+        const auto& d = summary.installs[i];
+        out << "  " << d.name << " " << d.version << "  [" << d.reason << "]\n";
+    }
+    if (summary.installs.size() > kMaxListed) {
+        out << "  … " << (summary.installs.size() - kMaxListed) << " more (see `den doctor`)\n";
+    }
+}
+
 } // namespace den
