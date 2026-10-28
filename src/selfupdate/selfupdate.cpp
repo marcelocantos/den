@@ -414,18 +414,26 @@ void install_update_tarball(const fs::path& tarball, const fs::path& exe) {
                         fs::perms::others_read | fs::perms::others_exec,
                     fs::perm_options::replace);
 
-    // Atomic replace: rename new binary over old. On the same filesystem this
-    // is atomic; across filesystems, copy beside the target, then rename.
+    // Atomic replace onto a fresh inode. Never write into the existing file:
+    // macOS validates code signatures per vnode, so rewriting the bytes of
+    // the inode a running den (e.g. the daemon) is mapped from gets that
+    // process killed with OS_REASON_CODESIGNING. rename() swaps the
+    // directory entry to the extracted file's own inode; the old inode lives
+    // on, untouched, until every process using it exits. Across filesystems,
+    // copy to a uniquely named, newly created file beside the target first,
+    // then rename that over it.
     fs::rename(new_binary, exe, ec);
     if (ec) {
         auto staging = exe;
-        staging += ".new";
-        fs::copy_file(new_binary, staging, fs::copy_options::overwrite_existing, ec);
+        staging += ".new." + std::to_string(static_cast<long>(::getpid()));
+        std::error_code ec2;
+        fs::remove(staging, ec2); // never reuse a stale file's inode
+        ec.clear();
+        fs::copy_file(new_binary, staging, fs::copy_options::none, ec);
         if (!ec) {
             fs::rename(staging, exe, ec);
         }
         if (ec) {
-            std::error_code ec2;
             fs::remove(staging, ec2);
             throw UserError("failed to replace binary: " + ec.message());
         }

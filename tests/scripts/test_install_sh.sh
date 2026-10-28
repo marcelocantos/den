@@ -456,6 +456,30 @@ chown $(id -un):$(id -gn) $P" ]'
         '[ "$_rc" -ne 0 ] && out_has "sudo mkdir -p $P"'
 fi
 
+
+# --- shell integration is idempotent ------------------------------------------
+# init_lines FILE: lines that run den's init (the installer's own quoted-path
+# form included).
+init_lines() { grep -Ec '^[^#]*den["'"'"']?[[:space:]]+init' "$1" 2>/dev/null || true; }
+
+newhome
+inst DEN_VERSION=0.13.0 SHELL=/bin/zsh DEN_NO_MODIFY_PATH=0
+inst DEN_VERSION=0.14.0 SHELL=/bin/zsh DEN_NO_MODIFY_PATH=0
+check "shell integration: re-install adds no second init line" \
+    '[ "$_rc" -eq 0 ] && [ "$(init_lines "$H/.zshrc")" -eq 1 ] && out_has "shell integration already in"'
+
+newhome
+printf '# den shell integration (managed)\neval "$("$HOME/.den/bin/den" init --shell zsh)"\n' >"$H/.zshrc"
+inst DEN_VERSION=0.14.0 SHELL=/bin/zsh DEN_NO_MODIFY_PATH=0
+check "shell integration: existing --shell zsh line recognised" \
+    '[ "$_rc" -eq 0 ] && [ "$(init_lines "$H/.zshrc")" -eq 1 ]'
+
+newhome
+printf '# TODO: add den init here\n' >"$H/.zshrc"
+inst DEN_VERSION=0.14.0 SHELL=/bin/zsh DEN_NO_MODIFY_PATH=0
+check "shell integration: a comment mentioning den init is not integration" \
+    '[ "$_rc" -eq 0 ] && [ "$(init_lines "$H/.zshrc")" -eq 1 ] && out_has "added shell integration"'
+
 echo ""
 echo "Results: ${_pass} passed, ${_fail} failed, ${_skip} skipped"
 [ "$_fail" -eq 0 ]

@@ -162,4 +162,10 @@ struct HealthReport {
 /// `print` is true.
 HealthReport check_migration_health(const Config& config, bool print = true);
 
+/// True if shell-profile `contents` already runs `den init` on a
+/// non-comment line, in any form (`den init`, `"/path/den" init`,
+/// `$HOME/.den/bin/den init --shell zsh`). Used to keep shell integration
+/// idempotent.
+bool profile_has_den_init(const std::string& contents);
+
 } // namespace den
