@@ -77,7 +77,16 @@ inline constexpr std::string_view kDenReceiptFilename = "DEN_RECEIPT.json";
 /// Record that den poured or built the keg at `keg` (a `store/<name>/<version>`
 /// directory). No-op, with a warning, if that directory is missing. Safe to
 /// call only for a keg den just created — never for one found already present.
-void mark_keg_owned(const fs::path& keg, const std::string& name, const std::string& version);
+/// `version_scheme` is the formula's Homebrew version_scheme at pour time,
+/// recorded so upgrade ordering can compare (version_scheme, version).
+void mark_keg_owned(const fs::path& keg, const std::string& name, const std::string& version,
+                    int version_scheme = 0);
+
+/// The Homebrew version_scheme of the installed keg at `keg`: the
+/// "version_scheme" den recorded in DEN_RECEIPT.json, else Homebrew's
+/// INSTALL_RECEIPT.json `source.versions.version_scheme`, else 0 (absent,
+/// unreadable, or malformed receipts all mean 0, brew's default).
+int installed_version_scheme(const fs::path& keg);
 
 /// True only when `keg` contains a den receipt naming this exact keg.
 /// Missing, unreadable, symlinked, malformed, or mismatched receipts are not

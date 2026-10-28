@@ -21,6 +21,13 @@ void format_daemon_status(std::ostream& out, const DaemonState& state) {
             out << "  " << p.name << " " << p.installed << " -> " << p.available << "\n";
     }
 
+    if (!state.index_older.empty()) {
+        out << "Not downgrading (index older than installed):\n";
+        for (const auto& p : state.index_older)
+            out << "  " << p.name << " " << p.installed << " (index has " << p.available
+                << "; to downgrade: den use " << p.name << " " << p.available << ")\n";
+    }
+
     // Only surface a deferral section when there is something to report, so
     // the common case stays quiet.
     if (!state.deferred.empty()) {

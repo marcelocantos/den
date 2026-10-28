@@ -24,7 +24,14 @@ struct PendingUpgrade {
     std::string name;
     std::string installed;
     std::string available;
+    // Homebrew version_scheme of each side (0 when absent); ordering
+    // compares (version_scheme, version, revision). See core/version.h.
+    int installed_scheme = 0;
+    int available_scheme = 0;
 };
+
+/// Looks up the version_scheme of an installed keg by (name, version).
+using InstalledSchemeFn = std::function<int(const std::string&, const std::string&)>;
 
 // An upgrade the daemon staged but did not apply because one or more of the
 // installed keg's files were held open by a live process (🎯T51 / 🎯T72).
@@ -39,9 +46,16 @@ struct DeferredUpgrade {
 // Signals to tests/consumers that DaemonState carries a `deferred` array.
 #define DAEMON_STATE_HAS_DEFERRED 1
 
+// Signals to tests/consumers that DaemonState carries an `index_older` array.
+#define DAEMON_STATE_HAS_INDEX_OLDER 1
+
 struct DaemonState {
     std::optional<uint64_t> last_check;
     std::vector<PendingUpgrade> pending;
+    // Packages whose index version is older than the installed one. They are
+    // never upgraded (an upgrade never downgrades); reported so the user can
+    // downgrade explicitly with `den use <name> <version>` if they want to.
+    std::vector<PendingUpgrade> index_older;
     std::vector<DeferredUpgrade> deferred;
     std::optional<uint64_t> last_upgrade;
     std::vector<std::string> errors;
@@ -67,11 +81,23 @@ bool is_daemon_running(const Config& config);
 
 /// Outdated detection: for each den-managed package (`installed`: name →
 /// version, from the active env's resolved homebrew bucket) whose index
-/// version differs, produce a PendingUpgrade. Casks/apps, disabled formulae
-/// and names missing from the index are skipped: cask upgrades swap live
-/// .app bundles and stay a manual `den upgrade`. Sorted by name.
+/// (version_scheme, version, revision) tuple is newer, produce a
+/// PendingUpgrade. An index version older than the installed one is never
+/// pending (an upgrade never downgrades); it goes to `index_older` when
+/// given. Casks/apps, disabled formulae and names missing from the index are
+/// skipped: cask upgrades swap live .app bundles and stay a manual `den
+/// upgrade`. Sorted by name. `installed_scheme` gives each installed keg's
+/// version_scheme (from its receipt); when empty every keg counts as 0. The
+/// index side's scheme is Package::version_scheme.
 std::vector<PendingUpgrade> compute_pending(const std::map<std::string, std::string>& installed,
-                                            const PackageIndex& idx);
+                                            const PackageIndex& idx,
+                                            std::vector<PendingUpgrade>* index_older = nullptr,
+                                            const InstalledSchemeFn& installed_scheme = {});
+
+/// The one-line report for a package whose index is older than what is
+/// installed, e.g. "openssl@3 3.6.3: index older than installed (index has
+/// 3.5.9); not downgrading. To downgrade explicitly: den use openssl@3 3.5.9".
+std::string index_older_message(const PendingUpgrade& p);
 
 struct MaintenanceSettings {
     bool auto_download = true;
@@ -88,11 +114,13 @@ struct MaintenanceHooks {
     std::function<void(const PendingUpgrade&)> prefetch;           // optional
     std::function<void(const PendingUpgrade&)> apply;              // optional
     std::function<bool(const std::string&)> in_window;             // default: in_maintenance_window
+    InstalledSchemeFn installed_scheme; // optional: installed keg's version_scheme (default 0)
 };
 
 struct MaintenanceReport {
     bool index_refreshed = false;
     std::size_t pending = 0;
+    std::size_t index_older = 0; // index version older than installed: skipped
     std::size_t downloaded = 0;
     std::size_t skipped_pinned = 0; // pending but pinned: not pre-downloaded
     std::size_t applied = 0;

@@ -299,7 +299,8 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
     // Successful builds below call this so cleanup can tell a keg den produced
     // from one Homebrew poured into the same Cellar.
     const auto claim = [&]() -> fs::path {
-        mark_keg_owned(dest, name, version);
+        const Package* indexed = idx.find(requested);
+        mark_keg_owned(dest, name, version, indexed ? indexed->version_scheme : 0);
         return dest;
     };
 

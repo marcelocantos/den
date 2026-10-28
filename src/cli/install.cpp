@@ -6,6 +6,7 @@
 #include "../activity/activity.h"
 #include "../cask/cask.h"
 #include "../core/error.h"
+#include "../core/version.h"
 #include "../daemon/daemon.h"
 #include "../env/environment.h"
 #include "../env/manifest.h"
@@ -125,12 +126,26 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
     const auto pins = read_pins(config.den_home);
     std::vector<UpgradeCandidate> candidates;
     std::vector<std::string> explicitly_pinned;
+    // Index older than installed: an upgrade never downgrades (that takes an
+    // explicit `den use <name> <version>`), so these are reported and skipped.
+    std::vector<UpgradeCandidate> older;
 
     if (names.empty()) {
         for (const auto& [name, version] : resolved) {
             auto* pkg = idx.find(name);
-            if (pkg && pkg->version != version) {
+            if (!pkg || pkg->version.empty() || pkg->version == version)
+                continue;
+            const int have_scheme =
+                installed_version_scheme(config.store / keg_name(name) / version);
+            switch (version_delta(version, have_scheme, pkg->version, pkg->version_scheme)) {
+            case VersionDelta::Newer:
                 candidates.push_back({name, version, pkg->version});
+                break;
+            case VersionDelta::Older:
+                older.push_back({name, version, pkg->version});
+                break;
+            case VersionDelta::Same:
+                break;
             }
         }
     } else {
@@ -152,11 +167,28 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
                 std::cerr << "warning: '" << name << "' not in index\n";
                 continue;
             }
-            if (pkg->version != it->second) {
+            const int have_scheme =
+                installed_version_scheme(config.store / keg_name(name) / it->second);
+            const auto delta =
+                pkg->version == it->second
+                    ? VersionDelta::Same
+                    : version_delta(it->second, have_scheme, pkg->version, pkg->version_scheme);
+            if (delta == VersionDelta::Newer) {
                 candidates.push_back({name, it->second, pkg->version});
+            } else if (delta == VersionDelta::Older) {
+                older.push_back({name, it->second, pkg->version});
             } else {
                 std::cout << name << " is already up to date (" << it->second << ").\n";
             }
+        }
+    }
+
+    if (!older.empty()) {
+        std::cout << "Not downgrading " << older.size()
+                  << " package(s) (index older than installed):\n";
+        for (const auto& o : older) {
+            std::cout << "  " << o.name << " " << o.installed << " (index has " << o.available
+                      << "; to downgrade: den use " << o.name << " " << o.available << ")\n";
         }
     }
 
@@ -172,7 +204,10 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
 
     if (upgrades.empty()) {
         if (explicitly_pinned.empty()) {
-            std::cout << "All packages are up to date.\n";
+            if (older.empty())
+                std::cout << "All packages are up to date.\n";
+            else
+                std::cout << "Nothing to upgrade.\n";
             return;
         }
         throw UserError(std::to_string(explicitly_pinned.size()) +

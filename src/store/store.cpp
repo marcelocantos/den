@@ -174,7 +174,8 @@ std::vector<KegInfo> inspect_cellar(const fs::path& store, const fs::path& den_h
     return result;
 }
 
-void mark_keg_owned(const fs::path& keg, const std::string& name, const std::string& version) {
+void mark_keg_owned(const fs::path& keg, const std::string& name, const std::string& version,
+                    int version_scheme) {
     std::error_code ec;
     if (!fs::is_directory(keg, ec) || ec) {
         SPDLOG_WARN("not recording keg ownership; directory missing: {}", keg.string());
@@ -185,6 +186,7 @@ void mark_keg_owned(const fs::path& keg, const std::string& name, const std::str
         {"poured_by", "den"},
         {"name", name},
         {"version", version},
+        {"version_scheme", version_scheme},
     };
 
     // Write beside the final name, then rename into place, so a crash cannot
@@ -212,6 +214,47 @@ void mark_keg_owned(const fs::path& keg, const std::string& name, const std::str
         SPDLOG_WARN("failed to install den receipt in {}: {}", keg.string(), ec.message());
         fs::remove(tmp, ec);
     }
+}
+
+namespace {
+
+// Parse `path` as a JSON object, or nullopt. Symlinked receipts are ignored.
+std::optional<nlohmann::json> read_receipt_json(const fs::path& path) {
+    std::error_code ec;
+    if (fs::is_symlink(path, ec) || ec || !fs::is_regular_file(path, ec) || ec)
+        return std::nullopt;
+    std::ifstream in(path);
+    if (!in)
+        return std::nullopt;
+    try {
+        auto j = nlohmann::json::parse(in);
+        if (!j.is_object())
+            return std::nullopt;
+        return j;
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+}
+
+} // namespace
+
+int installed_version_scheme(const fs::path& keg) {
+    if (auto j = read_receipt_json(keg / kDenReceiptFilename)) {
+        if (j->contains("version_scheme") && (*j)["version_scheme"].is_number_integer())
+            return std::max(0, (*j)["version_scheme"].get<int>());
+    }
+    if (auto j = read_receipt_json(keg / "INSTALL_RECEIPT.json")) {
+        const auto src = j->find("source");
+        if (src != j->end() && src->is_object()) {
+            const auto vers = src->find("versions");
+            if (vers != src->end() && vers->is_object()) {
+                const auto vs = vers->find("version_scheme");
+                if (vs != vers->end() && vs->is_number_integer())
+                    return std::max(0, vs->get<int>());
+            }
+        }
+    }
+    return 0;
 }
 
 bool keg_owned_by_den(const fs::path& keg) {

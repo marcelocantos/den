@@ -23,6 +23,10 @@ struct UpgradePassResult {
     // Pending upgrades held back by `den pin`. They stay pending (so
     // `den outdated` still shows them) but are never applied.
     std::vector<PendingUpgrade> pinned;
+    // Pending entries whose `available` is not newer than `installed` (e.g.
+    // a stale state file from an older den). Dropped, never applied: an
+    // upgrade never downgrades.
+    std::vector<PendingUpgrade> not_newer;
 };
 
 // Run one upgrade pass over the pending upgrades recorded in `state`.

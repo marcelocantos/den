@@ -32,7 +32,8 @@ constexpr std::array<char, 8> kMagic = {'D', 'E', 'N', 'I', 'D', 'X', '\0', '\0'
 // v5: records carry Package::old_names (renamed casks/formulae).
 // v6: cask artifacts may be CaskArtifactKind::Font.
 // v7: cask artifacts may be CaskArtifactKind::Wrapper (command_wrapper).
-constexpr uint32_t kFormatVersion = 7;
+// v8: records carry Package::version_scheme (Homebrew formula version_scheme).
+constexpr uint32_t kFormatVersion = 8;
 constexpr uint32_t kEndianTag = 0x01020304;
 constexpr size_t kHeaderSize = 80;
 constexpr size_t kEntrySize = 24;
@@ -364,6 +365,7 @@ std::string encode_package(const Package& pkg) {
     put_str(b, pkg.name);
     put_str(b, pkg.version);
     append<uint32_t>(b, static_cast<uint32_t>(pkg.revision));
+    append<uint32_t>(b, static_cast<uint32_t>(pkg.version_scheme));
     put_str(b, pkg.description);
     put_str(b, pkg.homepage);
     put_str(b, pkg.license);
@@ -416,6 +418,7 @@ Package decode_package(const char* data, size_t len) {
     pkg.name = r.str();
     pkg.version = r.str();
     pkg.revision = static_cast<int>(r.num<uint32_t>());
+    pkg.version_scheme = static_cast<int>(r.num<uint32_t>());
     pkg.description = r.str();
     pkg.homepage = r.str();
     pkg.license = r.str();

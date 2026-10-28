@@ -74,6 +74,12 @@ struct Package {
     // Homebrew formula revision (0 when absent). Already folded into
     // `version`; kept separately so the upstream version can be recovered.
     int revision = 0;
+
+    // Homebrew formula version_scheme (0 when absent). Bumped by
+    // homebrew-core when a formula deliberately moves to a version that
+    // compares lower (e.g. openssl@3 3.6.x -> 3.5.9 LTS, scheme 1); upgrade
+    // ordering compares (version_scheme, version, revision). See version.h.
+    int version_scheme = 0;
     std::string description;
     std::string homepage;
     std::string license;

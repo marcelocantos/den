@@ -264,7 +264,7 @@ bool install_one(const Config& config, const Package& pkg) {
     // Stamp the keg den just poured. The early return above skips kegs that
     // were already in the shared Cellar, so a Homebrew install is never
     // marked as ours and `den cleanup` will not delete it.
-    mark_keg_owned(dest, pkg.name, pkg.version);
+    mark_keg_owned(dest, pkg.name, pkg.version, pkg.version_scheme);
 
     // Text files relocated to <prefix>/opt/<name> (e.g. node shebangs) need
     // the shared opt link; create it, or move it along from an older den keg.

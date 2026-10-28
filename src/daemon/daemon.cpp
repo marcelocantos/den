@@ -4,12 +4,14 @@
 #include "daemon.h"
 #include "../activity/activity.h"
 #include "../core/error.h"
+#include "../core/version.h"
 #include "../env/environment.h"
 #include "../env/manifest.h"
 #include "../index/index.h"
 #include "../provider/homebrew_provider.h"
 #include "../provider/registry.h"
 #include "../store/pins.h"
+#include "../store/store.h"
 #include "upgrade_pass.h"
 
 #include <algorithm>
@@ -291,7 +293,30 @@ DaemonState read_daemon_state(const fs::path& den_home) {
                     pu.installed = p["installed"].get<std::string>();
                 if (p.contains("available") && p["available"].is_string())
                     pu.available = p["available"].get<std::string>();
+                if (p.contains("installed_scheme") && p["installed_scheme"].is_number_integer())
+                    pu.installed_scheme = p["installed_scheme"].get<int>();
+                if (p.contains("available_scheme") && p["available_scheme"].is_number_integer())
+                    pu.available_scheme = p["available_scheme"].get<int>();
                 state.pending.push_back(std::move(pu));
+            }
+        }
+
+        if (j.contains("index_older") && j["index_older"].is_array()) {
+            for (const auto& p : j["index_older"]) {
+                if (!p.is_object())
+                    continue;
+                PendingUpgrade pu;
+                if (p.contains("name") && p["name"].is_string())
+                    pu.name = p["name"].get<std::string>();
+                if (p.contains("installed") && p["installed"].is_string())
+                    pu.installed = p["installed"].get<std::string>();
+                if (p.contains("available") && p["available"].is_string())
+                    pu.available = p["available"].get<std::string>();
+                if (p.contains("installed_scheme") && p["installed_scheme"].is_number_integer())
+                    pu.installed_scheme = p["installed_scheme"].get<int>();
+                if (p.contains("available_scheme") && p["available_scheme"].is_number_integer())
+                    pu.available_scheme = p["available_scheme"].get<int>();
+                state.index_older.push_back(std::move(pu));
             }
         }
 
@@ -328,10 +353,23 @@ void write_daemon_state(const fs::path& den_home, const DaemonState& state) {
 
     nlohmann::json pending = nlohmann::json::array();
     for (const auto& p : state.pending) {
-        pending.push_back(
-            {{"name", p.name}, {"installed", p.installed}, {"available", p.available}});
+        pending.push_back({{"name", p.name},
+                           {"installed", p.installed},
+                           {"available", p.available},
+                           {"installed_scheme", p.installed_scheme},
+                           {"available_scheme", p.available_scheme}});
     }
     j["pending"] = pending;
+
+    nlohmann::json older = nlohmann::json::array();
+    for (const auto& p : state.index_older) {
+        older.push_back({{"name", p.name},
+                         {"installed", p.installed},
+                         {"available", p.available},
+                         {"installed_scheme", p.installed_scheme},
+                         {"available_scheme", p.available_scheme}});
+    }
+    j["index_older"] = older;
 
     nlohmann::json deferred = nlohmann::json::array();
     for (const auto& d : state.deferred) {
@@ -365,8 +403,12 @@ void write_daemon_state(const fs::path& den_home, const DaemonState& state) {
 // ---- Maintenance cycle (🎯T13) ---------------------------------------------
 
 std::vector<PendingUpgrade> compute_pending(const std::map<std::string, std::string>& installed,
-                                            const PackageIndex& idx) {
+                                            const PackageIndex& idx,
+                                            std::vector<PendingUpgrade>* index_older,
+                                            const InstalledSchemeFn& installed_scheme) {
     std::vector<PendingUpgrade> out;
+    if (index_older)
+        index_older->clear();
     for (const auto& [name, version] : installed) {
         const Package* pkg = idx.find(name);
         if (!pkg || pkg->version.empty() || pkg->version == version)
@@ -375,9 +417,31 @@ std::vector<PendingUpgrade> compute_pending(const std::map<std::string, std::str
             continue; // cask upgrades stay manual
         if (pkg->disabled)
             continue;
-        out.push_back({name, version, pkg->version});
+        const int have_scheme = installed_scheme ? installed_scheme(name, version) : 0;
+        const PendingUpgrade pu{name, version, pkg->version, have_scheme, pkg->version_scheme};
+        switch (version_delta(version, have_scheme, pkg->version, pkg->version_scheme)) {
+        case VersionDelta::Newer:
+            // Includes a version_scheme bump to a lower version (openssl@3
+            // 3.6.x -> 3.5.9 LTS, scheme 0 -> 1): brew treats it as an upgrade.
+            out.push_back(pu);
+            break;
+        case VersionDelta::Older:
+            // Never downgrade from an upgrade path: the index can lag what is
+            // installed (a stale cache or mirror, or an index that predates a
+            // version_scheme bump). Report it.
+            if (index_older)
+                index_older->push_back(pu);
+            break;
+        case VersionDelta::Same:
+            break;
+        }
     }
     return out; // std::map iteration → already sorted by name
+}
+
+std::string index_older_message(const PendingUpgrade& p) {
+    return p.name + " " + p.installed + ": index older than installed (index has " + p.available +
+           "); not downgrading. To downgrade explicitly: den use " + p.name + " " + p.available;
 }
 
 MaintenanceReport run_maintenance_cycle(const fs::path& cellar, const fs::path& den_home,
@@ -399,7 +463,8 @@ MaintenanceReport run_maintenance_cycle(const fs::path& cellar, const fs::path& 
     }
 
     try {
-        state.pending = compute_pending(hooks.installed(), idx);
+        state.pending =
+            compute_pending(hooks.installed(), idx, &state.index_older, hooks.installed_scheme);
     } catch (const std::exception& e) {
         state.errors.push_back(std::string("outdated check: ") + e.what());
         report.pending = state.pending.size();
@@ -411,7 +476,10 @@ MaintenanceReport run_maintenance_cycle(const fs::path& cellar, const fs::path& 
                             [&](const PendingUpgrade& p) { return p.name == d.name; });
     });
     report.pending = state.pending.size();
+    report.index_older = state.index_older.size();
     log_daemon(den_home, std::to_string(report.pending) + " package(s) outdated");
+    for (const auto& o : state.index_older)
+        log_daemon(den_home, index_older_message(o));
 
     if (settings.auto_download && hooks.prefetch) {
         // A pinned package is never upgraded (the upgrade pass and `den
@@ -487,6 +555,9 @@ MaintenanceHooks make_live_hooks(const Config& config, PackageIndex& idx, bool& 
         auto per = resolve_per_provider(config.den_home, active_env_path(config.den_home));
         auto it = per.find("homebrew");
         return it == per.end() ? std::map<std::string, std::string>{} : it->second;
+    };
+    h.installed_scheme = [&config](const std::string& name, const std::string& version) {
+        return installed_version_scheme(config.store / keg_name(name) / version);
     };
     h.prefetch = [&config, &idx](const PendingUpgrade& pu) {
         if (const Package* pkg = idx.find(pu.name))
