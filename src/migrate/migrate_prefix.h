@@ -26,11 +26,13 @@
 
 #include "../core/config.h"
 #include "../index/package.h"
+#include "../selfupdate/launchd_restart.h"
 #include "../store/pins.h"
 #include "../supervisor/supervisor.h"
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <ostream>
 #include <set>
@@ -49,7 +51,20 @@ struct MigratePrefixOptions {
     bool stop_services = false;
     std::set<std::string> only; // pour only these kegs this run
     fs::path home;              // $HOME: LaunchAgents and shell rc files
+    /// launchctl access for stopping/restarting dev.den.daemon under
+    /// --stop-services. Empty: the real launchctl, run with a scrubbed
+    /// environment (selfupdate/launchd_restart.h). Tests inject a fake.
+    std::function<LaunchdOps(const fs::path& plist)> daemon_launchd_ops;
 };
+
+/// --stop-services: unload dev.den.daemon (`bootout gui/<uid>/<label>`).
+void bootout_migrated_daemon(const LaunchdOps& ops);
+
+/// --stop-services: bring dev.den.daemon back after the migration with the
+/// launchd restart helper (bootout + bootstrap, launchctl with a scrubbed
+/// environment, new pid confirmed, one codesigning spawn failure tolerated).
+/// Reports to `out`; returns false (with a hint) when it did not come back.
+bool restart_migrated_daemon(const LaunchdOps& ops, std::ostream& out);
 
 /// Who owns the keg den's manifest names in the old prefix.
 enum class KegOwner {

@@ -14,6 +14,7 @@
 #include "../platform/platform.h"
 #include "../provider/homebrew_provider.h"
 #include "../selfupdate/daemon_restart.h"
+#include "../selfupdate/launchd_restart.h"
 #include "../settings/settings.h"
 #include "../store/link.h"
 #include "../store/store.h"
@@ -305,8 +306,11 @@ RunningSet running_services(const Config& cfg) {
     return r;
 }
 
-std::string uid_domain() {
-    return "gui/" + std::to_string(static_cast<unsigned>(::getuid()));
+constexpr const char* kDaemonLabel = "dev.den.daemon";
+
+LaunchdOps daemon_ops(const MigratePrefixOptions& opts, const fs::path& plist) {
+    return opts.daemon_launchd_ops ? opts.daemon_launchd_ops(plist)
+                                   : real_launchd_ops(kDaemonLabel, plist);
 }
 
 struct Stopped {
@@ -315,9 +319,20 @@ struct Stopped {
     bool daemon_launchd = false;
 };
 
-Stopped stop_running(const Config& cfg, const RunningSet& running, const fs::path& home,
+Stopped stop_running(const Config& cfg, const RunningSet& running, const MigratePrefixOptions& opts,
                      std::ostream& out) {
     Stopped s;
+    if (running.daemon) {
+        // Refuse before touching anything: booting out dev.den.daemon from
+        // inside its own job would kill this process mid-migration.
+        std::error_code ec;
+        if (fs::is_regular_file(daemon_plist_path(opts.home), ec) &&
+            running_inside_launchd_job(kDaemonLabel)) {
+            throw UserError("migrate-prefix --stop-services cannot stop dev.den.daemon from "
+                            "inside its own launchd job; run it from a shell. Nothing was "
+                            "changed");
+        }
+    }
     if (!running.services.empty()) {
         const auto stopped = stop_services_ordered(cfg, running.services);
         bool all = true;
@@ -334,12 +349,10 @@ Stopped stop_running(const Config& cfg, const RunningSet& running, const fs::pat
         }
     }
     if (running.daemon) {
-        const auto plist = daemon_plist_path(home);
+        const auto plist = daemon_plist_path(opts.home);
         std::error_code ec;
         if (fs::is_regular_file(plist, ec)) {
-            (void)std::system(("launchctl bootout " + sh_quote(uid_domain()) + " " +
-                               sh_quote(plist.string()) + " 2>/dev/null")
-                                  .c_str());
+            bootout_migrated_daemon(daemon_ops(opts, plist));
             s.daemon_launchd = true;
         } else {
             stop_daemon(cfg);
@@ -356,7 +369,8 @@ Stopped stop_running(const Config& cfg, const RunningSet& running, const fs::pat
     return s;
 }
 
-void restart_stopped(const Config& cfg, const Stopped& s, const fs::path& home, std::ostream& out) {
+void restart_stopped(const Config& cfg, const Stopped& s, const MigratePrefixOptions& opts,
+                     std::ostream& out) {
     for (const auto& name : s.services) {
         auto spec = resolve_service_spec(cfg, name);
         if (!spec) {
@@ -371,17 +385,34 @@ void restart_stopped(const Config& cfg, const Stopped& s, const fs::path& home, 
     }
     if (s.daemon) {
         if (s.daemon_launchd) {
-            int rc = std::system(("launchctl bootstrap " + sh_quote(uid_domain()) + " " +
-                                  sh_quote(daemon_plist_path(home).string()))
-                                     .c_str());
-            out << (rc == 0 ? "started    dev.den.daemon\n"
-                            : "warning: could not restart dev.den.daemon; run `den daemon "
-                              "install`\n");
+            (void)restart_migrated_daemon(daemon_ops(opts, daemon_plist_path(opts.home)), out);
         } else {
             out << "note: the den daemon was stopped; start it again with `den daemon run`\n";
         }
     }
 }
+
+} // namespace
+
+void bootout_migrated_daemon(const LaunchdOps& ops) {
+    (void)ops.launchctl({"bootout", ops.domain + "/" + ops.label});
+}
+
+bool restart_migrated_daemon(const LaunchdOps& ops, std::ostream& out) {
+    // The job was booted out by stop_running, so there is no old pid: any
+    // running pid confirms the restart.
+    std::ostringstream detail;
+    const auto r = restart_launchd_job(ops, std::nullopt, detail);
+    out << detail.str();
+    if (r == LaunchdRestartResult::Failed) {
+        out << "warning: could not restart dev.den.daemon; run `den daemon install`\n";
+        return false;
+    }
+    out << "started    dev.den.daemon\n";
+    return true;
+}
+
+namespace {
 
 // ---- Journal (de)serialisation ---------------------------------------------
 
@@ -708,7 +739,7 @@ std::optional<uint64_t> free_bytes_at(const fs::path& p, fs::path* at) {
     if (const char* o = std::getenv("DEN_MIGRATE_PREFIX_FREE_BYTES"); o && *o) {
         return std::stoull(o);
     }
-    struct statvfs st {};
+    struct statvfs st{};
     if (::statvfs(probe.c_str(), &st) != 0) {
         return std::nullopt;
     }
@@ -1163,7 +1194,7 @@ int run_rollback(const Config& cfg, const MigratePrefixOptions& opts, std::ostre
     }
     Stopped stopped;
     if (running.any()) {
-        stopped = stop_running(cfg, running, opts.home, out);
+        stopped = stop_running(cfg, running, opts, out);
     }
 
     const fs::path to = j.to;
@@ -1221,7 +1252,7 @@ int run_rollback(const Config& cfg, const MigratePrefixOptions& opts, std::ostre
     }
     j.phase = "rolled_back";
     write_migrate_prefix_journal(cfg.den_home, j);
-    restart_stopped(restored, stopped, opts.home, out);
+    restart_stopped(restored, stopped, opts, out);
     out << "Rolled back: den uses " << restored.prefix.string() << " again. " << to.string()
         << " is kept (delete it yourself, or reuse it with --apply).\n";
     return 0;
@@ -1308,7 +1339,7 @@ int run_migrate_prefix(const Config& cfg, const MigratePrefixOptions& opts, std:
         }
         Stopped stopped;
         if (running.any()) {
-            stopped = stop_running(cfg, running, opts.home, out);
+            stopped = stop_running(cfg, running, opts, out);
         }
         auto j = *journal;
         int rc = 0;
@@ -1323,7 +1354,7 @@ int run_migrate_prefix(const Config& cfg, const MigratePrefixOptions& opts, std:
             print_failure(out, "finish", e.what(), from, true);
             rc = 1;
         }
-        restart_stopped(Config::detect(), stopped, opts.home, out);
+        restart_stopped(Config::detect(), stopped, opts, out);
         return rc;
     }
 
@@ -1419,7 +1450,7 @@ int run_migrate_prefix(const Config& cfg, const MigratePrefixOptions& opts, std:
 
     Stopped stopped;
     if (running.any()) {
-        stopped = stop_running(cfg, running, opts.home, out);
+        stopped = stop_running(cfg, running, opts, out);
     }
 
     MigratePrefixJournal j = journal_open ? *journal : MigratePrefixJournal{};
@@ -1502,7 +1533,7 @@ int run_migrate_prefix(const Config& cfg, const MigratePrefixOptions& opts, std:
                 << remaining << " keg(s) still to pour; den keeps using " << from.string()
                 << " until every keg is in " << to.string()
                 << ". Continue with `den migrate-prefix --resume`.\n";
-            restart_stopped(cfg, stopped, opts.home, out);
+            restart_stopped(cfg, stopped, opts, out);
             return 0;
         }
 
@@ -1569,7 +1600,7 @@ int run_migrate_prefix(const Config& cfg, const MigratePrefixOptions& opts, std:
         print_failure(out, phase, e.what(), from, did_switch);
         rc = 1;
     }
-    restart_stopped(did_switch ? Config::detect() : cfg, stopped, opts.home, out);
+    restart_stopped(did_switch ? Config::detect() : cfg, stopped, opts, out);
     return rc;
 }
 

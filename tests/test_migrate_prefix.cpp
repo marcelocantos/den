@@ -31,6 +31,7 @@
 #include <unistd.h>
 
 #include <array>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -801,5 +802,111 @@ TEST_SUITE("migrate_prefix") {
         // Linking again in the new prefix finds nothing in the way.
         auto again = f.den("doctor");
         CHECK_FALSE(has(again.out, "conflicting"));
+    }
+}
+
+// --stop-services stops and restarts dev.den.daemon through the launchd
+// restart helper (bootout gui/<uid>/<label>, bootstrap gui/<uid> <plist>,
+// new pid confirmed, one codesigning spawn failure tolerated) rather than a
+// shell `launchctl` that inherits the caller's session environment.
+namespace {
+
+struct MigrateFakeLaunchctl {
+    std::vector<std::string> calls;
+    std::vector<int> bootstrap_rcs;  // consumed front to back; default 0
+    std::vector<std::string> prints; // consumed; the last one repeats
+    std::chrono::steady_clock::time_point t{};
+
+    int count(const std::string& prefix) const {
+        int n = 0;
+        for (const auto& c : calls)
+            if (c.rfind(prefix, 0) == 0)
+                ++n;
+        return n;
+    }
+
+    den::LaunchdOps ops() {
+        den::LaunchdOps o;
+        o.domain = "gui/501";
+        o.label = "dev.den.daemon";
+        o.plist = "/Users/x/Library/LaunchAgents/dev.den.daemon.plist";
+        o.confirm_timeout = std::chrono::seconds(15);
+        o.launchctl = [this](const std::vector<std::string>& args) {
+            std::string c;
+            for (const auto& a : args)
+                c += (c.empty() ? "" : " ") + a;
+            calls.push_back(c);
+            den::SpawnResult r;
+            r.spawned = true;
+            r.exit_code = 0;
+            if (args[0] == "bootstrap" && !bootstrap_rcs.empty()) {
+                r.exit_code = bootstrap_rcs.front();
+                bootstrap_rcs.erase(bootstrap_rcs.begin());
+                if (r.exit_code)
+                    r.output = "Bootstrap failed: 5: Input/output error\n";
+            } else if (args[0] == "print") {
+                std::string p = prints.empty() ? "" : prints.front();
+                if (prints.size() > 1)
+                    prints.erase(prints.begin());
+                r.output = "gui/501/dev.den.daemon = {\n" + p + "}\n";
+            }
+            return r;
+        };
+        o.sleep = [this](std::chrono::milliseconds d) { t += d; };
+        o.now = [this] { return t; };
+        return o;
+    }
+};
+
+} // namespace
+
+TEST_SUITE("migrate_prefix stop-services daemon restart") {
+    TEST_CASE("stopping the daemon is a launchd bootout of the job") {
+        MigrateFakeLaunchctl f;
+        den::bootout_migrated_daemon(f.ops());
+        REQUIRE(f.calls.size() == 1);
+        CHECK(f.calls[0] == "bootout gui/501/dev.den.daemon");
+    }
+
+    TEST_CASE("restarting goes through the launchd helper and confirms a pid") {
+        MigrateFakeLaunchctl f;
+        f.prints = {"\tpid = 4242\n"};
+        std::ostringstream out;
+        CHECK(den::restart_migrated_daemon(f.ops(), out));
+        REQUIRE(f.calls.size() >= 3);
+        CHECK(f.calls[0] == "bootout gui/501/dev.den.daemon");
+        CHECK(f.calls[1] == "bootstrap gui/501 /Users/x/Library/LaunchAgents/dev.den.daemon.plist");
+        CHECK(f.calls[2] == "print gui/501/dev.den.daemon");
+        CHECK(f.count("kickstart") == 0);
+        CHECK(out.str().find("started    dev.den.daemon") != std::string::npos);
+    }
+
+    TEST_CASE("one codesigning spawn failure after the migration is tolerated") {
+        MigrateFakeLaunchctl f;
+        f.prints = {"\truns = 1\n\tlast exit reason = OS_REASON_CODESIGNING\n",
+                    "\truns = 1\n\tlast exit reason = OS_REASON_CODESIGNING\n",
+                    "\truns = 2\n\tpid = 300\n"};
+        std::ostringstream out;
+        CHECK(den::restart_migrated_daemon(f.ops(), out));
+        CHECK(f.count("kickstart gui/501/dev.den.daemon") == 1);
+        CHECK(out.str().find("started    dev.den.daemon") != std::string::npos);
+    }
+
+    TEST_CASE("a daemon that never comes back is reported with the install hint") {
+        MigrateFakeLaunchctl f;
+        f.bootstrap_rcs = {5, 5, 5};
+        std::ostringstream out;
+        CHECK_FALSE(den::restart_migrated_daemon(f.ops(), out));
+        CHECK(out.str().find("could not restart dev.den.daemon; run `den daemon install`") !=
+              std::string::npos);
+        CHECK(out.str().find("started    dev.den.daemon") == std::string::npos);
+    }
+
+    TEST_CASE("no pid within the confirm window is a failure, not a silent success") {
+        MigrateFakeLaunchctl f;
+        f.prints = {"\tstate = not running\n"};
+        std::ostringstream out;
+        CHECK_FALSE(den::restart_migrated_daemon(f.ops(), out));
+        CHECK(out.str().find("den daemon install") != std::string::npos);
     }
 }
