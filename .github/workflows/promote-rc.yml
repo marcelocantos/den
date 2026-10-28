@@ -269,15 +269,19 @@ jobs:
             rc-assets/*-checksums.txt
 
       # -----------------------------------------------------------------------
-      # 8. Bump the Homebrew formula (marcelocantos/homebrew-tap Formula/den.rb).
+      # 8. Upload Homebrew-named asset aliases for the tap formula.
       #
-      #    homebrew-releaser expects {repo}-{version}-{os}-{arch}.tar.gz with
-      #    arm64/amd64 arch names; den's canonical assets use aarch64/x86_64
-      #    (install.sh and self-update depend on those), so upload
-      #    byte-identical copies under the names the releaser looks for.
-      #    The GA release is created with github.token, which does not fire
-      #    release:published workflows, so this has to live here rather than
-      #    in release.yml.
+      #    homebrew-releaser (run by tapper) expects
+      #    {repo}-{version}-{os}-{arch}.tar.gz with arm64/amd64 arch names;
+      #    den's canonical assets use aarch64/x86_64 (install.sh and
+      #    self-update depend on those), so upload byte-identical copies
+      #    under the names the releaser looks for.
+      #
+      #    The formula itself (marcelocantos/homebrew-tap Formula/den.rb,
+      #    with the bottle block) is NOT written here: there is no tap
+      #    token in Actions. After this workflow succeeds, run
+      #    `make release-tap` on the dev Mac (scripts/release-tap.sh), which
+      #    re-verifies the bottles and publishes via tapper.
       # -----------------------------------------------------------------------
       - name: Upload Homebrew-named asset aliases
         env:
@@ -290,42 +294,6 @@ jobs:
           cp "rc-assets/den-${VERSION}-linux-x86_64.tar.gz"   "brew-assets/den-${VERSION}-linux-amd64.tar.gz"
           cp "rc-assets/den-${VERSION}-linux-aarch64.tar.gz"  "brew-assets/den-${VERSION}-linux-arm64.tar.gz"
           gh release upload "$GA_TAG" --repo "$GITHUB_REPOSITORY" brew-assets/*.tar.gz
-
-      # The bottle block (root_url = this GA release), the on_macos
-      # libarchive dependency, the service block, install and test all
-      # come from scripts/homebrew-bottles.py, which also renders the RC
-      # formula, so RC and GA formulae cannot drift apart.
-      - name: Render Homebrew formula inputs
-        id: formula
-        run: |
-          GA_TAG="${{ env.GA_TAG }}"
-          python3 scripts/homebrew-bottles.py releaser-inputs \
-            --version "${GA_TAG#v}" \
-            --release-tag "$GA_TAG" \
-            --dir rc-assets \
-            --github-output "$GITHUB_OUTPUT"
-          python3 scripts/homebrew-bottles.py releaser-inputs \
-            --version "${GA_TAG#v}" \
-            --release-tag "$GA_TAG" \
-            --dir rc-assets \
-            --github-output -
-
-      - name: Update Homebrew formula
-        uses: Justintime50/homebrew-releaser@v3
-        with:
-          homebrew_owner: marcelocantos
-          homebrew_tap: homebrew-tap
-          github_token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          formula_folder: Formula
-          version: ${{ env.GA_TAG }}
-          install: ${{ steps.formula.outputs.install }}
-          test: ${{ steps.formula.outputs.test }}
-          target_darwin_arm64: true
-          target_linux_amd64: true
-          target_linux_arm64: true
-          skip_checksum: true
-          update_readme_table: true
-          formula_includes: ${{ steps.formula.outputs.formula_includes }}
 
       # -----------------------------------------------------------------------
       # 9. Print promotion summary.
@@ -351,6 +319,8 @@ jobs:
           echo "  The RC release is preserved as a historical record."
           echo "  To remove it: gh release delete ${RC_TAG} --cleanup-tag"
           echo ""
-          echo "  Verify the tap release on a macOS host once the formula bump lands:"
+          echo "  Next, on the dev Mac: publish the tap formula (bottled):"
+          echo "    make release-tap RELEASE_TAG=${GA_TAG}"
+          echo "  Then verify the tap release:"
           echo "    brew install marcelocantos/tap/den && make verify-release RELEASE_TAG=${GA_TAG}"
           echo "============================================================"
