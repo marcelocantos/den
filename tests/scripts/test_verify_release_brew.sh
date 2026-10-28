@@ -8,7 +8,8 @@
 #     to run; brew < 7 and official formulae are left alone.
 #   * every brew call sees the caller's HOME (brew 7 keeps its trust store
 #     there), not verify-release's scratch HOME.
-#   * brew-test is SKIP only when brew refuses over outdated Xcode/CLT;
+#   * brew-test is SKIP only when brew refuses over outdated Xcode/CLT (also
+#     when brew colours its output and ends lines with CRLF);
 #     any other brew test failure is FAIL.
 #   * formula-test runs den.rb's test commands directly.
 #
@@ -55,7 +56,8 @@ DEN
 chmod 755 "$KEG/bin/den"
 
 # Fake brew, driven by FAKE_BREW_VERSION, FAKE_TRUST (ok|fail) and
-# FAKE_TEST (ok|xcode|clt|other|writetrust). Like brew 7 it keeps trust in
+# FAKE_TEST (ok|xcode|clt|other|writetrust|file; file prints FAKE_TEST_FILE
+# verbatim and fails). Like brew 7 it keeps trust in
 # ${XDG_CONFIG_HOME:-$HOME/.homebrew-ish}/trust.json for the environment it
 # runs in, and refuses an untrusted third-party formula in --prefix, info and
 # test. Every call is logged with the HOME it saw.
@@ -85,8 +87,10 @@ case "$1" in
     info) need "$3"; echo '{"formulae":[],"casks":[]}' ;;
     test)
         need "$2"
+        echo "TEST_ENV HOMEBREW_NO_COLOR=${HOMEBREW_NO_COLOR:-}" >>"$FAKE_LOG"
         case "${FAKE_TEST:-ok}" in
             ok) echo "==> Testing $2" ;;
+            file) cat "$FAKE_TEST_FILE" >&2; exit 1 ;;
             xcode) echo "Error: Your Xcode (26.6) at /Applications/Xcode.app is too outdated." >&2
                    echo "Please update to Xcode 27.0 (or delete it)." >&2; exit 1 ;;
             clt) echo "Error: Your Command Line Tools are too outdated." >&2
@@ -202,6 +206,29 @@ run "outdated CLT -> SKIP" 0 FAKE_TEST=clt \
 run "unrelated brew test failure stays FAIL" 1 FAKE_TEST=other \
     && { has '^FAIL  brew-test' && ! has '^SKIP  brew-test' && ! has 'aborting' && has '^PASS  formula-test' \
         && ok "unrelated brew test failure stays FAIL" || bad "unrelated brew test failure stays FAIL"; }
+
+# brew 7 output as captured on a macOS 27 host with Xcode 26.6 / CLT 26.4:
+# ANSI-coloured "Error:" prefixes and CRLF line endings (fixtures/*.txt hold
+# the exact bytes). The CLT fixture is the same capture minus the Xcode block.
+FIX="$_SELF_DIR/fixtures"
+run "coloured CRLF Xcode refusal -> SKIP" 0 FAKE_TEST=file FAKE_TEST_FILE="$FIX/brew7-test-xcode-colour.txt" \
+    && { has '^SKIP  brew-test +\(brew refuses to test: Your Xcode \(26.6\) at /Applications/Xcode.app is too outdated\.\)$' \
+        && ! has '^FAIL  brew-test' && has '^PASS  formula-test' \
+        && ok "coloured CRLF Xcode refusal -> SKIP" || bad "coloured CRLF Xcode refusal -> SKIP"; }
+run "coloured CRLF CLT refusal -> SKIP" 0 FAKE_TEST=file FAKE_TEST_FILE="$FIX/brew7-test-clt-colour.txt" \
+    && { has '^SKIP  brew-test +\(brew refuses to test: Your Command Line Tools are too outdated\.\)$' \
+        && ! has '^FAIL  brew-test' \
+        && ok "coloured CRLF CLT refusal -> SKIP" || bad "coloured CRLF CLT refusal -> SKIP"; }
+run "coloured CRLF unrelated failure stays FAIL" 1 FAKE_TEST=file FAKE_TEST_FILE="$FIX/brew7-test-other-colour.txt" \
+    && { has '^FAIL  brew-test' && ! has '^SKIP  brew-test' \
+        && ok "coloured CRLF unrelated failure stays FAIL" || bad "coloured CRLF unrelated failure stays FAIL"; }
+for f in xcode clt; do
+    grep -q "$(printf '\033')\[31mError:$(printf '\033')\[0m Your .* too outdated\.$(printf '\r')\$" "$FIX/brew7-test-$f-colour.txt" \
+        && ok "fixture $f keeps brew's colour codes and CRLF" || bad "fixture $f keeps brew's colour codes and CRLF"
+done
+run "scratch brew test runs with HOMEBREW_NO_COLOR=1" 0 \
+    && { called '^TEST_ENV HOMEBREW_NO_COLOR=1$' \
+        && ok "scratch brew test runs with HOMEBREW_NO_COLOR=1" || bad "scratch brew test runs with HOMEBREW_NO_COLOR=1"; }
 
 # --- formula-test ----------------------------------------------------------
 run "formula-test passes after an Xcode skip" 0 FAKE_TEST=xcode \
