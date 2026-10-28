@@ -5,6 +5,7 @@
 
 #include "../core/config.h"
 #include "../env/environment.h"
+#include "../env/version_change.h"
 #include "../index/package.h"
 #include "../provider/package_provider.h"
 
@@ -23,6 +24,11 @@ bool cask_only(const Config& config, const std::vector<std::string>& names);
 /// cask-only operation is noise ("Materialised: 0 symlinks"), not news.
 bool report_link_count(uint32_t links, bool casks_only);
 
+/// Throw a UserError describing rolled-back changes and remaining conflicts,
+/// if there are any.
+void report_version_change_failures(const Config& config, const VersionChangeResult& res,
+                                    const std::string& verb);
+
 /// Install packages by name. Dispatches each install through `provider`,
 /// then updates the active env's manifest with the provider-reported
 /// resolved version + auto-deps, and re-materialises the env. `link_opts`
@@ -39,7 +45,9 @@ void uninstall_packages(const Config& config, PackageProvider& provider,
 
 /// Upgrade packages. If `names` is empty, upgrades all packages whose
 /// installed version differs from the index's available version. Each
-/// install is dispatched through `provider`.
+/// install is dispatched through `provider`. An upgrade whose new version
+/// cannot be linked is rolled back (see apply_version_changes) and the call
+/// throws a UserError naming it, after the other upgrades are applied.
 void upgrade_packages(const Config& config, PackageProvider& provider, const PackageIndex& idx,
                       const std::vector<std::string>& names);
 
