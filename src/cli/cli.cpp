@@ -25,6 +25,7 @@
 #include "../provider/exec.h"
 #include "../provider/homebrew_provider.h"
 #include "../provider/registry.h"
+#include "../selfupdate/daemon_restart.h"
 #include "../selfupdate/selfupdate.h"
 #include "../settings/settings.h"
 #include "../smoke/runner.h"
@@ -1733,6 +1734,7 @@ void Cli::M::setup() {
                 return;
             }
             apply_update(info, cfg);
+            restart_daemon_after_update(cfg, std::cout);
             return;
         }
         if (selfupdate_check) {
@@ -1762,6 +1764,7 @@ void Cli::M::setup() {
             return;
         }
         apply_update(*info, cfg);
+        restart_daemon_after_update(cfg, std::cout);
     });
 
     // --- smoke ---

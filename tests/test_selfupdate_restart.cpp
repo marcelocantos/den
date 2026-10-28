@@ -1,0 +1,136 @@
+// Copyright 2026 Marcelo Cantos
+// SPDX-License-Identifier: Apache-2.0
+
+// After `den self-update` swaps the binary, a running daemon must not keep
+// running the old one: a launchd-managed daemon is re-bootstrapped onto the
+// new binary, any other daemon is stopped with a pointer to restart it.
+// Also: the doctor's broken-link pointer and shell-profile `den init`
+// detection used to keep shell integration idempotent.
+
+#include "../src/doctor/doctor.h"
+#include "../src/migrate/migrate.h"
+#include "../src/selfupdate/daemon_restart.h"
+
+#include <doctest.h>
+
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+namespace den {
+namespace test_selfupdate_restart {
+
+struct Recorder {
+    std::vector<std::string> cmds;
+    int bootstrap_rc = 0;
+    int stops = 0;
+    bool stop_throws = false;
+
+    DaemonRestartEnv env(bool running, std::optional<std::filesystem::path> plist) {
+        DaemonRestartEnv e;
+        e.daemon_running = running;
+        e.launchd_plist = std::move(plist);
+        e.launchd_domain = "gui/501";
+        e.run = [this](const std::string& cmd) {
+            cmds.push_back(cmd);
+            return cmd.find("bootstrap") != std::string::npos ? bootstrap_rc : 0;
+        };
+        e.stop = [this] {
+            ++stops;
+            if (stop_throws)
+                throw std::runtime_error("no such process");
+        };
+        return e;
+    }
+};
+
+TEST_SUITE("selfupdate_restart") {
+    TEST_CASE("sh_quote single-quotes and escapes embedded quotes") {
+        CHECK(sh_quote("/a b/c") == "'/a b/c'");
+        CHECK(sh_quote("it's") == "'it'\\''s'");
+    }
+
+    TEST_CASE("no running daemon: nothing is touched") {
+        Recorder r;
+        std::ostringstream out;
+        auto o = restart_daemon_after_update(
+            r.env(false,
+                  std::filesystem::path("/Users/x/Library/LaunchAgents/dev.den.daemon.plist")),
+            out);
+        CHECK(o == DaemonRestartOutcome::NotRunning);
+        CHECK(r.cmds.empty());
+        CHECK(r.stops == 0);
+        CHECK(out.str().empty());
+    }
+
+    TEST_CASE("launchd daemon is re-bootstrapped (bootout, then bootstrap) onto the new binary") {
+        Recorder r;
+        std::ostringstream out;
+        auto o = restart_daemon_after_update(
+            r.env(true,
+                  std::filesystem::path("/Users/o'k/Library/LaunchAgents/dev.den.daemon.plist")),
+            out);
+        CHECK(o == DaemonRestartOutcome::Relaunched);
+        REQUIRE(r.cmds.size() == 2);
+        CHECK(r.cmds[0] == "launchctl bootout 'gui/501' '/Users/o'\\''k/Library/LaunchAgents/"
+                           "dev.den.daemon.plist' 2>/dev/null");
+        CHECK(r.cmds[1] == "launchctl bootstrap 'gui/501' '/Users/o'\\''k/Library/LaunchAgents/"
+                           "dev.den.daemon.plist'");
+        CHECK(r.stops == 0);
+        CHECK(out.str().find("Restarted the den daemon") != std::string::npos);
+        CHECK(out.str().find("OS_REASON_CODESIGNING") != std::string::npos);
+        CHECK(out.str().find("docs/self-update.md") != std::string::npos);
+    }
+
+    TEST_CASE("failed bootstrap is reported with the recovery command") {
+        Recorder r;
+        r.bootstrap_rc = 5;
+        std::ostringstream out;
+        auto o = restart_daemon_after_update(
+            r.env(true, std::filesystem::path("/p/dev.den.daemon.plist")), out);
+        CHECK(o == DaemonRestartOutcome::Failed);
+        CHECK(out.str().find("den daemon install") != std::string::npos);
+    }
+
+    TEST_CASE("daemon outside launchd is stopped, with how to start it again") {
+        Recorder r;
+        std::ostringstream out;
+        auto o = restart_daemon_after_update(r.env(true, std::nullopt), out);
+        CHECK(o == DaemonRestartOutcome::Stopped);
+        CHECK(r.stops == 1);
+        CHECK(r.cmds.empty());
+        CHECK(out.str().find("den daemon run") != std::string::npos);
+    }
+
+    TEST_CASE("a stop that fails is reported, not thrown") {
+        Recorder r;
+        r.stop_throws = true;
+        std::ostringstream out;
+        auto o = restart_daemon_after_update(r.env(true, std::nullopt), out);
+        CHECK(o == DaemonRestartOutcome::Failed);
+        CHECK(out.str().find("still running the old binary") != std::string::npos);
+    }
+
+    TEST_CASE("doctor points broken links at den migrate-prefix without repairing") {
+        auto many = broken_symlinks_hint(311);
+        CHECK(many.find("311 broken symlinks") != std::string::npos);
+        CHECK(many.find("`den migrate-prefix` (coming)") != std::string::npos);
+        CHECK(many.find("does not repair") != std::string::npos);
+        CHECK(broken_symlinks_hint(1).find("1 broken symlink in") != std::string::npos);
+    }
+
+    TEST_CASE("profile_has_den_init recognises every den init form, not comments") {
+        CHECK(profile_has_den_init("eval \"$(den init)\"\n"));
+        CHECK(profile_has_den_init("x\neval \"$(\"/Users/m/.den/bin/den\" init)\"\n"));
+        CHECK(profile_has_den_init("eval \"$(\"$HOME/.den/bin/den\" init --shell zsh)\"\n"));
+        CHECK(profile_has_den_init("/Users/m/.den/bin/den init --shell fish | source\n"));
+        CHECK_FALSE(profile_has_den_init("# den init goes here\n"));
+        CHECK_FALSE(profile_has_den_init("# den — universal development environment manager\n"));
+        CHECK_FALSE(profile_has_den_init("export PATH=$HOME/.den/bin:$PATH\n"));
+        CHECK_FALSE(profile_has_den_init(""));
+    }
+}
+
+} // namespace test_selfupdate_restart
+} // namespace den

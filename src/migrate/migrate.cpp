@@ -19,7 +19,9 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <regex>
 #include <set>
+#include <sstream>
 #include <unordered_set>
 
 namespace den {
@@ -430,6 +432,26 @@ fs::path detect_shell_profile() {
     return home / ".profile";
 }
 
+} // namespace
+
+bool profile_has_den_init(const std::string& contents) {
+    // Any non-comment line that runs den's init, whatever the path or
+    // quoting: `den init`, `"$HOME/.den/bin/den" init --shell zsh`, ... The
+    // installer writes the quoted-path form, which a plain "den init"
+    // substring search misses.
+    static const std::regex re(R"re(^[^#]*den["']?[ \t]+init([ \t)"]|$))re");
+    std::istringstream in(contents);
+    std::string line;
+    while (std::getline(in, line)) {
+        if (std::regex_search(line, re)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+namespace {
+
 /// Append `eval "$(den init)"` to the user's profile if not already present.
 /// Returns the profile path on success (empty on failure). Idempotent: a
 /// no-op if the line is already there.
@@ -440,7 +462,6 @@ fs::path integrate_shell() {
         return {};
     }
 
-    const std::string marker = "den init"; // recognise prior integration
     const std::string line = "eval \"$(den init)\"";
 
     // Read existing contents (if any) to check idempotency and to preserve.
@@ -448,7 +469,7 @@ fs::path integrate_shell() {
         std::ifstream in(profile);
         const std::string contents((std::istreambuf_iterator<char>(in)),
                                    std::istreambuf_iterator<char>());
-        if (contents.find(marker) != std::string::npos) {
+        if (profile_has_den_init(contents)) {
             SPDLOG_DEBUG("Shell profile already integrates den: {}", profile.string());
             return profile;
         }
