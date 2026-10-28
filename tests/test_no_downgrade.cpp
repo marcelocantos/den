@@ -16,8 +16,10 @@
 #include "daemon/upgrade_pass.h"
 #include "env/environment.h"
 #include "env/manifest.h"
+#include "index/index.h"
 #include "index/package.h"
 #include "provider/stub_provider.h"
+#include "store/store.h"
 
 #include <chrono>
 #include <fstream>
@@ -98,6 +100,19 @@ struct CoutCapture {
     ~CoutCapture() { std::cout.rdbuf(old); }
     std::string str() const { return buf.str(); }
 };
+
+void write_text(const fs::path& p, const std::string& text) {
+    fs::create_directories(p.parent_path());
+    std::ofstream f(p);
+    f << text;
+}
+
+// A Homebrew INSTALL_RECEIPT.json carrying source.versions.version_scheme.
+void write_brew_receipt(const fs::path& keg, const std::string& stable, int scheme) {
+    write_text(keg / "INSTALL_RECEIPT.json",
+               R"({"installed_on_request":true,"source":{"spec":"stable","versions":{"stable":")" +
+                   stable + R"(","head":null,"version_scheme":)" + std::to_string(scheme) + "}}}");
+}
 
 std::string read_file(const fs::path& p) {
     std::ifstream f(p);
@@ -248,5 +263,161 @@ TEST_SUITE("no_downgrade") {
         CHECK(cap.str().find("Not downgrading 1 package(s)") != std::string::npos);
         CHECK(cap.str().find("Nothing to upgrade.") != std::string::npos);
         CHECK(cap.str().find("All packages are up to date") == std::string::npos);
+    }
+
+    // ---- version_scheme: (version_scheme, version, revision) ordering ----
+
+    TEST_CASE("version tuple: openssl@3 3.6.3 scheme 0 -> 3.5.9 scheme 1 is an upgrade") {
+        CHECK(compare_versioned(1, "3.5.9", 0, "3.6.3") > 0);
+        CHECK(compare_versioned(0, "3.6.3", 1, "3.5.9") < 0);
+        CHECK(version_delta("3.6.3", 0, "3.5.9", 1) == VersionDelta::Newer);
+        // The scheme dominates revisions too.
+        CHECK(version_delta("3.6.3_2", 0, "3.5.9", 1) == VersionDelta::Newer);
+        // An index that predates the bump is older than a scheme-1 install.
+        CHECK(version_delta("3.5.9", 1, "3.6.3", 0) == VersionDelta::Older);
+        // Same pkg_version is the same keg whatever the schemes say.
+        CHECK(version_delta("3.5.9", 0, "3.5.9", 1) == VersionDelta::Same);
+    }
+
+    TEST_CASE("version tuple: lower version in the same scheme is refused") {
+        CHECK(version_delta("3.6.3", 0, "3.5.9", 0) == VersionDelta::Older);
+        CHECK(version_delta("3.6.3", 1, "3.5.9", 1) == VersionDelta::Older);
+        CHECK(version_delta("3.6.3_1", 1, "3.6.3", 1) == VersionDelta::Older);
+        CHECK(version_delta("3.5.9", 1, "3.6.0", 1) == VersionDelta::Newer);
+    }
+
+    TEST_CASE("version tuple: revision ordering") {
+        CHECK(compare_versioned(0, "1.11.1", 0, "1.11.1_7") < 0);
+        CHECK(compare_versioned(0, "1.11.1_7", 0, "1.11.2") < 0);
+        CHECK(compare_versioned(0, "1.11.1", 0, "1.11.2") < 0);
+        CHECK(compare_versioned(2, "1.11.1_7", 2, "1.11.1_6") > 0);
+        CHECK(version_delta("1.11.1", 0, "1.11.1_7", 0) == VersionDelta::Newer);
+        CHECK(version_delta("1.11.1_7", 0, "1.11.2", 0) == VersionDelta::Newer);
+        CHECK(version_delta("1.11.2", 0, "1.11.1_7", 0) == VersionDelta::Older);
+    }
+
+    TEST_CASE("installed_version_scheme: DEN_RECEIPT, then INSTALL_RECEIPT, else 0") {
+        NdTmp t;
+        fs::path keg = t.path / "Cellar" / "openssl@3" / "3.6.3";
+        fs::create_directories(keg);
+        CHECK(installed_version_scheme(keg) == 0); // no receipt
+        CHECK(installed_version_scheme(t.path / "missing") == 0);
+
+        write_brew_receipt(keg, "3.6.3", 2);
+        CHECK(installed_version_scheme(keg) == 2);
+
+        write_text(keg / "INSTALL_RECEIPT.json", "{not json");
+        CHECK(installed_version_scheme(keg) == 0);
+
+        // den's own receipt wins and records the scheme it poured with.
+        mark_keg_owned(keg, "openssl@3", "3.6.3", 1);
+        CHECK(installed_version_scheme(keg) == 1);
+        CHECK(keg_owned_by_den(keg));
+
+        // A receipt from before den recorded schemes falls back to brew's.
+        write_text(keg / "DEN_RECEIPT.json",
+                   R"({"poured_by":"den","name":"openssl@3","version":"3.6.3"})");
+        write_brew_receipt(keg, "3.6.3", 3);
+        CHECK(installed_version_scheme(keg) == 3);
+    }
+
+    TEST_CASE("index reads version_scheme from formula JSON and keeps it in the cache") {
+        NdTmp t;
+        const std::string formulae = R"([
+            {"name":"openssl@3","full_name":"openssl@3","versions":{"stable":"3.5.9"},
+             "revision":0,"version_scheme":1,"dependencies":[]},
+            {"name":"jq","full_name":"jq","versions":{"stable":"1.8.2"},"revision":0,
+             "dependencies":[]}
+        ])";
+        auto idx = transform_homebrew(formulae, "[]");
+        REQUIRE(idx.find("openssl@3") != nullptr);
+        CHECK(idx.find("openssl@3")->version_scheme == 1);
+        REQUIRE(idx.find("jq") != nullptr);
+        CHECK(idx.find("jq")->version_scheme == 0); // absent -> 0
+
+        save_index(idx, t.path / "index.json");
+        auto back = load_index(t.path / "index.json");
+        REQUIRE(back.find("openssl@3") != nullptr);
+        CHECK(back.find("openssl@3")->version_scheme == 1);
+        CHECK(back.find("jq")->version_scheme == 0);
+        auto from_json = load_index_json(t.path / "index.json"); // JSON, not the binary cache
+        REQUIRE(from_json.find("openssl@3") != nullptr);
+        CHECK(from_json.find("openssl@3")->version_scheme == 1);
+    }
+
+    TEST_CASE("daemon: a version_scheme bump is pending and applied; same scheme is not") {
+        auto idx = index_with({{"openssl@3", "3.5.9"}, {"libfoo", "2.0"}});
+        idx.packages["openssl@3"].version_scheme = 1;
+        std::map<std::string, std::string> installed{{"openssl@3", "3.6.3"}, {"libfoo", "2.1"}};
+        auto schemes = [](const std::string&, const std::string&) { return 0; };
+        std::vector<PendingUpgrade> older;
+        auto pending = compute_pending(installed, idx, &older, schemes);
+        REQUIRE(pending.size() == 1);
+        CHECK(pending[0].name == "openssl@3");
+        CHECK(pending[0].available == "3.5.9");
+        CHECK(pending[0].installed_scheme == 0);
+        CHECK(pending[0].available_scheme == 1);
+        REQUIRE(older.size() == 1);
+        CHECK(older[0].name == "libfoo"); // lower version, same scheme
+
+        // Full cycle with auto_upgrade: the scheme comes from the keg receipt.
+        NdTmp t;
+        fs::path cellar = t.path / "Cellar";
+        fs::path home = t.path / "home";
+        fs::create_directories(home);
+        write_brew_receipt(cellar / "openssl@3" / "3.6.3", "3.6.3", 0);
+        fs::create_directories(cellar / "libfoo" / "2.1");
+        DaemonState state;
+        std::vector<std::string> applied;
+        MaintenanceHooks h;
+        h.refresh_index = [&] { return idx; };
+        h.installed = [&] { return installed; };
+        h.installed_scheme = [&](const std::string& n, const std::string& v) {
+            return installed_version_scheme(cellar / n / v);
+        };
+        h.apply = [&](const PendingUpgrade& p) { applied.push_back(p.name + "@" + p.available); };
+        h.in_window = [](const std::string&) { return true; };
+        MaintenanceSettings s;
+        s.auto_download = false;
+        s.auto_upgrade = true;
+        auto rep = run_maintenance_cycle(cellar, home, s, state, h);
+        CHECK(applied == std::vector<std::string>{"openssl@3@3.5.9"});
+        CHECK(rep.index_older == 1);
+
+        // The schemes survive the state file, so a later pass still agrees.
+        DaemonState st2;
+        st2.pending.push_back(pending[0]);
+        write_daemon_state(home, st2);
+        auto back = read_daemon_state(home);
+        REQUIRE(back.pending.size() == 1);
+        CHECK(back.pending[0].available_scheme == 1);
+        int applies = 0;
+        run_upgrade_pass(cellar, home, back, [&](const PendingUpgrade&) { ++applies; });
+        CHECK(applies == 1);
+    }
+
+    TEST_CASE("den upgrade applies a version_scheme bump and refuses a same-scheme downgrade") {
+        NdTmp t;
+        auto cfg = scratch_config(t.path);
+        StubProvider stub;
+        seed(cfg, stub, {{"openssl@3", "3.6.3"}, {"libfoo", "2.1"}});
+        write_brew_receipt(cfg.store / "openssl@3" / "3.6.3", "3.6.3", 0);
+        auto idx = index_with({{"openssl@3", "3.5.9"}, {"libfoo", "2.0"}});
+        idx.packages["openssl@3"].version_scheme = 1;
+
+        {
+            CoutCapture cap;
+            upgrade_packages(cfg, stub, idx, {});
+            CHECK(active_version(cfg, "openssl@3") == "3.5.9");
+            CHECK(active_version(cfg, "libfoo") == "2.1");
+            CHECK(cap.str().find("libfoo 2.1 (index has 2.0") != std::string::npos);
+            CHECK(cap.str().find("openssl@3 3.6.3 (index has") == std::string::npos);
+        }
+        {
+            CoutCapture cap;
+            upgrade_packages(cfg, stub, idx, {"libfoo"});
+            CHECK(active_version(cfg, "libfoo") == "2.1");
+            CHECK(cap.str().find("Not downgrading 1 package(s)") != std::string::npos);
+        }
     }
 }

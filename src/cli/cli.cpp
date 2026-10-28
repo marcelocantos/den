@@ -1423,7 +1423,8 @@ void Cli::M::setup() {
         for (const auto& pkg : installed) {
             const auto* index_pkg = idx.find(pkg.name);
             if (index_pkg && index_pkg->version != pkg.version) {
-                const auto delta = version_delta(pkg.version, index_pkg->version);
+                const auto delta = version_delta(pkg.version, installed_version_scheme(pkg.path),
+                                                 index_pkg->version, index_pkg->version_scheme);
                 if (delta == VersionDelta::Same)
                     continue;
                 std::cout << std::left << std::setw(static_cast<int>(max_name + 2)) << pkg.name

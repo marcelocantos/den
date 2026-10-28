@@ -24,7 +24,14 @@ struct PendingUpgrade {
     std::string name;
     std::string installed;
     std::string available;
+    // Homebrew version_scheme of each side (0 when absent); ordering
+    // compares (version_scheme, version, revision). See core/version.h.
+    int installed_scheme = 0;
+    int available_scheme = 0;
 };
+
+/// Looks up the version_scheme of an installed keg by (name, version).
+using InstalledSchemeFn = std::function<int(const std::string&, const std::string&)>;
 
 // An upgrade the daemon staged but did not apply because one or more of the
 // installed keg's files were held open by a live process (🎯T51 / 🎯T72).
@@ -74,15 +81,18 @@ bool is_daemon_running(const Config& config);
 
 /// Outdated detection: for each den-managed package (`installed`: name →
 /// version, from the active env's resolved homebrew bucket) whose index
-/// version is newer (compare_pkg_versions, revision-aware), produce a
+/// (version_scheme, version, revision) tuple is newer, produce a
 /// PendingUpgrade. An index version older than the installed one is never
 /// pending (an upgrade never downgrades); it goes to `index_older` when
 /// given. Casks/apps, disabled formulae and names missing from the index are
 /// skipped: cask upgrades swap live .app bundles and stay a manual `den
-/// upgrade`. Sorted by name.
+/// upgrade`. Sorted by name. `installed_scheme` gives each installed keg's
+/// version_scheme (from its receipt); when empty every keg counts as 0. The
+/// index side's scheme is Package::version_scheme.
 std::vector<PendingUpgrade> compute_pending(const std::map<std::string, std::string>& installed,
                                             const PackageIndex& idx,
-                                            std::vector<PendingUpgrade>* index_older = nullptr);
+                                            std::vector<PendingUpgrade>* index_older = nullptr,
+                                            const InstalledSchemeFn& installed_scheme = {});
 
 /// The one-line report for a package whose index is older than what is
 /// installed, e.g. "openssl@3 3.6.3: index older than installed (index has
@@ -104,6 +114,7 @@ struct MaintenanceHooks {
     std::function<void(const PendingUpgrade&)> prefetch;           // optional
     std::function<void(const PendingUpgrade&)> apply;              // optional
     std::function<bool(const std::string&)> in_window;             // default: in_maintenance_window
+    InstalledSchemeFn installed_scheme; // optional: installed keg's version_scheme (default 0)
 };
 
 struct MaintenanceReport {

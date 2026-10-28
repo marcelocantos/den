@@ -138,6 +138,9 @@ Package transform_formula(const json& f) {
     if (f.contains("revision") && f["revision"].is_number_integer()) {
         pkg.revision = std::max(0, f["revision"].get<int>());
     }
+    if (f.contains("version_scheme") && f["version_scheme"].is_number_integer()) {
+        pkg.version_scheme = std::max(0, f["version_scheme"].get<int>());
+    }
     if (pkg.revision > 0 && !pkg.version.empty()) {
         pkg.version += "_" + std::to_string(pkg.revision);
     }
@@ -431,6 +434,9 @@ json package_to_json(const Package& pkg) {
     if (pkg.revision > 0) {
         j["revision"] = pkg.revision;
     }
+    if (pkg.version_scheme > 0) {
+        j["version_scheme"] = pkg.version_scheme;
+    }
     j["description"] = pkg.description;
     j["homepage"] = pkg.homepage;
     j["license"] = pkg.license;
@@ -506,6 +512,9 @@ Package package_from_json(const json& j) {
     pkg.version = j.value("version", "");
     if (j.contains("revision") && j["revision"].is_number_integer()) {
         pkg.revision = std::max(0, j["revision"].get<int>());
+    }
+    if (j.contains("version_scheme") && j["version_scheme"].is_number_integer()) {
+        pkg.version_scheme = std::max(0, j["version_scheme"].get<int>());
     }
     pkg.description = j.value("description", "");
     pkg.homepage = j.value("homepage", "");

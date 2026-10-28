@@ -130,6 +130,24 @@ int compare_pkg_versions(const std::string& a, const std::string& b) {
     return 0;
 }
 
+int compare_versioned(int scheme_a, const std::string& a, int scheme_b, const std::string& b) {
+    if (scheme_a != scheme_b)
+        return scheme_a < scheme_b ? -1 : 1;
+    return compare_pkg_versions(a, b);
+}
+
+VersionDelta version_delta(const std::string& installed, int installed_scheme,
+                           const std::string& available, int available_scheme) {
+    if (compare_pkg_versions(available, installed) == 0)
+        return VersionDelta::Same;
+    int c = compare_versioned(available_scheme, available, installed_scheme, installed);
+    if (c > 0)
+        return VersionDelta::Newer;
+    if (c < 0)
+        return VersionDelta::Older;
+    return VersionDelta::Same;
+}
+
 VersionDelta version_delta(const std::string& installed, const std::string& available) {
     int c = compare_pkg_versions(available, installed);
     if (c > 0)

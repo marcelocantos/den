@@ -1159,7 +1159,7 @@ fs::path install_url_formula(const Config& config, const Package& pkg) {
     }
     cleanup();
 
-    mark_keg_owned(dest, pkg.name, pkg.version);
+    mark_keg_owned(dest, pkg.name, pkg.version, pkg.version_scheme);
     ensure_prefix_opt_link(config.store, pkg.name, dest);
     return dest;
 }

@@ -6,6 +6,7 @@
 #include "../activity/activity.h"
 #include "../core/version.h"
 #include "../store/pins.h"
+#include "../store/store.h"
 #include "inuse.h"
 
 #include <spdlog/spdlog.h>
@@ -79,7 +80,11 @@ UpgradePassResult run_upgrade_pass(const fs::path& cellar, const fs::path& den_h
 
         // Defence in depth: compute_pending never queues a downgrade, but
         // state.pending may come from elsewhere (an older den's state file).
-        if (version_delta(pu.installed, pu.available) != VersionDelta::Newer) {
+        // The installed side's scheme is re-read from the keg's receipt; the
+        // index side's comes from the pending entry (0 for a pre-scheme state).
+        const int have_scheme = installed_version_scheme(cellar / pu.name / pu.installed);
+        if (version_delta(pu.installed, have_scheme, pu.available, pu.available_scheme) !=
+            VersionDelta::Newer) {
             SPDLOG_WARN("upgrade_pass: {} {} -> {} is not an upgrade; not applying", pu.name,
                         pu.installed, pu.available);
             result.not_newer.push_back(pu);

@@ -135,7 +135,9 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
             auto* pkg = idx.find(name);
             if (!pkg || pkg->version.empty() || pkg->version == version)
                 continue;
-            switch (version_delta(version, pkg->version)) {
+            const int have_scheme =
+                installed_version_scheme(config.store / keg_name(name) / version);
+            switch (version_delta(version, have_scheme, pkg->version, pkg->version_scheme)) {
             case VersionDelta::Newer:
                 candidates.push_back({name, version, pkg->version});
                 break;
@@ -165,8 +167,12 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
                 std::cerr << "warning: '" << name << "' not in index\n";
                 continue;
             }
-            const auto delta = pkg->version == it->second ? VersionDelta::Same
-                                                          : version_delta(it->second, pkg->version);
+            const int have_scheme =
+                installed_version_scheme(config.store / keg_name(name) / it->second);
+            const auto delta =
+                pkg->version == it->second
+                    ? VersionDelta::Same
+                    : version_delta(it->second, have_scheme, pkg->version, pkg->version_scheme);
             if (delta == VersionDelta::Newer) {
                 candidates.push_back({name, it->second, pkg->version});
             } else if (delta == VersionDelta::Older) {

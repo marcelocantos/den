@@ -28,4 +28,19 @@ enum class VersionDelta {
 
 VersionDelta version_delta(const std::string& installed, const std::string& available);
 
+/// Compare Homebrew version tuples (version_scheme, version, revision), the
+/// way brew orders a formula against an installed keg: a higher
+/// version_scheme wins regardless of the version (homebrew-core bumps the
+/// scheme when it deliberately moves a formula to a lower version, e.g.
+/// openssl@3 3.6.x -> 3.5.9 LTS with version_scheme 1), and within one scheme
+/// compare_pkg_versions decides. `a` and `b` are pkg_versions ("3.6.3_1").
+int compare_versioned(int scheme_a, const std::string& a, int scheme_b, const std::string& b);
+
+/// Scheme-aware version_delta. Equal pkg_versions are Same whatever the
+/// schemes (same keg; brew does not reinstall it either). Otherwise the
+/// (version_scheme, version, revision) tuple decides: a scheme bump is Newer
+/// even when the version is lower; a lower tuple is Older (never applied).
+VersionDelta version_delta(const std::string& installed, int installed_scheme,
+                           const std::string& available, int available_scheme);
+
 } // namespace den
