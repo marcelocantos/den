@@ -20,8 +20,10 @@ out:
   if it changed. A directory the build created there is removed. The opt link
   only moves to the new keg when den links the keg, as for a poured bottle.
   If the link already names an older keg, a build that ignores DESTDIR
-  writes through it: den detects that and fails the build, but cannot undo
-  the write, so uninstall and reinstall the older version.
+  would write through it. On macOS the [build sandbox](#build-sandbox-macos)
+  denies that write, so the build fails and the older keg is untouched. On
+  Linux den detects the write and fails the build, but cannot undo it, so
+  uninstall and reinstall the older version.
 * **Dependencies by opt path.** A dependency's `opt_prefix`, `opt_lib`,
   `opt_include`, and the rest resolve to `<prefix>/opt/<dep>` (or to the
   dependency's keg if it has no opt link yet).
@@ -44,6 +46,48 @@ paths. Only what reaches a build command is rewritten to the opt path:
 
 The native fallback (no Ruby) uses the same mode. Its formula parser and the
 generic cmake, autotools and make recipes are configured with the opt path.
+
+## Build sandbox (macOS)
+
+On macOS every configure, build and install command runs under
+`/usr/bin/sandbox-exec` with a Seatbelt profile that denies writes to den's
+prefix (and its Cellar, if that resolves elsewhere) and to `$DEN_HOME`,
+except for three directories:
+
+* the build directory, `<den_home>/cache/build/<name>-<version>`;
+* the staging DESTDIR, `<den_home>/cache/build/<name>-<version>.destdir`;
+* the cache temp directory, `<den_home>/cache/tmp/<name>-<version>`, which
+  native-fallback build commands get as `TMPDIR` and which is removed after
+  the build.
+
+Denied writes include creating, overwriting, removing, renaming, chmod and
+extended attributes. Seatbelt matches real paths, so a write through a
+symlink (such as the opt link to an older keg) is denied when its target is.
+Setuid and setgid bits are refused everywhere. Everything outside den's trees
+stays as writable as it is for den itself. A build that writes into the prefix
+directly, ignores DESTDIR, or writes elsewhere under `$DEN_HOME` fails, and
+nothing it tried to write remains.
+
+The profile follows Homebrew's (`Library/Homebrew/sandbox.rb`): a
+`(debug deny)` header, paths resolved through symlinks, the same string
+quoting, and `sandbox-exec -p <profile>`. Homebrew's is an allow list for its
+whole build process. Den's is a deny list scoped to den's own trees, and it
+does not limit network or Mach lookups. Like Homebrew, den will not nest
+sandboxes: run inside a sandbox, it refuses to build from source.
+
+What runs inside the sandbox:
+
+* **Native fallback:** every build command.
+* **Bundled Ruby (`den_build.rb`, and `brew ruby`):** every command the
+  formula's install method runs through `system` (Formula#system). The Ruby
+  process itself is not sandboxed. The formula's Ruby file operations on the
+  keg (`bin.install`, `rm`, `inreplace`), source download and extraction, and
+  den's stage merge run outside it, as they must write the keg.
+
+**Linux gap.** Linux has no sandbox yet. Landlock is allow-list only, so it
+cannot express "everything except den's trees" without listing the rest of
+the filesystem. bwrap is not generally installed. Builds there run
+unsandboxed, and the opt-path check above is the only guard.
 
 ## Mach-O linkage (macOS)
 

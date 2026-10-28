@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "source_build.h"
+#include "build_sandbox.h"
 #include "formula_parser.h"
 #include "macho_fixup.h"
 #include "opt_prefix_build.h"
@@ -321,6 +322,32 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
 
     std::cout << "==> Building " << name << " " << version << " from source\n";
 
+    // Build sandbox (docs/source-builds.md): on macOS, configure, build and
+    // install commands may not write den's prefix or $DEN_HOME outside the
+    // build directory, the staging DESTDIR and the cache temp directory. An
+    // install step that ignores DESTDIR then fails instead of writing the
+    // live opt path or, through an opt link, an older keg.
+    require_build_sandbox();
+    const auto sandbox = build_sandbox_for(config, name, version);
+    const bool sandboxed = build_sandbox_supported();
+    struct TempDirGuard {
+        fs::path path;
+        ~TempDirGuard() {
+            std::error_code ec;
+            fs::remove_all(path, ec);
+        }
+    } sandbox_temp{sandbox.temp_dir};
+    {
+        std::error_code ec;
+        fs::remove_all(sandbox.temp_dir, ec);
+        fs::create_directories(sandbox.temp_dir);
+    }
+    // den_build.rb runs each command the formula's install method runs
+    // (Formula#system) under this profile.
+    const std::string ruby_sandbox_env =
+        sandboxed ? "DEN_BUILD_SANDBOX_PROFILE=" + shell_quote(seatbelt_profile(sandbox)) + " "
+                  : std::string();
+
     // Fetch formula source from GitHub (no brew dependency).
     auto formula_source = fetch_formula_source(idx, requested);
 
@@ -343,7 +370,8 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
                 f << formula_source;
             }
 
-            auto cmd = bundled_ruby_command(config, ruby_dir, formula_file, name, version);
+            auto cmd = ruby_sandbox_env +
+                       bundled_ruby_command(config, ruby_dir, formula_file, name, version);
             SPDLOG_INFO("bundled ruby build: {}", cmd);
             auto [ruby_rc, ruby_output] = run(cmd);
 
@@ -394,8 +422,8 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
         }
 
         if (!build_script.empty()) {
-            auto cmd = shell_quote(brew.string()) + " ruby " + shell_quote(build_script) + " " +
-                       shell_quote(formula_file.string()) + " " +
+            auto cmd = ruby_sandbox_env + shell_quote(brew.string()) + " ruby " +
+                       shell_quote(build_script) + " " + shell_quote(formula_file.string()) + " " +
                        shell_quote(config.store.string()) + " " +
                        shell_quote(config.den_home.string()) + " " + shell_quote(version) + " " +
                        shell_quote(name);
@@ -471,6 +499,7 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
     // Build environment: point at den's installed packages.
     std::map<std::string, std::string> env;
     env["PREFIX"] = opt.string();
+    env["TMPDIR"] = sandbox.temp_dir.string();
     std::string pkg_config_path, cpath, library_path;
     for (const auto& pkg : list_installed(config.store)) {
         auto pc = pkg.path / "lib" / "pkgconfig";
@@ -500,10 +529,21 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
         // a keg directory: it must not create the live opt path.
         const auto opt_mkdir = "mkdir -p " + opt.string();
         if (cmd.starts_with(opt_mkdir) &&
-            (cmd.size() == opt_mkdir.size() || cmd[opt_mkdir.size()] == '/'))
-            cmd = "mkdir -p " + dest.string() + cmd.substr(opt_mkdir.size());
+            (cmd.size() == opt_mkdir.size() || cmd[opt_mkdir.size()] == '/')) {
+            const auto rest = cmd.substr(opt_mkdir.size());
+            // den makes a single keg directory itself: the sandbox denies
+            // build commands writes into the Cellar.
+            if (rest.find_first_of(" \t'\"$`;&|<>()\\*?") == std::string::npos) {
+                std::error_code mk;
+                fs::create_directories(dest.string() + rest, mk);
+                return mk ? 1 : 0;
+            }
+            cmd = "mkdir -p " + dest.string() + rest;
+        }
         const bool install = is_install_step(cmd);
-        int step_rc = run_in_dir(src_dir, install ? with_destdir(cmd, stage) : cmd, env);
+        int step_rc = run_in_dir(
+            src_dir, sandboxed_shell_command(sandbox, install ? with_destdir(cmd, stage) : cmd),
+            env);
         if (step_rc == 0 && install)
             merge_destdir_stage(stage, opt, dest, shared_prefix);
         return step_rc;
@@ -591,7 +631,12 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
         fs::remove_all(dest, ec);
         fs::remove_all(stage, ec);
         throw UserError("build failed for " + name + " " + version + " (exit " +
-                        std::to_string(rc) + ")");
+                        std::to_string(rc) + ")" +
+                        (sandboxed ? "; build commands may not write " + config.prefix.string() +
+                                         " or " + config.den_home.string() +
+                                         " outside the build directory, so an install step that "
+                                         "ignored DESTDIR fails here (see docs/source-builds.md)"
+                                   : std::string()));
     }
 
     fs::remove_all(build_dir, ec);
