@@ -45,6 +45,45 @@ paths. Only what reaches a build command is rewritten to the opt path:
 The native fallback (no Ruby) uses the same mode. Its formula parser and the
 generic cmake, autotools and make recipes are configured with the opt path.
 
+## Mach-O linkage (macOS)
+
+After a successful build, before the keg is recorded as den's, den fixes the
+linkage of every Mach-O executable, dylib and bundle in the keg. It walks the
+whole keg, not just `lib` and `bin`: plugin directories such as
+`lib/engines-3` and `lib/ossl-modules`, `libexec/**` (`git-core`, gettext's
+helpers) and anything else. Symlinks, static archives, object files and
+non-Mach-O files are skipped (`src/build/macho_fixup.h`).
+
+* **The keg's own files by `@loader_path`.** A load command or rpath that
+  names the keg, either by its versioned path
+  (`<prefix>/Cellar/<name>/<version>/…`, or another version of the same
+  formula) or through its own opt link (`<prefix>/opt/<name>/…`, which is
+  what an opt-prefix build records), becomes `@loader_path/<relative path>`.
+  The keg keeps loading its own libraries after its opt link moves to
+  another version, or before it has one.
+* **Dependencies by opt path.** A load command or rpath that names a
+  dependency's versioned keg (`<prefix>/Cellar/<dep>/<version>/…`) becomes
+  `<prefix>/opt/<dep>/…`, so the keg follows its dependency's opt link.
+  Bottles are different: den pins their dependencies to the exact versioned
+  keg (see `pin_opt_reference` in `src/build/relocate.h`).
+* **Ids by opt path.** An absolute dylib id becomes
+  `<prefix>/opt/<name>/<path in keg>`, the stable name that dependents link
+  against. `@rpath/…` ids are kept.
+* **rpaths that still resolve.** Duplicate rpaths left by the rewrite are
+  deleted. An `@rpath/…` load that no rpath resolves gets an `@loader_path`
+  rpath to the keg's `lib` (or the file's own directory) when the library is
+  there.
+
+Each modified file is re-signed ad hoc (`codesign -f -s -`), as is any
+unmodified file that fails `codesign -v`. den then verifies the keg: every
+non-weak dylib load resolves (`@loader_path`, `@executable_path` for
+executables, `@rpath` through the file's rpaths, and absolute paths; dyld
+shared-cache paths under `/usr/lib` and `/System` count as resolved), no
+load command, id or rpath names a path under `<prefix>/Cellar`, and every
+Mach-O file passes `codesign -v`. Any failure, or a rewrite that does not fit
+in a file's Mach-O header, fails the build and removes the keg. Linux builds
+are not changed by this step.
+
 ## Source archives
 
 Sources are cached as `<den_home>/cache/sources/<name>-<version><suffix>`,
