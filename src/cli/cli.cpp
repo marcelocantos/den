@@ -26,6 +26,7 @@
 #include "../provider/homebrew_provider.h"
 #include "../provider/registry.h"
 #include "../selfupdate/daemon_restart.h"
+#include "../selfupdate/launchd_restart.h"
 #include "../selfupdate/selfupdate.h"
 #include "../settings/settings.h"
 #include "../smoke/runner.h"
@@ -1397,16 +1398,15 @@ void Cli::M::setup() {
             std::ofstream f(plist_path);
             f << plist;
         }
-        // Prefer bootstrap for modern launchctl; fall back to load -w.
-        std::string uid = std::to_string(static_cast<unsigned>(::getuid()));
-        auto boot = "launchctl bootout gui/" + uid + " " + plist_path.string() +
-                    " 2>/dev/null; "
-                    "launchctl bootstrap gui/" +
-                    uid + " " + plist_path.string();
-        auto rc = std::system(boot.c_str());
-        if (rc != 0) {
-            rc = std::system(("launchctl load -w " + plist_path.string()).c_str());
-        }
+        // bootout gui/<uid>/<label> + bootstrap gui/<uid> <plist>, launchctl
+        // run with a scrubbed environment, then confirm a running pid (see
+        // selfupdate/launchd_restart.h).
+        auto ops = real_launchd_ops("dev.den.daemon", plist_path);
+        auto before = ops.launchctl({"print", ops.domain + "/" + ops.label});
+        auto old = parse_launchctl_print(before.spawned && before.exit_code == 0, before.output);
+        std::ostringstream detail;
+        int rc = restart_launchd_job(ops, old.pid, detail) == LaunchdRestartResult::Failed ? 1 : 0;
+        std::cout << detail.str();
         if (rc == 0)
             std::cout << "Daemon installed and started.\n  Plist: " << plist_path << "\n";
         else
@@ -1422,7 +1422,8 @@ void Cli::M::setup() {
         auto home = fs::path(std::getenv("HOME") ? std::getenv("HOME") : "/tmp");
         auto plist_path = home / "Library" / "LaunchAgents" / "dev.den.daemon.plist";
         if (fs::exists(plist_path)) {
-            std::system(("launchctl unload -w " + plist_path.string()).c_str());
+            auto ops = real_launchd_ops("dev.den.daemon", plist_path);
+            (void)ops.launchctl({"bootout", ops.domain + "/" + ops.label});
             fs::remove(plist_path);
             std::cout << "Daemon uninstalled.\n";
         } else {

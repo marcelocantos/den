@@ -4,6 +4,7 @@
 #include "relocate.h"
 
 #include "core/error.h"
+#include "core/self_exe.h"
 #include "provider/exec.h"
 
 #include <spdlog/spdlog.h>
@@ -214,6 +215,14 @@ std::vector<std::string> otool_rpaths(const fs::path& file) {
 }
 
 void codesign_adhoc(const fs::path& file) {
+    // Never re-sign den's own running binary: relocating a keg must not
+    // change den's code identity (launchd records it for dev.den.daemon, and
+    // a changed signature makes the next spawn fail with
+    // OS_REASON_CODESIGNING).
+    if (is_den_own_binary(file, current_executable_path())) {
+        SPDLOG_WARN("not re-signing den's own binary {}", file.string());
+        return;
+    }
     // Arm64 macOS kills modified Mach-O binaries with an invalid signature
     // (SIGKILL, no output). Re-sign ad-hoc after install_name_tool, matching
     // Homebrew's post-relocate step.
@@ -956,6 +965,20 @@ bool looks_like_macho_header(const unsigned char* header, std::size_t size) {
     default:
         return false;
     }
+}
+
+bool is_den_own_binary(const fs::path& file, const std::optional<fs::path>& self_exe) {
+    if (!self_exe)
+        return false;
+    std::error_code ec;
+    if (fs::equivalent(file, *self_exe, ec) && !ec)
+        return true;
+    // Compare resolved paths too, in case one of them no longer exists.
+    auto a = fs::weakly_canonical(file, ec);
+    if (ec)
+        return false;
+    auto b = fs::weakly_canonical(*self_exe, ec);
+    return !ec && a == b;
 }
 
 } // namespace den

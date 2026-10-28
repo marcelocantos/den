@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -109,5 +110,9 @@ void relocate_ruby(const fs::path& ruby_dir, const std::string& original_prefix)
 /// True if the first bytes of a file are a Mach-O (thin or fat) header.
 /// Distinguishes fat Mach-O from Java .class files, which share 0xCAFEBABE.
 bool looks_like_macho_header(const unsigned char* header, std::size_t size);
+
+/// True when `file` is den's own executable (`self_exe`, normally
+/// current_executable_path()). codesign_adhoc refuses to re-sign it.
+bool is_den_own_binary(const fs::path& file, const std::optional<fs::path>& self_exe);
 
 } // namespace den
