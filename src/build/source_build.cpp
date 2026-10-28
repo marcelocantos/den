@@ -3,6 +3,7 @@
 
 #include "source_build.h"
 #include "formula_parser.h"
+#include "opt_prefix_build.h"
 
 #include "../core/error.h"
 #include "../download/archive.h"
@@ -309,7 +310,10 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
     // Fetch formula source from GitHub (no brew dependency).
     auto formula_source = fetch_formula_source(idx, requested);
 
-    // Path A: Bundled Ruby subprocess.
+    // Path A: Bundled Ruby subprocess. macOS only: Linux's lazily downloaded
+    // Portable Ruby has no Homebrew library, so fetching it here would only
+    // be thrown away.
+#ifdef __APPLE__
     if (!formula_source.empty()) {
         auto ruby_dir = ensure_ruby_bundle(config.den_home);
         auto ruby_bin = ruby_dir / "ruby" / "bin" / "ruby";
@@ -349,6 +353,7 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
             fs::remove_all(dest, ec);
         }
     }
+#endif
 
     // Path B: brew ruby subprocess (Homebrew fallback — only if formula
     // source was fetched but bundled Ruby failed).
@@ -403,10 +408,10 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
     if (recipe.source_url.empty())
         throw UserError("no source URL found for " + name);
 
-    // Download source.
-    auto cache_dir = config.cache / "sources";
-    fs::create_directories(cache_dir);
-    auto tarball_path = cache_dir / (name + "-" + version + ".tar.gz");
+    // Download source. The cache name keeps the URL's archive suffix
+    // (.tar.xz, .tar.bz2, ...); extraction detects the format from content.
+    auto tarball_path = source_archive_path(config.cache, name, version, recipe.source_url);
+    fs::create_directories(tarball_path.parent_path());
 
     if (!fs::exists(tarball_path)) {
         std::cout << "==> Downloading source\n";
@@ -440,9 +445,18 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
 
     fs::create_directories(dest);
 
+    // Opt-prefix mode (docs/source-builds.md): configure with the stable
+    // <prefix>/opt/<name> so baked-in paths survive upgrades; install steps
+    // stage through DESTDIR and the staged tree merges into the versioned keg.
+    const auto opt = opt_prefix_for(config.store, name);
+    const auto shared_prefix = config.store.parent_path();
+    const auto stage = config.cache / "build" / (name + "-" + version + ".destdir");
+    fs::remove_all(stage, ec);
+    const OptPathGuard opt_guard(opt);
+
     // Build environment: point at den's installed packages.
     std::map<std::string, std::string> env;
-    env["PREFIX"] = dest.string();
+    env["PREFIX"] = opt.string();
     std::string pkg_config_path, cpath, library_path;
     for (const auto& pkg : list_installed(config.store)) {
         auto pc = pkg.path / "lib" / "pkgconfig";
@@ -465,76 +479,103 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
     // 🎯T45: steer the compiler/linker via host facts, not an xcrun shim.
     apply_shim_free_toolchain(env);
 
+    // Run one build command; an install step stages into DESTDIR and its
+    // output merges into the keg before the next command runs.
+    const auto run_step = [&](std::string cmd) {
+        // The parser's one file operation, `mkdir_p "#{prefix}/..."`, makes
+        // a keg directory: it must not create the live opt path.
+        const auto opt_mkdir = "mkdir -p " + opt.string();
+        if (cmd.starts_with(opt_mkdir) &&
+            (cmd.size() == opt_mkdir.size() || cmd[opt_mkdir.size()] == '/'))
+            cmd = "mkdir -p " + dest.string() + cmd.substr(opt_mkdir.size());
+        const bool install = is_install_step(cmd);
+        int step_rc = run_in_dir(src_dir, install ? with_destdir(cmd, stage) : cmd, env);
+        if (step_rc == 0 && install)
+            merge_destdir_stage(stage, opt, dest, shared_prefix);
+        return step_rc;
+    };
+
     // Try formula-parsed build commands first.
     int rc = 0;
     bool used_formula = false;
-    if (!formula_source.empty()) {
-        auto parsed = parse_formula(formula_source, dest.string(), name);
+    try {
+        if (!formula_source.empty()) {
+            auto parsed = parse_formula(formula_source, opt.string(), name);
 
-        if (parsed.complexity != FormulaComplexity::Simple) {
-            // Soundness invariant: never use parser output for a formula
-            // whose install body contains constructs we do not handle.
-            // Doing so would silently run a truncated build. Log the
-            // markers for explainability, then fall through to the
-            // generic build-system detector below.
-            SPDLOG_WARN("native parser refused {} ({}): {} complexity markers", name,
-                        to_string(parsed.complexity), parsed.complexity_markers.size());
-            for (const auto& m : parsed.complexity_markers) {
-                SPDLOG_DEBUG("  [{}:{}] {}", m.construct, m.line, m.detail);
-            }
-        } else {
-            // Apply env settings from formula.
-            for (const auto& e : parsed.env_settings) {
-                auto eq = e.find("+=");
-                if (eq != std::string::npos) {
-                    auto key = e.substr(0, eq);
-                    auto val = e.substr(eq + 2);
-                    if (env.count(key))
-                        env[key] += " " + val;
-                    else
-                        env[key] = val;
+            if (parsed.complexity != FormulaComplexity::Simple) {
+                // Soundness invariant: never use parser output for a formula
+                // whose install body contains constructs we do not handle.
+                // Doing so would silently run a truncated build. Log the
+                // markers for explainability, then fall through to the
+                // generic build-system detector below.
+                SPDLOG_WARN("native parser refused {} ({}): {} complexity markers", name,
+                            to_string(parsed.complexity), parsed.complexity_markers.size());
+                for (const auto& m : parsed.complexity_markers) {
+                    SPDLOG_DEBUG("  [{}:{}] {}", m.construct, m.line, m.detail);
+                }
+            } else {
+                // Apply env settings from formula.
+                for (const auto& e : parsed.env_settings) {
+                    auto eq = e.find("+=");
+                    if (eq != std::string::npos) {
+                        auto key = e.substr(0, eq);
+                        auto val = e.substr(eq + 2);
+                        if (env.count(key))
+                            env[key] += " " + val;
+                        else
+                            env[key] = val;
+                    }
+                }
+
+                if (!parsed.build_commands.empty()) {
+                    std::cout << "==> Building (formula: " << parsed.build_commands.size()
+                              << " commands)\n";
+                    for (const auto& cmd : parsed.build_commands) {
+                        rc = run_step(cmd);
+                        if (rc != 0)
+                            break;
+                    }
+                    used_formula = true;
                 }
             }
+        }
 
-            if (!parsed.build_commands.empty()) {
-                std::cout << "==> Building (formula: " << parsed.build_commands.size()
-                          << " commands)\n";
-                for (const auto& cmd : parsed.build_commands) {
-                    rc = run_in_dir(src_dir, cmd, env);
-                    if (rc != 0)
-                        break;
-                }
-                used_formula = true;
+        if (!used_formula) {
+            // Generic build system detection fallback.
+            auto build_sys = detect_build_system(src_dir);
+            std::cout << "==> Building (" << build_sys << ")\n";
+
+            const auto q = [](const fs::path& p) { return shell_quote(p.string()); };
+            std::vector<std::string> steps;
+            if (build_sys == "cmake") {
+                steps = {"cmake -B build -DCMAKE_INSTALL_PREFIX=" + q(opt) +
+                             " -DCMAKE_BUILD_TYPE=Release && cmake --build build",
+                         "cmake --install build"};
+            } else if (build_sys == "autotools") {
+                steps = {"./configure --prefix=" + q(opt) + " && make", "make install"};
+            } else if (build_sys == "make") {
+                steps = {"make PREFIX=" + q(opt),
+                         "make install PREFIX=" + q(opt) + " MANDIR=" + q(opt / "share" / "man")};
+            } else {
+                throw UserError("don't know how to build " + name);
+            }
+            for (const auto& step : steps) {
+                rc = run_step(step);
+                if (rc != 0)
+                    break;
             }
         }
-    }
-
-    if (!used_formula) {
-        // Generic build system detection fallback.
-        auto build_sys = detect_build_system(src_dir);
-        std::cout << "==> Building (" << build_sys << ")\n";
-
-        if (build_sys == "cmake") {
-            rc = run_in_dir(src_dir,
-                            "cmake -B build -DCMAKE_INSTALL_PREFIX=" + dest.string() +
-                                " -DCMAKE_BUILD_TYPE=Release && cmake --build build"
-                                " && cmake --install build",
-                            env);
-        } else if (build_sys == "autotools") {
-            rc = run_in_dir(
-                src_dir, "./configure --prefix=" + dest.string() + " && make && make install", env);
-        } else if (build_sys == "make") {
-            rc = run_in_dir(src_dir,
-                            "make PREFIX=" + dest.string() + " && make install PREFIX=" +
-                                dest.string() + " MANDIR=" + (dest / "share" / "man").string(),
-                            env);
-        } else {
-            throw UserError("don't know how to build " + name);
-        }
+        // The build must not have written the live opt path directly.
+        opt_guard.check();
+    } catch (...) {
+        fs::remove_all(dest, ec);
+        fs::remove_all(stage, ec);
+        throw;
     }
 
     if (rc != 0) {
         fs::remove_all(dest, ec);
+        fs::remove_all(stage, ec);
         throw UserError("build failed for " + name + " " + version + " (exit " +
                         std::to_string(rc) + ")");
     }
