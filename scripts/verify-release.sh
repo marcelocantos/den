@@ -96,6 +96,13 @@ if [ -z "${VR_PREV_TAG+x}" ]; then
     fi
 fi
 VR_PREV_CANDIDATES=${VR_PREV_CANDIDATES:-}
+# No GA from git tags (e.g. a shallow CI checkout): fall back to the newest
+# GA among the candidates, so the fallback never depends on local tags.
+if [ "$VR_PREV_AUTO" = 1 ] && [ -z "$VR_PREV_TAG" ]; then
+    for _t in $VR_PREV_CANDIDATES; do
+        case "$_t" in *-*) ;; *) VR_PREV_TAG=$_t; break ;; esac
+    done
+fi
 VR_PREV_MAX=${VR_PREV_MAX:-5}
 VR_FETCH_ATTEMPTS=${VR_FETCH_ATTEMPTS:-3}
 VR_FETCH_DELAY=${VR_FETCH_DELAY:-2}
@@ -542,7 +549,7 @@ trap finish EXIT
 trap 'exit 130' INT TERM
 
 if [ "$VR_PREV_AUTO" = 1 ]; then
-    _prev_desc="auto ($(echo $VR_PREV_CANDIDATES | wc -w | tr -d ' ') candidates, GA fallback ${VR_PREV_TAG:-none})"
+    _prev_desc="auto ($(echo "$VR_PREV_CANDIDATES" | wc -w | tr -d ' ') candidates, GA fallback ${VR_PREV_TAG:-none})"
 else
     _prev_desc=${VR_PREV_TAG:-none}
 fi
