@@ -111,12 +111,21 @@ jobs:
 
           RC_TAG="v${VERSION}-rc.${N}"
 
-          # Refuse if the computed RC tag already exists.
-          if gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/$RC_TAG" >/dev/null 2>&1; then
-            echo "ERROR: RC tag $RC_TAG already exists." >&2
-            echo "       Leave rc_number blank to auto-bump, or supply the next N explicitly." >&2
-            exit 1
-          fi
+          # Refuse if the computed RC tag already exists. Exact-match lookup
+          # (rc.1 must not match rc.10); only a 404 counts as "missing" and
+          # any other API error fails the step.
+          status=0
+          scripts/tag-ref.sh "$GITHUB_REPOSITORY" "$RC_TAG" >/dev/null || status=$?
+          case "$status" in
+            0)
+              echo "ERROR: RC tag $RC_TAG already exists." >&2
+              echo "       Leave rc_number blank to auto-bump, or supply the next N explicitly." >&2
+              exit 1 ;;
+            1) ;;
+            *)
+              echo "ERROR: could not check whether RC tag $RC_TAG exists." >&2
+              exit 1 ;;
+          esac
 
           echo "RC tag  : $RC_TAG"
           echo "GA tag  : $GA_TAG"

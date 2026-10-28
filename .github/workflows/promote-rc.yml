@@ -70,6 +70,11 @@ jobs:
             exit 1
           fi
 
+      # Checked out early: the tag checks below use scripts/tag-ref.sh.
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
       # -----------------------------------------------------------------------
       # 3. Verify the RC release exists and is still a prerelease.
       # -----------------------------------------------------------------------
@@ -93,10 +98,15 @@ jobs:
             exit 1
           fi
 
-          # Capture the commit SHA the RC tag points to.
-          rc_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/$RC_TAG" \
-            --jq '.object.sha' 2>/dev/null || echo "")
-          if [ -z "$rc_sha" ]; then
+          # Capture the commit SHA the RC tag points to. tag-ref.sh matches
+          # the exact tag (rc.1 must never resolve to rc.10) and fails on
+          # any API error other than 404.
+          status=0
+          rc_sha=$(scripts/tag-ref.sh "$GITHUB_REPOSITORY" "$RC_TAG") || status=$?
+          if [ "$status" -ne 0 ] || [ -z "$rc_sha" ]; then
+            if [ "$status" -eq 1 ]; then
+              echo "ERROR: tag $RC_TAG not found." >&2
+            fi
             echo "ERROR: could not resolve commit SHA for tag $RC_TAG." >&2
             exit 1
           fi
@@ -116,18 +126,24 @@ jobs:
             echo "       $GA_TAG has already shipped; there is nothing to promote." >&2
             exit 1
           fi
-          if gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/$GA_TAG" >/dev/null 2>&1; then
-            echo "ERROR: GA tag $GA_TAG already exists (but no matching release)." >&2
-            exit 1
-          fi
+          # Exact-match lookup: v0.14.0 must not match v0.14.0-rc.*. Only a
+          # 404 counts as "missing"; any other API error fails the step.
+          status=0
+          scripts/tag-ref.sh "$GITHUB_REPOSITORY" "$GA_TAG" >/dev/null || status=$?
+          case "$status" in
+            0)
+              echo "ERROR: GA tag $GA_TAG already exists (but no matching release)." >&2
+              exit 1 ;;
+            1)
+              echo "GA tag $GA_TAG does not exist yet." ;;
+            *)
+              echo "ERROR: could not check whether GA tag $GA_TAG exists." >&2
+              exit 1 ;;
+          esac
 
       # -----------------------------------------------------------------------
       # 5. Download all assets from the RC release.
       # -----------------------------------------------------------------------
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
       - name: Download RC assets
         env:
           GH_TOKEN: ${{ github.token }}
