@@ -93,10 +93,24 @@ int installed_version_scheme(const fs::path& keg);
 /// ownership. Callers must treat false as "do not delete".
 bool keg_owned_by_den(const fs::path& keg);
 
+/// An unreferenced den keg that cleanup keeps because a surviving keg's
+/// Mach-O file still names it by its versioned path (`<store>/<name>/<ver>/…`)
+/// in an LC_ID_DYLIB, dylib load or LC_RPATH command. Removing it would make
+/// dyld fail to load that file.
+struct KeptReference {
+    InstalledPackage keg;  ///< the keg kept
+    InstalledPackage by;   ///< a surviving keg that names it
+    fs::path file;         ///< the Mach-O file in `by`
+    std::string load_path; ///< the path as written in the load command
+};
+
 /// Result of `cleanup_kegs`.
 struct CleanupReport {
     /// Den-owned kegs no environment references. Deleted unless dry-run.
     std::vector<InstalledPackage> removed;
+    /// Unreferenced den-owned kegs kept because a surviving keg still loads
+    /// them by versioned path (one entry per kept keg, sorted).
+    std::vector<KeptReference> kept_referenced;
     /// Unreferenced kegs left in place because den did not install them.
     uint32_t kept_unowned = 0;
     /// The archive cache existed and was cleared (or would be, on a dry-run).
@@ -107,11 +121,26 @@ struct CleanupReport {
 /// `<cache>/archives`. Kegs without a den receipt — Homebrew installs, and
 /// anything poured before receipts existed — are never removed.
 ///
+/// Manifests are not the only references: a bottle poured with its load
+/// commands pinned to `<store>/<dep>/<version>/…` keeps loading that exact
+/// version after `<dep>` is upgraded. So before removing anything, the Mach-O
+/// files of every keg that stays are scanned, and any candidate keg they name
+/// by versioned path (id, dylib load or rpath) is kept and reported in
+/// `kept_referenced`, along with whatever it names in turn.
+///
 /// When `dry_run` is true, nothing is deleted. `removed` still lists the kegs
 /// that would be removed, and `cache_cleared` reports that the archive cache
 /// would be cleared.
 CleanupReport cleanup_kegs(const fs::path& store, const fs::path& den_home, const fs::path& cache,
                            bool dry_run);
+
+/// The kegs in `candidates` that the Mach-O files of `survivors` name by a
+/// versioned path under `store` (LC_ID_DYLIB, any dylib load, or LC_RPATH),
+/// closed transitively over the kegs found. A keg naming itself does not
+/// count. Reads load commands directly, so it behaves the same on any host.
+std::vector<KeptReference> macho_pinned_kegs(const fs::path& store,
+                                             const std::vector<InstalledPackage>& survivors,
+                                             const std::vector<InstalledPackage>& candidates);
 
 /// Outcome of release_prefix_opt_link.
 enum class OptReleaseAction {
