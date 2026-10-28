@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <fstream>
+#include <optional>
 #include <set>
 #include <tuple>
 
@@ -23,18 +24,24 @@ constexpr uint32_t kFatMagic64 = 0xcafebabf;
 constexpr uint32_t kLcReqDyld = 0x80000000;
 
 // Load commands whose payload starts with an lc_str offset to a path.
-bool names_path(uint32_t cmd) {
+std::optional<MachoLoadKind> path_kind(uint32_t cmd) {
     switch (cmd) {
-    case 0xc:               // LC_LOAD_DYLIB
-    case 0xd:               // LC_ID_DYLIB
+    case 0xc: // LC_LOAD_DYLIB
+        return MachoLoadKind::Load;
+    case 0xd: // LC_ID_DYLIB
+        return MachoLoadKind::Id;
     case 0x18 | kLcReqDyld: // LC_LOAD_WEAK_DYLIB
+        return MachoLoadKind::WeakLoad;
     case 0x1c | kLcReqDyld: // LC_RPATH
+        return MachoLoadKind::Rpath;
     case 0x1f | kLcReqDyld: // LC_REEXPORT_DYLIB
-    case 0x20:              // LC_LAZY_LOAD_DYLIB
+        return MachoLoadKind::Reexport;
+    case 0x20: // LC_LAZY_LOAD_DYLIB
+        return MachoLoadKind::LazyLoad;
     case 0x23 | kLcReqDyld: // LC_LOAD_UPWARD_DYLIB
-        return true;
+        return MachoLoadKind::UpwardLoad;
     default:
-        return false;
+        return std::nullopt;
     }
 }
 
@@ -62,8 +69,8 @@ bool read_at(std::ifstream& f, uint64_t off, unsigned char* buf, std::size_t n) 
     return static_cast<std::size_t>(f.gcount()) == n;
 }
 
-// Load paths of the thin image at `off`; false when it isn't one.
-bool scan_thin(std::ifstream& f, uint64_t off, std::vector<std::string>& out) {
+// Load commands of the thin image at `off`; false when it isn't one.
+bool scan_thin(std::ifstream& f, uint64_t off, MachoInfo& out) {
     std::array<unsigned char, 32> h{};
     if (!read_at(f, off, h.data(), 28)) {
         return false;
@@ -85,6 +92,7 @@ bool scan_thin(std::ifstream& f, uint64_t off, std::vector<std::string>& out) {
         return false;
     }
     auto u32 = [swap](const unsigned char* p) { return swap ? swap32(le32(p)) : le32(p); };
+    const uint32_t filetype = u32(h.data() + 12);
     const uint32_t ncmds = u32(h.data() + 16);
     const uint32_t sizeofcmds = u32(h.data() + 20);
     if (sizeofcmds > (64u << 20) || ncmds > sizeofcmds / 8) {
@@ -94,6 +102,10 @@ bool scan_thin(std::ifstream& f, uint64_t off, std::vector<std::string>& out) {
     if (sizeofcmds && !read_at(f, off + header, cmds.data(), sizeofcmds)) {
         return false;
     }
+    if (!out.is_macho) {
+        out.is_macho = true;
+        out.filetype = filetype;
+    }
     std::size_t pos = 0;
     for (uint32_t i = 0; i < ncmds && pos + 8 <= cmds.size(); ++i) {
         const uint32_t cmd = u32(cmds.data() + pos);
@@ -101,15 +113,17 @@ bool scan_thin(std::ifstream& f, uint64_t off, std::vector<std::string>& out) {
         if (size < 8 || pos + size > cmds.size()) {
             break;
         }
-        if (names_path(cmd) && size >= 12) {
+        const auto kind = path_kind(cmd);
+        if (kind && size >= 12) {
             const uint32_t str = u32(cmds.data() + pos + 8);
             if (str >= 12 && str < size) {
                 const auto* begin = reinterpret_cast<const char*>(cmds.data() + pos + str);
                 const auto* end = reinterpret_cast<const char*>(cmds.data() + pos + size);
                 const auto* nul = std::find(begin, end, '\0');
-                std::string s(begin, nul);
-                if (!s.empty() && std::find(out.begin(), out.end(), s) == out.end()) {
-                    out.push_back(std::move(s));
+                MachoLoadCommand lc{*kind, std::string(begin, nul)};
+                if (!lc.path.empty() &&
+                    std::find(out.commands.begin(), out.commands.end(), lc) == out.commands.end()) {
+                    out.commands.push_back(std::move(lc));
                 }
             }
         }
@@ -139,8 +153,22 @@ std::string formula_of(const fs::path& brew_path, const fs::path& brew_prefix) {
 
 } // namespace
 
+bool is_dylib_load(MachoLoadKind kind) {
+    return kind != MachoLoadKind::Id && kind != MachoLoadKind::Rpath;
+}
+
 std::vector<std::string> macho_load_paths(const fs::path& file) {
     std::vector<std::string> out;
+    for (auto& lc : macho_info(file).commands) {
+        if (std::find(out.begin(), out.end(), lc.path) == out.end()) {
+            out.push_back(std::move(lc.path));
+        }
+    }
+    return out;
+}
+
+MachoInfo macho_info(const fs::path& file) {
+    MachoInfo out;
     std::ifstream f(file, std::ios::binary);
     if (!f) {
         return out;

@@ -3,6 +3,7 @@
 
 #include "source_build.h"
 #include "formula_parser.h"
+#include "macho_fixup.h"
 #include "opt_prefix_build.h"
 
 #include "../core/error.h"
@@ -299,7 +300,20 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
 
     // Successful builds below call this so cleanup can tell a keg den produced
     // from one Homebrew poured into the same Cellar.
+    // They also fix the keg's Mach-O linkage first (macOS): ids, loads and
+    // rpaths stop naming the versioned keg, so it survives opt moving on.
     const auto claim = [&]() -> fs::path {
+        try {
+            const auto n =
+                fixup_keg_macho({dest, opt_prefix_for(config.store, name), config.store, name});
+            if (n > 0) {
+                std::cout << "==> Fixed Mach-O linkage of " << n << " file(s)\n";
+            }
+        } catch (...) {
+            std::error_code ec;
+            fs::remove_all(dest, ec);
+            throw;
+        }
         const Package* indexed = idx.find(requested);
         mark_keg_owned(dest, name, version, indexed ? indexed->version_scheme : 0);
         return dest;

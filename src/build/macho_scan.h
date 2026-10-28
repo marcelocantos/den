@@ -9,6 +9,7 @@
 // byte order), so it is cheap enough for `den doctor` to run over a whole
 // Cellar and works the same on any host.
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -16,6 +17,45 @@
 namespace den {
 
 namespace fs = std::filesystem;
+
+/// Which load command named a path.
+enum class MachoLoadKind {
+    Id,         ///< LC_ID_DYLIB
+    Load,       ///< LC_LOAD_DYLIB
+    WeakLoad,   ///< LC_LOAD_WEAK_DYLIB
+    Reexport,   ///< LC_REEXPORT_DYLIB
+    LazyLoad,   ///< LC_LAZY_LOAD_DYLIB
+    UpwardLoad, ///< LC_LOAD_UPWARD_DYLIB
+    Rpath,      ///< LC_RPATH
+};
+
+/// One path-naming load command.
+struct MachoLoadCommand {
+    MachoLoadKind kind;
+    std::string path;
+    bool operator==(const MachoLoadCommand&) const = default;
+};
+
+/// Mach-O file types den's fix-up cares about (mach_header.filetype).
+constexpr uint32_t kMachoExecute = 2;
+constexpr uint32_t kMachoDylib = 6;
+constexpr uint32_t kMachoBundle = 8;
+
+/// A Mach-O file's type and path-naming load commands.
+struct MachoInfo {
+    bool is_macho = false;
+    uint32_t filetype = 0; ///< of the first slice
+    /// Across every slice, in file order, without duplicate (kind, path).
+    std::vector<MachoLoadCommand> commands;
+};
+
+/// Parse `file`'s header and path-naming load commands. `is_macho` is false
+/// when it is not a readable Mach-O (Java class files included).
+MachoInfo macho_info(const fs::path& file);
+
+/// True for a load command that makes dyld load a dylib (every kind except
+/// Id and Rpath).
+bool is_dylib_load(MachoLoadKind kind);
 
 /// The paths named by `file`'s LC_ID_DYLIB, LC_LOAD_DYLIB (and the weak,
 /// re-export, lazy and upward variants) and LC_RPATH load commands, across

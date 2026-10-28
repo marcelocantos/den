@@ -393,22 +393,8 @@ if den_opt_state.call != opt_before
         "see docs/source-builds.md)"
 end
 
-# --- Post-install: fix dylib paths ---
-
-if OS.mac?
-  $stderr.puts "==> Fixing dylib paths"
-  Dir.glob("#{dest}/lib/**/*.dylib").each do |dylib|
-    basename = File.basename(dylib)
-    system("install_name_tool", "-id", "@rpath/#{basename}", dylib)
-    system("install_name_tool", "-add_rpath", "#{dest}/lib", dylib, err: "/dev/null")
-  end
-
-  Dir.glob("#{dest}/bin/*").each do |bin_file|
-    next unless File.executable?(bin_file) && !File.symlink?(bin_file)
-    system("install_name_tool", "-add_rpath", "#{dest}/lib", bin_file, err: "/dev/null")
-    lib_paths.each { |lp| system("install_name_tool", "-add_rpath", lp, bin_file, err: "/dev/null") }
-  end
-end
+# Mach-O ids, load commands and rpaths are fixed up by den (C++) after the
+# keg is in place: see src/build/macho_fixup.h.
 
 # Clean up.
 build_dir.rmtree rescue nil
