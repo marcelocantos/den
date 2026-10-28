@@ -135,6 +135,13 @@ add_test(
     COMMAND sh "${CMAKE_SOURCE_DIR}/tests/harness/test_installed_pkg_runs.sh"
 )
 
+# macOS harness sandbox helper: toolchain caches/TMPDIR/Go telemetry are kept
+# inside the sandbox, and cleanup handles read-only trees and fails loudly.
+add_test(
+    NAME harness_macos_sandbox
+    COMMAND sh "${CMAKE_SOURCE_DIR}/tests/harness/macos/test_sandbox.sh"
+)
+
 # Shell-script regression tests for the release tooling under scripts/.
 # Each tests/scripts/test_<name>.sh is registered as script_test_<name>.
 file(GLOB SCRIPT_TESTS ${CMAKE_SOURCE_DIR}/tests/scripts/test_*.sh)

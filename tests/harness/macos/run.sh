@@ -120,6 +120,12 @@ if [[ ! -f "$SMOKE_HELPER_SH" ]]; then
     exit 1
 fi
 
+SANDBOX_SH="$(pwd)/tests/harness/macos/sandbox.sh"
+if [[ ! -f "$SANDBOX_SH" ]]; then
+    printf 'error: sandbox.sh not found at %s\n' "$SANDBOX_SH" >&2
+    exit 1
+fi
+
 INSTALL_SH="$(pwd)/install.sh"
 if [[ -n "$RELEASE_VER" && ! -f "$INSTALL_SH" ]]; then
     printf 'error: install.sh not found at %s\n' "$INSTALL_SH" >&2
@@ -146,8 +152,14 @@ DEN_HOME_REMOTE="/tmp/den-harness/${RUN_ID}"
 # ---------------------------------------------------------------------------
 if [[ $RESET -eq 1 ]]; then
     printf 'Resetting: removing /tmp/den-harness/ on %s ...\n' "$SSH_HOST"
-    ssh -o ConnectTimeout=5 -o BatchMode=yes "$SSH_HOST" \
-        'rm -rf /tmp/den-harness && printf "done\n"'
+    # sandbox.sh cleanup restores write permission first (Go's module cache is
+    # read-only) and fails if anything is left behind.
+    if ! ssh -o ConnectTimeout=5 -o BatchMode=yes "$SSH_HOST" \
+            sh -s -- cleanup /tmp/den-harness < "$SANDBOX_SH"; then
+        printf 'error: reset failed: /tmp/den-harness was not fully removed on %s\n' \
+            "$SSH_HOST" >&2
+        exit 1
+    fi
     printf 'Reset complete.\n'
     exit 0
 fi
@@ -306,16 +318,20 @@ fi
 printf 'Copying smoke.sh to remote ...\n'
 scp "$SMOKE_SH" "${SSH_HOST}:${DEN_HOME_REMOTE}/smoke.sh"
 scp "$SMOKE_HELPER_SH" "${SSH_HOST}:${DEN_HOME_REMOTE}/installed_pkg_runs.sh"
+scp "$SANDBOX_SH" "${SSH_HOST}:${DEN_HOME_REMOTE}/sandbox.sh"
 
 # Run smoke on the remote host; tee output to local log.
 # Prepend Homebrew (and common toolchain bins) so non-interactive SSH sessions
 # see brew/npm/go/cargo the same way a login shell would — without this,
 # migrate_from_brew and language-provider steps SKIP even when tools are installed.
+# sandbox.sh then points npm/uv/pip/Go/Node caches, TMPDIR and Go telemetry
+# into the sandbox so the run leaves nothing behind in the host's home dir.
 printf '\nRunning smoke set on %s ...\n\n' "$SSH_HOST"
 EXIT_CODE=0
 ssh "$SSH_HOST" \
     "export PATH=\"/opt/homebrew/bin:/usr/local/bin:\$HOME/.cargo/bin:\$HOME/go/bin:\$PATH\"; \
      DEN_BIN='${DEN_BIN_REMOTE}' DEN_HOME='${DEN_HOME_REMOTE}' TEST_PKG='${TEST_PKG}' \
+     sh '${DEN_HOME_REMOTE}/sandbox.sh' run '${DEN_HOME_REMOTE}' -- \
      bash '${DEN_HOME_REMOTE}/smoke.sh'" \
     2>&1 | tee "${LOGS_DIR}/run.log" || EXIT_CODE=$?
 
@@ -350,11 +366,19 @@ printf 'Logs  : %s\n' "$LOGS_DIR"
 # Sandbox cleanup
 # ---------------------------------------------------------------------------
 SMOKE_FAILED=$([[ $EXIT_CODE -ne 0 || $FAIL -gt 0 ]] && echo 1 || echo 0)
+CLEANUP_FAILED=0
 
 if [[ $SMOKE_FAILED -eq 0 && $KEEP_SANDBOX -eq 0 ]]; then
     printf '\nRemoving remote sandbox %s ...\n' "$DEN_HOME_REMOTE"
-    ssh "$SSH_HOST" "rm -rf '${DEN_HOME_REMOTE}'" || true
-    printf '  OK: cleaned up\n'
+    # Only report success once sandbox.sh has verified the directory is gone.
+    if ssh "$SSH_HOST" sh -s -- cleanup "'${DEN_HOME_REMOTE}'" < "$SANDBOX_SH"; then
+        printf '  OK: cleaned up\n'
+    else
+        CLEANUP_FAILED=1
+        printf '  ERROR: remote sandbox %s:%s was NOT fully removed\n' \
+            "$SSH_HOST" "$DEN_HOME_REMOTE" >&2
+        printf '         Inspect it, then run with --reset to wipe harness sandboxes.\n' >&2
+    fi
 elif [[ $SMOKE_FAILED -eq 1 ]]; then
     printf '\nSandbox preserved for inspection (failure):\n'
     printf '  ssh %s\n' "$SSH_HOST"
@@ -374,6 +398,11 @@ fi
 
 if [[ $FAIL -gt 0 ]]; then
     printf '\nRESULT: FAIL (%d smoke failures)\n' "$FAIL" >&2
+    exit 1
+fi
+
+if [[ $CLEANUP_FAILED -ne 0 ]]; then
+    printf '\nRESULT: FAIL (smoke passed, but sandbox cleanup failed)\n' >&2
     exit 1
 fi
 
