@@ -329,8 +329,10 @@ add_shell_integration() {
         *)    _profile="$HOME/.profile" ;;
     esac
 
-    # Check if already present.
-    if [ -f "$_profile" ] && grep -qF 'den init' "$_profile"; then
+    # Check if already present. Match any `den init` invocation, including
+    # the quoted-path form this installer writes (`.../den" init`), so a
+    # re-run never appends a second line.
+    if [ -f "$_profile" ] && has_den_init "$_profile"; then
         say "shell integration already in $_profile"
         return
     fi
@@ -342,6 +344,12 @@ add_shell_integration() {
         printf '\n# den — universal development environment manager\neval "$("%s/den" init)"\n' "$_bin_dir" >> "$_profile"
     fi
     say "added shell integration to $_profile"
+}
+
+has_den_init() {
+    # A line (ignoring comments) that runs den's init: `den init`,
+    # `"/path/den" init`, `$HOME/.den/bin/den init --shell zsh`, ...
+    grep -Eq '^[^#]*den["'"'"']?[[:space:]]+init([[:space:]]|\)|"|$)' "$1"
 }
 
 say() {

@@ -243,6 +243,9 @@ void check_broken_symlinks(const Config& config, std::vector<Finding>& findings)
         if (broken > 10) {
             warn(findings, "... and " + std::to_string(broken - 10) + " more broken symlinks");
         }
+        if (broken > 0) {
+            warn(findings, broken_symlinks_hint(broken));
+        }
         if (ec) {
             warn(findings, "error scanning env symlinks: " + ec.message());
         }
@@ -371,6 +374,13 @@ const char* severity_label(Severity s) {
 }
 
 } // namespace
+
+std::string broken_symlinks_hint(int broken) {
+    return std::to_string(broken) + " broken symlink" + (broken == 1 ? "" : "s") +
+           " in den environments. When brew upgrades or removes kegs under a prefix it "
+           "shares with den, links into the old kegs break; `den migrate-prefix` (coming) is "
+           "how to fix them. den doctor only reports these links, it does not repair them.";
+}
 
 std::string standard_bottle_prefix(Arch arch) {
 #ifdef __APPLE__

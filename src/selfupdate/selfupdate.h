@@ -84,7 +84,9 @@ std::filesystem::path make_private_temp_dir(const std::string& stem);
 
 /// Install a verified update tarball: extract it with den's hardened
 /// libarchive extractor into a fresh private temp dir, then atomically
-/// replace `exe` with the tarball's `den` and refresh the trust replica.
+/// replace `exe` with the tarball's `den` (a rename onto a fresh inode, never
+/// an in-place write, so a running daemon's mapped binary is untouched) and
+/// refresh the trust replica.
 /// The temp dir is always removed. Throws UserError on failure.
 void install_update_tarball(const std::filesystem::path& tarball, const std::filesystem::path& exe);
 

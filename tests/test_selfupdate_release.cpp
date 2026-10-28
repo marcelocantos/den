@@ -19,6 +19,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -185,6 +186,31 @@ TEST_SUITE("self-update --version") {
         CHECK_FALSE(fs::exists(fs::path(replica.string() + ".new")));
         // The private work dir is cleaned up.
         CHECK(count_entries(tmp, "den-self-update-x.") == before);
+    }
+
+    TEST_CASE("install_update_tarball swaps in a fresh inode and leaves the old one intact") {
+        // A running daemon is mapped from the old inode; rewriting it in
+        // place would invalidate its code signature (macOS kills it with
+        // OS_REASON_CODESIGNING). The update must land on a new inode.
+        TempDir t;
+        auto tarball = t.path / "up.tar.gz";
+        make_tarball(tarball, {{"den", "new bytes"}});
+        auto exe = t.path / "bin" / "den";
+        write_file(exe, "old bytes");
+        struct stat before{};
+        REQUIRE(::stat(exe.c_str(), &before) == 0);
+        std::ifstream held(exe, std::ios::binary); // stands in for the running process
+
+        install_update_tarball(tarball, exe);
+
+        struct stat after{};
+        REQUIRE(::stat(exe.c_str(), &after) == 0);
+        CHECK(after.st_ino != before.st_ino);
+        CHECK(slurp(exe) == "new bytes");
+        std::string old((std::istreambuf_iterator<char>(held)), std::istreambuf_iterator<char>());
+        CHECK(old == "old bytes");
+        // No staging leftovers beside the binary.
+        CHECK(count_entries(exe.parent_path(), "den.new") == 0);
     }
 
     TEST_CASE("install_update_tarball refuses a tarball without den, leaving exe alone") {
