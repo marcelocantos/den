@@ -4,6 +4,7 @@
 #pragma once
 
 #include "../daemon/daemon.h"
+#include "../trust/degraded_installs.h"
 
 #include <ostream>
 
@@ -14,5 +15,9 @@ namespace den {
 // binary is in use (🎯T51 / 🎯T72). When nothing is deferred no deferral
 // section is emitted.
 void format_daemon_status(std::ostream& out, const DaemonState& state);
+
+// One "Degraded-trust installs:" line (kegs poured on a single hash source,
+// from the degraded-install ledger), listing up to a few of them.
+void format_degraded_trust(std::ostream& out, const DegradedInstallSummary& summary);
 
 } // namespace den
