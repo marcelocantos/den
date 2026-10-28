@@ -74,7 +74,7 @@ VR_BREW_TRUST=${VR_BREW_TRUST:-1}
 # HOME, with brew's config dir pinned there too, so it reads the read-only
 # trust handoff and can write nothing back to the caller's brew config.
 brew_() { env -u HOMEBREW_PREFIX -u HOMEBREW_CELLAR HOMEBREW_NO_AUTO_UPDATE=1 "$BREW" "$@"; }
-brew_scratch_() { env -u XDG_CONFIG_HOME -u HOMEBREW_XDG_CONFIG_HOME -u HOMEBREW_PREFIX -u HOMEBREW_CELLAR HOMEBREW_NO_AUTO_UPDATE=1 "$BREW" "$@"; }
+brew_scratch_() { env -u XDG_CONFIG_HOME -u HOMEBREW_XDG_CONFIG_HOME -u HOMEBREW_PREFIX -u HOMEBREW_CELLAR HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_COLOR=1 "$BREW" "$@"; }
 # Where brew 7 reads its trust store for the current environment: under
 # $XDG_CONFIG_HOME/homebrew (or $HOMEBREW_XDG_CONFIG_HOME/homebrew), else
 # $HOME/.homebrew (Library/Homebrew/trust.rb trust_file; bin/brew sets
@@ -286,12 +286,20 @@ s_brew_trust() {
 # CLT is below its minimum (Homebrew::Diagnostic fatal_setup_build_environment_checks).
 # That is the host, not den: report SKIP with brew's reason. Anything else fails.
 BREW_DEVTOOLS_RE='^(Error: )?Your (Xcode \(.*\).* is too outdated|Command Line Tools are too outdated)'
+# brew 7's `brew test` errors can arrive coloured and CRLF-terminated even
+# when captured: "\e[31mError:\e[0m Your Xcode (26.6) ... is too outdated.\r".
+# brew_scratch_ sets HOMEBREW_NO_COLOR, but don't rely on it: strip ANSI
+# escape sequences and trailing CRs before matching.
+plain_text_() {
+    local esc cr; esc=$(printf '\033'); cr=$(printf '\r')
+    sed -e "s/${esc}\[[0-9;?]*[A-Za-z]//g" -e "s/${cr}*\$//"
+}
 s_brew_test() {
     local out rc=0
     out=$(brew_scratch_ test "$VR_FORMULA" 2>&1) || rc=$?
     echo "$out"
     [ "$rc" -ne 0 ] || return 0
-    local why; why=$(echo "$out" | grep -E "$BREW_DEVTOOLS_RE" | head -1 | sed 's/^Error: //' || true)
+    local why; why=$(printf '%s\n' "$out" | plain_text_ | grep -E "$BREW_DEVTOOLS_RE" | head -1 | sed 's/^Error: //' || true)
     [ -z "$why" ] || skip_because "brew refuses to test: $why"
     echo "brew test exit $rc"; return 1
 }
