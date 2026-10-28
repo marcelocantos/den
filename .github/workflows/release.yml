@@ -55,6 +55,9 @@ jobs:
       - name: Test
         run: cd build && ctest --output-on-failure
 
+      - name: Check binary version
+        run: scripts/check-version.sh --binary build/den "${GITHUB_REF_NAME}"
+
       - name: Package binary
         run: |
           version="${GITHUB_REF_NAME#v}"
