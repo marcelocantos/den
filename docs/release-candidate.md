@@ -78,7 +78,7 @@ Steps (`VR_ONLY` / `VR_SKIP` pick a subset):
 | `isolation` | `den config` keeps `den_home`, `store` and `prefix` under the scratch root (never skipped) |
 | `links` | `scripts/check-links.sh`: the binary links only base-OS libraries |
 | `checksum` | the release tarball matches its `.sha256` and `den-X.Y.0-checksums.txt`, and its `den` and trust replica are the bytes install.sh installed |
-| `self-update` | install the previous GA (`VR_PREV_TAG`, default: the newest earlier `vX.Y.Z` tag) with install.sh, then `den self-update --version <tag>`; the result must match the `install` bytes, replica included. SKIP when that GA predates `self-update --version` and the tag isn't Latest |
+| `self-update` | install an earlier release with install.sh, then `den self-update --version <tag>`; the result must match the `install` bytes, replica included. The start is the newest earlier tag, RCs included, whose binary supports `self-update --version` (at most `VR_PREV_MAX`, default 5, candidates are installed; one that fails to install is skipped); `VR_PREV_TAG` pins it instead. With no capable candidate it falls back to the newest earlier GA, and SKIPs when that predates `self-update --version` and the tag isn't Latest |
 | `empty-store` | `den list` in a fresh store reports no packages |
 | `update` … `cleanup` | index update, bottle install, opt link, trust replica, pin, upgrade, dependents, tap, font and app casks (macOS), uninstall, doctor, cleanup |
 | `launchd` | macOS: `den daemon install` writes `dev.den.daemon.plist` into the scratch `~/Library/LaunchAgents` (its own `launchctl` load is stubbed so the real agent is untouched); that plist is checked, relabelled `den.verify-release.<pid>`, loaded, watched for `VR_LAUNCHD_SECS` and removed |

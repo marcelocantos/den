@@ -48,7 +48,7 @@ _shabin="$_tmp/shabin"   # just the sha256 tool
 _fake="$_tmp/fake"       # curl, uname, sudo
 mkdir -p "$_tools" "$_shabin" "$_fake"
 for t in sh tar gzip awk grep sed mktemp rm mv cp chmod mkdir cat dirname \
-    basename id tr head ls env; do
+    basename id tr head ls env sleep; do
     _p=$(command -v "$t" 2>/dev/null) || continue
     case "$_p" in /*) ln -s "$_p" "$_tools/$t" ;; esac
 done
@@ -68,6 +68,20 @@ while [ $# -gt 0 ]; do
     esac
 done
 echo "$url" >>"$FAKE_CURL_LOG"
+# Failure injection: the first FAKE_CURL_FAIL_TIMES requests whose URL
+# contains FAKE_CURL_FAIL_MATCH exit FAKE_CURL_FAIL_CODE (printing
+# FAKE_CURL_FAIL_HTTP for -w), counted in FAKE_CURL_FAIL_STATE.
+if [ -n "${FAKE_CURL_FAIL_CODE:-}" ]; then
+    case "$url" in
+        *"$FAKE_CURL_FAIL_MATCH"*)
+            n=$(cat "$FAKE_CURL_FAIL_STATE" 2>/dev/null || echo 0)
+            if [ "$n" -lt "$FAKE_CURL_FAIL_TIMES" ]; then
+                echo $((n + 1)) >"$FAKE_CURL_FAIL_STATE"
+                [ -n "$w" ] && printf '%s' "${FAKE_CURL_FAIL_HTTP:-000}"
+                exit "$FAKE_CURL_FAIL_CODE"
+            fi ;;
+    esac
+fi
 case "$url" in
     */releases/latest)
         [ -n "$w" ] && printf 'https://github.com/marcelocantos/den/releases/tag/%s' "$FAKE_LATEST"
@@ -285,6 +299,50 @@ newhome
 inst DEN_VERSION=0.12.0
 check "bad checksum: fails" '[ "$_rc" -ne 0 ] && out_has "checksum mismatch"'
 check "bad checksum: nothing installed" '[ ! -e "$H/.den/bin/den" ]'
+
+check "bad checksum: archive fetched once (never retried)" \
+    '[ "$(grep -c "/den-0.12.0-linux-x86_64.tar.gz" "$_tmp/curl.log")" -eq 1 ]'
+
+# --- transient download errors -----------------------------------------------
+_asset_url="/releases/download/v0.14.0/den-0.14.0-linux-x86_64.tar.gz"
+# fails N times with curl CODE (and HTTP status) on the archive, then serves it.
+flaky() { # flaky TIMES CODE [HTTP] [VAR=VAL...]
+    _t=$1 _c=$2 _h=${3:-000}
+    shift 2; [ $# -gt 0 ] && shift
+    rm -f "$_tmp/fail.state"
+    inst DEN_VERSION=0.14.0 DEN_DOWNLOAD_RETRY_DELAY=0 FAKE_CURL_FAIL_CODE="$_c" \
+        FAKE_CURL_FAIL_TIMES="$_t" FAKE_CURL_FAIL_HTTP="$_h" \
+        FAKE_CURL_FAIL_MATCH="$_asset_url" FAKE_CURL_FAIL_STATE="$_tmp/fail.state" "$@"
+}
+fetches() { grep -c -- "$_asset_url" "$_tmp/curl.log"; }
+
+newhome
+flaky 1 56
+check "curl 56 once: retried, install succeeds" '[ "$_rc" -eq 0 ] && [ "$(fetches)" -eq 2 ]'
+check "curl 56 once: says it is retrying" 'out_has "retrying (1 of 2)"'
+check "curl 56 once: binary installed" '[ "$("$H/.den/bin/den" --version)" = 0.14.0 ]'
+
+newhome
+flaky 2 35
+check "TLS error twice: third try succeeds" '[ "$_rc" -eq 0 ] && [ "$(fetches)" -eq 3 ]'
+
+newhome
+flaky 9 56
+check "curl 56 always: gives up after 3 tries" '[ "$_rc" -ne 0 ] && [ "$(fetches)" -eq 3 ]'
+check "curl 56 always: reports the failure" 'out_has "download failed"'
+check "curl 56 always: nothing installed" '[ ! -e "$H/.den/bin/den" ]'
+
+newhome
+flaky 9 56 000 DEN_DOWNLOAD_ATTEMPTS=1
+check "DEN_DOWNLOAD_ATTEMPTS=1: no retry" '[ "$_rc" -ne 0 ] && [ "$(fetches)" -eq 1 ]'
+
+newhome
+flaky 1 22 503
+check "HTTP 503: retried" '[ "$_rc" -eq 0 ] && [ "$(fetches)" -eq 2 ]'
+
+newhome
+flaky 1 22 404
+check "HTTP 404: not retried" '[ "$_rc" -ne 0 ] && [ "$(fetches)" -eq 1 ]'
 
 # --- DEN_PREFIX / DEN_HOME, writable ------------------------------------------
 newhome

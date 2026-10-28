@@ -12,7 +12,10 @@
 #   * the install, version and isolation gates abort the run.
 #   * scratch paths under a forbidden root are refused.
 #   * checksum compares the installed bytes with the release asset and both
-#     checksum files; self-update starts from VR_PREV_TAG.
+#     checksum files; self-update starts from VR_PREV_TAG, or (unset) from
+#     the newest earlier tag, RCs included, that can self-update --version.
+#   * release downloads retry transient curl errors, never a 404 or a
+#     checksum mismatch.
 #   * VR_ONLY / VR_SKIP select steps; install and isolation always run.
 #
 # Run:
@@ -50,8 +53,11 @@ case "$(uname -m)" in x86_64|amd64) ARCH=x86_64 ;; *) ARCH=aarch64 ;; esac
 # Stub den. FAKE_VERSION is baked in per release; config reports the scratch
 # store unless FAKE_DEN_ESCAPE=1; self-update --version copies the release's
 # den (and replica) over itself, as the real one does.
-mkden() { # mkden DIR VERSION
+# With OLD=1 it predates `self-update --version` (help lacks the flag).
+mkden() { # mkden DIR VERSION [old]
     mkdir -p "$1"
+    _help='  --version TEXT  release to install'
+    [ "${3:-}" = old ] && _help='  --check  only report'
     cat >"$1/den" <<DEN
 #!/bin/sh
 case "\$1" in
@@ -60,7 +66,7 @@ case "\$1" in
             printf 'den_home: %s\nstore: %s/store\nprefix: %s\n' "\$DEN_HOME" "\$DEN_HOME" "\$DEN_PREFIX" ;;
     list) echo "No packages installed" ;;
     self-update)
-        [ "\$2" = --help ] && { echo "  --version TEXT  release to install"; exit 0; }
+        [ "\$2" = --help ] && { echo "$_help"; exit 0; }
         [ "\$2" = --version ] || exit 1
         echo "self-update \$3" >>"\$FAKE_LOG"
         here=\$(cd "\$(dirname "\$0")" && pwd)
@@ -72,9 +78,9 @@ DEN
     chmod 755 "$1/den"
 }
 # Fake release: FAKE_REL/<tag>/{x/ (unpacked), den-<v>-<os>-<arch>.tar.gz, .sha256, checksums.txt}
-mkrel() { # mkrel TAG VERSION
+mkrel() { # mkrel TAG VERSION [old]
     d="$_tmp/rel/$1"
-    mkden "$d/x" "$2"
+    mkden "$d/x" "$2" "${3:-}"
     mkdir -p "$d/x/share/den"; echo "{\"tag\":\"$1\"}" >"$d/x/share/den/known_hashes.json"
     a="den-$2-$OS-$ARCH.tar.gz"
     (cd "$d/x" && tar -czf "../$a" den share)
@@ -83,6 +89,7 @@ mkrel() { # mkrel TAG VERSION
 mkrel v1.2.0-rc.1 1.2.0
 mkrel v1.2.0 1.2.0
 mkrel v1.1.0 1.1.0
+mkrel v1.0.0 1.0.0 old
 
 # Stub installer: records what it saw, then unpacks FAKE_REL/<tag> into
 # DEN_INSTALL_DIR (FAKE_INSTALL_FAIL=1 fails instead).
@@ -103,15 +110,29 @@ INST
 mkdir -p "$_tmp/bin"
 cat >"$_tmp/bin/curl" <<'CURL'
 #!/bin/sh
-out=""; url=""
+out=""; url=""; w=""
 while [ $# -gt 0 ]; do
-    case "$1" in -o) out=$2; shift ;; -*) ;; *) url=$1 ;; esac
+    case "$1" in -o) out=$2; shift ;; -w) w=$2; shift ;; -*) ;; *) url=$1 ;; esac
     shift
 done
 echo "curl $url" >>"$FAKE_LOG"
+# Failure injection: the first FAKE_CURL_FAIL_TIMES requests for a URL
+# containing FAKE_CURL_FAIL_MATCH exit FAKE_CURL_FAIL_CODE.
+if [ -n "${FAKE_CURL_FAIL_CODE:-}" ]; then
+    case "$url" in *"$FAKE_CURL_FAIL_MATCH"*)
+        n=$(cat "$FAKE_CURL_FAIL_STATE" 2>/dev/null || echo 0)
+        if [ "$n" -lt "$FAKE_CURL_FAIL_TIMES" ]; then
+            echo $((n + 1)) >"$FAKE_CURL_FAIL_STATE"
+            [ -n "$w" ] && printf '%s' "${FAKE_CURL_FAIL_HTTP:-000}"
+            exit "$FAKE_CURL_FAIL_CODE"
+        fi ;;
+    esac
+fi
 asset=${url##*/}; rest=${url%/*}; tag=${rest##*/}
-[ -f "$FAKE_REL/$tag/$asset" ] || exit 22
+[ -f "$FAKE_REL/$tag/$asset" ] || { [ -n "$w" ] && printf 404; exit 22; }
 cp "$FAKE_REL/$tag/$asset" "$out"
+[ -n "$w" ] && printf 200
+exit 0
 CURL
 chmod 755 "$_tmp/bin/curl"
 
@@ -127,7 +148,11 @@ run() {
             FAKE_LOG="$_tmp/log" FAKE_REL="$_tmp/rel" \
             VR_INSTALL_SH="$_tmp/install.sh" VR_ROOT="$_tmp/vr" VR_PREV_TAG=v1.1.0 \
             VR_ONLY="version"
-        while [ $# -gt 0 ] && [ "$1" != -- ]; do export "${1?}"; shift; done
+        # -VAR unsets VAR (e.g. -VR_PREV_TAG for the automatic pick).
+        while [ $# -gt 0 ] && [ "$1" != -- ]; do
+            case "$1" in -*) unset "${1#-}" ;; *) export "${1?}" ;; esac
+            shift
+        done
         [ $# -gt 0 ] && shift
         exec bash "$VR" "$@"
     ) >"$_tmp/out" 2>&1
@@ -197,6 +222,66 @@ run "checksum mismatch fails" 1 VR_ONLY=checksum -- v1.2.0 && has "checksum mism
 cp "$_tmp/ck.bak" "$_tmp/rel/v1.2.0/den-1.2.0-checksums.txt"
 run "no previous GA skips self-update" 0 VR_ONLY=self-update VR_PREV_TAG= -- v1.2.0 \
     && has "no prev: skip reason" 'SKIP  self-update .*no previous GA'
+
+# --- automatic previous release ------------------------------------------
+# Newest earlier tag, RCs included, whose binary can self-update --version.
+if run "auto prev: newest capable RC" 0 VR_ONLY=self-update -VR_PREV_TAG \
+    VR_PREV_CANDIDATES="v1.2.0-rc.1 v1.1.0 v1.0.0" -- v1.2.0; then
+    has "auto prev: self-update passes" 'PASS  self-update'
+    logged "auto prev: rc installed as the start" "install tag=v1.2.0-rc.1 dir=$_tmp/vr/prev "
+    unlogged "auto prev: older candidates untouched" 'install tag=v1.1.0'
+    logged "auto prev: to the tag" 'self-update v1.2.0$'
+    has "auto prev: banner" 'prev=auto \(3 candidates'
+fi
+# The newest candidate predates self-update --version; a missing release is
+# skipped too; the walk lands on v1.1.0.
+mkdir -p "$_tmp/rel/v1.1.5-rc.1"
+if run "auto prev: skips incapable and missing" 0 VR_ONLY=self-update -VR_PREV_TAG \
+    VR_PREV_CANDIDATES="v1.1.9 v1.0.0 v1.1.0" -- v1.2.0-rc.1; then
+    logged "auto prev: tried the missing tag" 'install tag=v1.1.9 '
+    logged "auto prev: tried the old one" 'install tag=v1.0.0 '
+    logged "auto prev: picked v1.1.0" "install tag=v1.1.0 dir=$_tmp/vr/prev "
+    logged "auto prev: self-update to the rc" 'self-update v1.2.0-rc.1'
+fi
+# None capable: fall back to the GA path; an RC target then skips.
+if run "auto prev: none capable" 0 VR_ONLY=self-update -VR_PREV_TAG \
+    VR_PREV_CANDIDATES="v1.0.0" -- v1.2.0-rc.1; then
+    has "auto prev: none capable skips for an rc" "SKIP  self-update .*no 'self-update --version'"
+fi
+if run "auto prev: VR_PREV_MAX bounds the walk" 0 VR_ONLY=self-update -VR_PREV_TAG \
+    VR_PREV_CANDIDATES="v1.0.0 v1.1.0" VR_PREV_MAX=1 -- v1.2.0-rc.1; then
+    unlogged "auto prev: VR_PREV_MAX=1 stops after one" "install tag=v1.1.0 dir=$_tmp/vr/prev "
+fi
+# An explicit VR_PREV_TAG overrides the walk.
+if run "VR_PREV_TAG overrides" 0 VR_ONLY=self-update VR_PREV_TAG=v1.1.0 \
+    VR_PREV_CANDIDATES="v1.2.0-rc.1" -- v1.2.0; then
+    logged "override: v1.1.0 used" "install tag=v1.1.0 dir=$_tmp/vr/prev "
+    unlogged "override: candidates ignored" 'install tag=v1.2.0-rc.1'
+fi
+
+# --- transient download errors -------------------------------------------
+_ck_url="/v1.2.0/den-1.2.0-$OS-$ARCH.tar.gz"
+rm -f "$_tmp/fail.state"
+if run "checksum: curl 56 once is retried" 0 VR_ONLY=checksum VR_FETCH_DELAY=0 \
+    FAKE_CURL_FAIL_CODE=56 FAKE_CURL_FAIL_TIMES=1 FAKE_CURL_FAIL_MATCH="$_ck_url" \
+    FAKE_CURL_FAIL_STATE="$_tmp/fail.state" -- v1.2.0; then
+    has "retry: checksum passes" 'PASS  checksum'
+    [ "$(grep -c "curl .*$_ck_url\$" "$_tmp/log")" -eq 2 ] && ok "retry: fetched twice" || bad "retry: fetched twice"
+fi
+rm -f "$_tmp/fail.state"
+if run "checksum: curl 56 always fails after 3" 1 VR_ONLY=checksum VR_FETCH_DELAY=0 \
+    FAKE_CURL_FAIL_CODE=56 FAKE_CURL_FAIL_TIMES=99 FAKE_CURL_FAIL_MATCH="$_ck_url" \
+    FAKE_CURL_FAIL_STATE="$_tmp/fail.state" -- v1.2.0; then
+    [ "$(grep -c "curl .*$_ck_url\$" "$_tmp/log")" -eq 3 ] && ok "retry: bounded at 3" || bad "retry: bounded at 3"
+fi
+rm -rf "$_tmp/rel/v1.4.0"; mkdir -p "$_tmp/rel/v1.4.0"; cp -R "$_tmp/rel/v1.2.0/x" "$_tmp/rel/v1.4.0/x"
+run "checksum: 404 not retried" 1 VR_ONLY=checksum VR_FETCH_DELAY=0 VR_SKIP=version -- v1.4.0 \
+    && { [ "$(grep -c 'curl .*/v1.4.0/den-1.4.0' "$_tmp/log")" -eq 1 ] && ok "404: one fetch" || bad "404: one fetch"; }
+# A checksum mismatch is a verdict, not a transport error: one fetch each.
+sed "s/^[0-9a-f]\{64\}/$(printf '%064d' 0)/" "$_tmp/ck.bak" >"$_tmp/rel/v1.2.0/den-1.2.0-checksums.txt"
+run "checksum mismatch not retried" 1 VR_ONLY=checksum VR_FETCH_DELAY=0 -- v1.2.0 \
+    && { [ "$(grep -c "curl .*$_ck_url\$" "$_tmp/log")" -eq 1 ] && ok "mismatch: one fetch" || bad "mismatch: one fetch"; }
+cp "$_tmp/ck.bak" "$_tmp/rel/v1.2.0/den-1.2.0-checksums.txt"
 
 # --- step selection ------------------------------------------------------
 run "VR_SKIP" 0 VR_ONLY="version empty-store" VR_SKIP="empty-store" -- v1.2.0 \

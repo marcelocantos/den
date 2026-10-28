@@ -14,8 +14,17 @@
 # Knobs (all optional):
 #   RELEASE_TAG        release tag to verify (default: v<CMakeLists project version>)
 #   VR_INSTALL_SH      installer (default: install.sh in this checkout)
-#   VR_PREV_TAG        GA the self-update step starts from (default: the newest
-#                      vX.Y.Z tag below RELEASE_TAG, per scripts/prev-release-tag.sh)
+#   VR_PREV_TAG        release the self-update step starts from. Set (even to
+#                      empty) it overrides the automatic pick; unset, the step
+#                      walks VR_PREV_CANDIDATES for the newest earlier release
+#                      whose binary supports `self-update --version`, falling
+#                      back to the newest earlier GA
+#   VR_PREV_CANDIDATES space-separated earlier tags, newest first, for that walk
+#                      (default: every vX.Y.Z and vX.Y.Z-rc.N tag below
+#                      RELEASE_TAG, per scripts/prev-release-tag.sh --all)
+#   VR_PREV_MAX        most candidates to install before giving up (default: 5)
+#   VR_FETCH_ATTEMPTS  tries per download on a transient curl error (default: 3)
+#   VR_FETCH_DELAY     base seconds between those tries (default: 2, linear)
 #   VR_RELEASE_URL     release download base (default:
 #                      https://github.com/marcelocantos/den/releases/download)
 #   VR_ROOT            scratch root (default: mktemp -d /tmp/den-verify-release.XXXXXX)
@@ -74,9 +83,29 @@ VERSION=${VERSION%%-*}
 VR_INSTALL_SH=${VR_INSTALL_SH:-$REPO_DIR/install.sh}
 [ -f "$VR_INSTALL_SH" ] || die "installer not found: $VR_INSTALL_SH"
 VR_RELEASE_URL=${VR_RELEASE_URL:-https://github.com/marcelocantos/den/releases/download}
+# VR_PREV_AUTO=1: no explicit VR_PREV_TAG, so self-update picks its own
+# starting release (newest earlier tag, RCs included, that can
+# `self-update --version`) and keeps the newest earlier GA as a fallback.
+VR_PREV_AUTO=0
 if [ -z "${VR_PREV_TAG+x}" ]; then
+    VR_PREV_AUTO=1
     VR_PREV_TAG=$(git -C "$REPO_DIR" tag -l 'v*' 2>/dev/null | sh "$SCRIPT_DIR/prev-release-tag.sh" "$RELEASE_TAG" 2>/dev/null || true)
+    if [ -z "${VR_PREV_CANDIDATES+x}" ]; then
+        VR_PREV_CANDIDATES=$(git -C "$REPO_DIR" tag -l 'v*' 2>/dev/null \
+            | sh "$SCRIPT_DIR/prev-release-tag.sh" --all "$RELEASE_TAG" 2>/dev/null | tr '\n' ' ' || true)
+    fi
 fi
+VR_PREV_CANDIDATES=${VR_PREV_CANDIDATES:-}
+# No GA from git tags (e.g. a shallow CI checkout): fall back to the newest
+# GA among the candidates, so the fallback never depends on local tags.
+if [ "$VR_PREV_AUTO" = 1 ] && [ -z "$VR_PREV_TAG" ]; then
+    for _t in $VR_PREV_CANDIDATES; do
+        case "$_t" in *-*) ;; *) VR_PREV_TAG=$_t; break ;; esac
+    done
+fi
+VR_PREV_MAX=${VR_PREV_MAX:-5}
+VR_FETCH_ATTEMPTS=${VR_FETCH_ATTEMPTS:-3}
+VR_FETCH_DELAY=${VR_FETCH_DELAY:-2}
 case "$(uname -s)" in
     Darwin) REL_OS=darwin ;;
     Linux) REL_OS=linux ;;
@@ -196,6 +225,35 @@ sha256_() {
     if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
     else sha256sum "$1" | awk '{print $1}'; fi
 }
+# fetch_ URL DEST: curl -fsSL, retried (VR_FETCH_ATTEMPTS tries in all) only
+# on errors that say nothing about the bytes: DNS/connect failures, timeouts,
+# TLS handshake or record errors (e.g. curl 56 "bad decrypt" from LibreSSL),
+# truncated transfers, and HTTP 408/429/5xx. A 404 fails at once, and a
+# checksum mismatch is decided by the caller after the download, never here,
+# so it is never retried.
+fetch_transient_() { # fetch_transient_ CURL_EXIT HTTP_CODE
+    case "$1" in
+        5|6|7|16|18|28|35|52|55|56|92) return 0 ;;
+        22) case "$2" in 408|429|5[0-9][0-9]) return 0 ;; esac ;;
+    esac
+    return 1
+}
+fetch_() {
+    local url=$1 dest=$2 n=1 rc code
+    while :; do
+        rc=0
+        code=$(curl -fsSL -w '%{http_code}' "$url" -o "$dest") || rc=$?
+        [ "$rc" -eq 0 ] && return 0
+        if [ "$n" -ge "$VR_FETCH_ATTEMPTS" ] || ! fetch_transient_ "$rc" "$code"; then
+            echo "fetch: $url failed (curl exit $rc, http ${code:-none})" >&2
+            return "$rc"
+        fi
+        echo "fetch: $url: transient failure (curl exit $rc, http ${code:-none}); retry $n of $((VR_FETCH_ATTEMPTS - 1))" >&2
+        sleep $((VR_FETCH_DELAY * n))
+        n=$((n + 1))
+    done
+}
+
 # run_install DIR TAG: install.sh with every location in scratch, no PATH
 # edits and no prompts (it never needs sudo: the scratch prefix is writable).
 run_install() {
@@ -222,9 +280,9 @@ s_checksum() {
     local d=$VR_ROOT/release asset sha want_sum want_side
     asset="den-$VERSION-$REL_OS-$REL_ARCH.tar.gz"
     mkdir -p "$d/x"
-    curl -fsSL "$VR_RELEASE_URL/$RELEASE_TAG/$asset" -o "$d/$asset"
-    curl -fsSL "$VR_RELEASE_URL/$RELEASE_TAG/$asset.sha256" -o "$d/$asset.sha256"
-    curl -fsSL "$VR_RELEASE_URL/$RELEASE_TAG/den-$VERSION-checksums.txt" -o "$d/checksums.txt"
+    fetch_ "$VR_RELEASE_URL/$RELEASE_TAG/$asset" "$d/$asset" || return 1
+    fetch_ "$VR_RELEASE_URL/$RELEASE_TAG/$asset.sha256" "$d/$asset.sha256" || return 1
+    fetch_ "$VR_RELEASE_URL/$RELEASE_TAG/den-$VERSION-checksums.txt" "$d/checksums.txt" || return 1
     sha=$(sha256_ "$d/$asset")
     want_side=$(awk '{print $1; exit}' "$d/$asset.sha256")
     want_sum=$(awk -v f="$asset" '$2 == f || $2 == "*" f {print $1; exit}' "$d/checksums.txt")
@@ -239,16 +297,51 @@ s_checksum() {
             || { echo "installed trust replica differs from the release asset"; return 1; }
     fi
 }
-# Start from the previous GA (installed by install.sh into its own scratch
+has_self_update_version_() { "$1" self-update --help 2>&1 | grep -q -- '--version'; }
+# pick_prev_: install each VR_PREV_CANDIDATES tag (newest first, at most
+# VR_PREV_MAX) into VR_PREV_DIR until one's binary can `self-update
+# --version`; set VR_PREV_TAG to it and leave it installed. A candidate that
+# fails to install (e.g. a tag with no published release) is skipped.
+pick_prev_() {
+    local t n=0
+    for t in $VR_PREV_CANDIDATES; do
+        [ "$n" -lt "$VR_PREV_MAX" ] || break
+        n=$((n + 1))
+        rm -rf "$VR_PREV_DIR"
+        if ! run_install "$VR_PREV_DIR" "$t" || [ ! -x "$VR_PREV_DIR/bin/den" ]; then
+            echo "candidate $t: install failed; trying the next"
+            continue
+        fi
+        if has_self_update_version_ "$VR_PREV_DIR/bin/den"; then
+            echo "candidate $t: supports self-update --version"
+            VR_PREV_TAG=$t
+            return 0
+        fi
+        echo "candidate $t: no self-update --version; trying the next"
+    done
+    rm -rf "$VR_PREV_DIR"
+    return 1
+}
+# Start from an earlier release (installed by install.sh into its own scratch
 # dir) and self-update to the tag under test: the result must be the very
-# bytes install.sh put in place, replica included.
+# bytes install.sh put in place, replica included. Unless VR_PREV_TAG pins
+# it, the start is the newest earlier tag, RCs included, whose binary
+# supports `self-update --version`; failing that, the newest earlier GA.
 s_self_update() {
-    [ -n "$VR_PREV_TAG" ] || skip_because "no previous GA tag (set VR_PREV_TAG)"
+    local picked=0
+    if [ "$VR_PREV_AUTO" = 1 ] && [ -n "$VR_PREV_CANDIDATES" ]; then
+        if pick_prev_; then
+            picked=1
+        else
+            echo "no candidate supports self-update --version; falling back to the previous GA (${VR_PREV_TAG:-none})"
+        fi
+    fi
+    [ -n "$VR_PREV_TAG" ] || skip_because "no previous GA or capable earlier release (set VR_PREV_TAG)"
     [ "v${VR_PREV_TAG#v}" != "$RELEASE_TAG" ] || skip_because "VR_PREV_TAG is the tag under test"
     local prev=$VR_PREV_DIR/bin/den got
-    run_install "$VR_PREV_DIR" "$VR_PREV_TAG"
+    [ "$picked" = 1 ] || run_install "$VR_PREV_DIR" "$VR_PREV_TAG"
     echo "previous: $("$prev" --version) ($VR_PREV_TAG)"
-    if "$prev" self-update --help 2>&1 | grep -q -- '--version'; then
+    if has_self_update_version_ "$prev"; then
         "$prev" self-update --version "$RELEASE_TAG"
     else
         # Releases before self-update --version can only move to Latest.
@@ -256,8 +349,8 @@ s_self_update() {
             *-rc.*) skip_because "$VR_PREV_TAG has no 'self-update --version' (needed to reach an RC)" ;;
         esac
         local latest
-        latest=$(curl -fsSL https://api.github.com/repos/marcelocantos/den/releases/latest \
-            | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+        fetch_ https://api.github.com/repos/marcelocantos/den/releases/latest "$VR_ROOT/latest.json" || return 1
+        latest=$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$VR_ROOT/latest.json" | head -1)
         [ "$latest" = "$RELEASE_TAG" ] || skip_because "$VR_PREV_TAG has no 'self-update --version' and $RELEASE_TAG is not Latest ($latest)"
         "$prev" self-update
     fi
@@ -455,7 +548,12 @@ finish() {
 trap finish EXIT
 trap 'exit 130' INT TERM
 
-echo "verify-release: tag=$RELEASE_TAG version=$VERSION prev=${VR_PREV_TAG:-none} root=$VR_ROOT"
+if [ "$VR_PREV_AUTO" = 1 ]; then
+    _prev_desc="auto ($(echo "$VR_PREV_CANDIDATES" | wc -w | tr -d ' ') candidates, GA fallback ${VR_PREV_TAG:-none})"
+else
+    _prev_desc=${VR_PREV_TAG:-none}
+fi
+echo "verify-release: tag=$RELEASE_TAG version=$VERSION prev=$_prev_desc root=$VR_ROOT"
 echo "verify-release: installer=$VR_INSTALL_SH PATH=$PATH"
 step install s_install
 step version s_version

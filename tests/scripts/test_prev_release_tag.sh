@@ -78,6 +78,34 @@ else
     echo "PASS: malformed version rejected"
 fi
 
+# --- --all: every earlier tag, RCs included, newest first ------------------
+# expect_all NAME VERSION WANT (space-separated) TAGS...
+expect_all() {
+    _name="$1"
+    _version="$2"
+    _want="$3"
+    shift 3
+    _got=$(printf '%s\n' "$@" | sh "$SCRIPT" --all "$_version" 2>&1 | tr '\n' ' ' | sed 's/ $//')
+    _rc=$?
+    if [ "$_rc" -eq 0 ] && [ "$_got" = "$_want" ]; then
+        _pass=$((_pass + 1))
+        echo "PASS: --all $_name"
+    else
+        _fail=$((_fail + 1))
+        echo "FAIL: --all $_name (exit $_rc, got '$_got', want '$_want')"
+    fi
+}
+expect_all "rc target: own earlier rcs first" v0.15.0-rc.3 \
+    "v0.15.0-rc.2 v0.15.0-rc.1 v0.14.1 v0.14.0 v0.14.0-rc.1 v0.13.0" \
+    v0.13.0 v0.14.0-rc.1 v0.14.0 v0.14.1 v0.15.0-rc.1 v0.15.0-rc.2 v0.15.0-rc.3 \
+    v0.15.0-rc.4 v0.15.0 v1.0.0-rc.1
+expect_all "ga target: its rcs are earlier" 0.15.0 \
+    "v0.15.0-rc.10 v0.15.0-rc.2 v0.14.0" \
+    v0.14.0 v0.15.0-rc.2 v0.15.0-rc.10 v0.15.0
+expect_all "junk and duplicates ignored" 0.14.0 "v0.13.0 v0.12.0" \
+    v0.12.0 v0.13.0 v0.13.0 v0.13.0-beta.1 latest 0.13.0
+expect_all "nothing earlier" 0.1.0 "" v0.1.0 v0.2.0-rc.1
+
 echo ""
 echo "prev-release-tag: ${_pass} passed, ${_fail} failed"
 [ "$_fail" -eq 0 ]
