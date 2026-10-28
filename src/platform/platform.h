@@ -60,8 +60,9 @@ std::optional<MacOsVersion> detect_macos_version();
 std::optional<MacOsVersion> parse_macos_product_version(std::string_view s);
 
 /// Map a Darwin kernel release ("25.6.0") to the macOS version it ships
-/// with: Darwin 20–24 → macOS 11–15, Darwin 25+ → macOS 26+.
-/// Returns nullopt for pre-Big Sur or unparseable input.
+/// with: Darwin 20–24 → macOS 11–15, Darwin 25 → macOS 26, Darwin 27+ →
+/// macOS 27+ (same number). Returns nullopt for pre-Big Sur, the unshipped
+/// Darwin 26, or unparseable input.
 std::optional<MacOsVersion> macos_version_from_darwin(std::string_view release);
 
 /// Combine the reported product version with the Darwin release. The
@@ -73,7 +74,7 @@ std::optional<MacOsVersion> resolve_macos_version(const std::optional<std::strin
 
 /// Map a macOS major version number to its lowercase codename.
 /// Returns nullopt for unknown versions.
-/// Supported: 26=tahoe, 15=sequoia, 14=sonoma, 13=ventura, 12=monterey.
+/// Supported: 27=golden_gate, 26=tahoe, 15=sequoia, 14=sonoma, 13=ventura, 12=monterey.
 std::optional<std::string> macos_codename(int major);
 
 /// Return the bottle tag for this platform (e.g. "arm64_sequoia").
