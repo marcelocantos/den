@@ -124,9 +124,11 @@ snapshot can be re-analysed later) are absent from snapshots taken before
 the median gate.
 
 `host` is a stable machine class (`Darwin-arm64-local` on a developer
-machine, `gha-macos14-ARM64` on GitHub Actions macos-14). Regression
-checks only compare snapshots from the same host class — a local M4 Max
-baseline must not fail CI on a slower shared runner.
+machine, `gha-macos15-ARM64` on GitHub Actions macos-15). Snapshots up to
+Oct 2026 are `gha-macos14-ARM64`, from before the macOS 14 runner image
+was retired. Regression checks only compare snapshots from the same host
+class — a local M4 Max baseline must not fail CI on a slower shared
+runner, and the first macos-15 run has no baseline yet.
 
 The CSV mirrors the same fields for easy import into spreadsheets / pandas.
 
