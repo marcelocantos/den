@@ -67,18 +67,33 @@ if store_path.directory?
   end
 end
 
+# den's prefix: the Cellar's parent, as for ensure_prefix_opt_link.
+prefix_root = store_path.parent
+
 # --- Patch Formula[] to resolve deps from den's store ---
+#
+# A dependency's opt paths are its stable <prefix>/opt/<dep> link, so what a
+# build bakes in (rpaths, pkg-config, wrapper scripts) survives the dep's
+# upgrades. A dep without an opt link falls back to its keg.
 
 original_bracket = Formula.method(:[])
 Formula.define_singleton_method(:[]) do |name|
   f = original_bracket.call(name)
   den_path = installed[f.name] || installed[name.to_s]
   if den_path
-    f.define_singleton_method(:opt_prefix) { den_path }
+    dep_name = den_path.parent.basename.to_s
+    dep_opt = prefix_root / "opt" / dep_name
+    dep_opt = den_path unless dep_opt.directory?
+    f.define_singleton_method(:opt_prefix) { dep_opt }
     f.define_singleton_method(:prefix) { den_path }
-    f.define_singleton_method(:opt_bin) { den_path / "bin" }
-    f.define_singleton_method(:opt_lib) { den_path / "lib" }
-    f.define_singleton_method(:opt_include) { den_path / "include" }
+    f.define_singleton_method(:opt_bin) { dep_opt / "bin" }
+    f.define_singleton_method(:opt_sbin) { dep_opt / "sbin" }
+    f.define_singleton_method(:opt_lib) { dep_opt / "lib" }
+    f.define_singleton_method(:opt_include) { dep_opt / "include" }
+    f.define_singleton_method(:opt_share) { dep_opt / "share" }
+    f.define_singleton_method(:opt_libexec) { dep_opt / "libexec" }
+    f.define_singleton_method(:opt_pkgshare) { dep_opt / "share" / dep_name }
+    f.define_singleton_method(:opt_frameworks) { dep_opt / "Frameworks" }
     f.define_singleton_method(:cellar) { den_path }
     f.define_singleton_method(:bin) { den_path / "bin" }
     f.define_singleton_method(:lib) { den_path / "lib" }
@@ -104,6 +119,11 @@ version = want_version || api_formula&.pkg_version&.to_s || klass.stable&.versio
 dest = store_path / name / version
 $stderr.puts "==> #{name} #{version} -> #{dest}"
 
+# Opt-prefix mode (docs/source-builds.md): the build is configured for the
+# stable opt path, and install steps stage through DESTDIR into the keg.
+opt_path = prefix_root / "opt" / name
+stage = den_home / "cache" / "build" / "#{name}-#{version}.destdir"
+
 # --- Create formula instance via allocate (bypass abstract! check) ---
 
 f = klass.allocate
@@ -111,7 +131,7 @@ f.instance_variable_set(:@name, name)
 
 # Override all path methods to point at den's store.
 f.define_singleton_method(:prefix) { dest }
-f.define_singleton_method(:opt_prefix) { dest }
+f.define_singleton_method(:opt_prefix) { opt_path }
 f.define_singleton_method(:cellar) { dest }
 f.define_singleton_method(:bin) { dest / "bin" }
 f.define_singleton_method(:sbin) { dest / "sbin" }
@@ -126,8 +146,9 @@ f.define_singleton_method(:man7) { dest / "share" / "man" / "man7" }
 f.define_singleton_method(:man8) { dest / "share" / "man" / "man8" }
 f.define_singleton_method(:libexec) { dest / "libexec" }
 f.define_singleton_method(:pkgshare) { dest / "share" / name }
-f.define_singleton_method(:etc) { dest / "etc" }
-f.define_singleton_method(:var) { dest / "var" }
+# etc and var are shared prefix directories, as in Homebrew.
+f.define_singleton_method(:etc) { prefix_root / "etc" }
+f.define_singleton_method(:var) { prefix_root / "var" }
 f.define_singleton_method(:elisp) { dest / "share" / "emacs" / "site-lisp" / name }
 f.define_singleton_method(:frameworks) { dest / "Frameworks" }
 f.define_singleton_method(:kext_prefix) { dest / "Library" / "Extensions" }
@@ -141,6 +162,145 @@ f.define_singleton_method(:rpath) { |**opts|
   target = opts[:target] || "lib"
   "@loader_path/#{Pathname.new(origin).relative_path_from(Pathname.new(target))}/../lib" rescue "@loader_path/../lib"
 }
+
+# --- Opt-prefix build mode (G1/G2) ---
+#
+# The formula's own Ruby file operations (bin.install, rm, inreplace of an
+# installed file) work on the keg, so prefix and friends stay the keg path.
+# What a build command sees is rewritten to the opt path instead:
+#   * system arguments naming the keg (--prefix=, prefix=, std_*_args, ...);
+#   * environment values naming the keg, for the duration of the command;
+#   * inreplace replacement text.
+# Install steps (make install*, cmake --install, ninja/meson install) run with
+# DESTDIR=<stage>; the staged <stage><opt path> merges into the keg right after
+# the step, so the formula's next line sees the installed files.
+
+require "fileutils"
+require "find"
+require "shellwords"
+
+den_keg_re = /#{Regexp.escape(dest.to_s)}(?=\/|\z|[^\w.+@-])/
+den_rewrite = lambda do |a|
+  case a
+  when Pathname then a.to_s.match?(den_keg_re) ? Pathname.new(a.to_s.gsub(den_keg_re, opt_path.to_s)) : a
+  when String then a.match?(den_keg_re) ? a.gsub(den_keg_re, opt_path.to_s) : a
+  else a
+  end
+end
+
+den_install_kind = lambda do |argv|
+  words = argv.flat_map { |a| a.to_s.split }
+  words = words.drop_while { |w| w.include?("=") && !w.start_with?("-") }
+  tool = File.basename(words.first.to_s)
+  rest = words.drop(1)
+  case tool
+  when "make", "gmake"
+    :make if rest.any? { |w| w == "install" || w.start_with?("install-", "install_") }
+  when "cmake"
+    :env if rest.include?("--install") || rest.include?("--target=install") ||
+            rest.each_cons(2).any? { |a, b| %w[--target -t].include?(a) && b == "install" }
+  when "ninja", "samu"
+    :env if rest.include?("install")
+  when "meson"
+    :env if rest.first == "install"
+  end
+end
+
+den_merge_tree = lambda do |src, dst, replace|
+  dst.mkpath
+  src.children.each do |from|
+    to = dst / from.basename
+    if from.directory? && !from.symlink? && to.directory? && !to.symlink?
+      den_merge_tree.call(from, to, replace)
+    elsif to.exist? || to.symlink?
+      unless replace
+        $stderr.puts "==> Keeping existing #{to}"
+        next
+      end
+      FileUtils.rm_rf(to)
+      FileUtils.mv(from, to)
+    else
+      FileUtils.mv(from, to)
+    end
+  end
+end
+
+# Same contract as merge_destdir_stage in src/build/opt_prefix_build.cpp.
+den_merge_stage = lambda do
+  next unless stage.exist?
+  staged_keg = stage / opt_path.relative_path_from(Pathname.new("/"))
+  staged_etc = stage / (prefix_root / "etc").relative_path_from(Pathname.new("/"))
+  staged_var = stage / (prefix_root / "var").relative_path_from(Pathname.new("/"))
+  kept = [staged_keg, staged_etc, staged_var].map(&:to_s)
+  stray = []
+  Find.find(stage.to_s) do |path|
+    if kept.any? { |k| path == k || path.start_with?("#{k}/") }
+      Find.prune
+    elsif !File.lstat(path).directory?
+      stray << path.delete_prefix(stage.to_s)
+    end
+  end
+  unless stray.empty?
+    stage.rmtree
+    abort "error: source build installed files outside its keg (expected everything under " \
+          "#{opt_path}):\n  #{stray.join("\n  ")}"
+  end
+  den_merge_tree.call(staged_keg, dest, true) if staged_keg.directory?
+  den_merge_tree.call(staged_etc, prefix_root / "etc", false) if staged_etc.directory?
+  den_merge_tree.call(staged_var, prefix_root / "var", false) if staged_var.directory?
+  stage.rmtree
+end
+
+f.define_singleton_method(:system) do |cmd, *args|
+  cmd = den_rewrite.call(cmd)
+  args = args.map { |a| den_rewrite.call(a) }
+  kind = den_install_kind.call([cmd, *args])
+  saved_env = {}
+  ENV.to_h.each do |k, v|
+    next unless v.match?(den_keg_re)
+    saved_env[k] = v
+    ENV[k] = v.gsub(den_keg_re, opt_path.to_s)
+  end
+  if kind == :make
+    if args.empty? && cmd.to_s.include?(" ")
+      cmd = "#{cmd} DESTDIR=#{Shellwords.escape(stage.to_s)}"
+    else
+      args += ["DESTDIR=#{stage}"]
+    end
+  elsif kind == :env
+    saved_env["DESTDIR"] = ENV.fetch("DESTDIR", nil) unless saved_env.key?("DESTDIR")
+    ENV["DESTDIR"] = stage.to_s
+  end
+  begin
+    super(cmd, *args)
+  ensure
+    saved_env.each { |k, v| ENV[k] = v }
+  end
+  den_merge_stage.call if kind
+end
+
+f.define_singleton_method(:inreplace) do |paths, before = nil, after = nil, **opts, &block|
+  super(paths, before, den_rewrite.call(after), **opts, &block)
+end
+
+# The live opt path must come through the build untouched: an install step
+# that ignores DESTDIR would otherwise write into the linked (older) keg.
+den_opt_state = lambda do
+  next nil unless opt_path.exist? || opt_path.symlink?
+  files = []
+  if opt_path.directory?
+    root = "#{opt_path}/"
+    Find.find(root) do |path|
+      st = File.lstat(path)
+      files << [path.delete_prefix(root), st.symlink? ? File.readlink(path) : st.size,
+                st.file? ? st.mtime.to_r : nil]
+    end
+  end
+  [opt_path.symlink?, opt_path.symlink? ? opt_path.readlink.to_s : nil, files.sort_by(&:first)]
+end
+opt_before = den_opt_state.call
+
+at_exit { stage.rmtree if stage.exist? }
 
 # --- Set up build environment ---
 
@@ -171,7 +331,14 @@ end
 require "digest"
 sha256_of = ->(path) { Digest::SHA256.file(path.to_s).hexdigest }
 
-tarball = den_home / "cache" / "sources" / "#{name}-#{version}.tar.gz"
+# The cache name keeps the URL's archive suffix (see source_archive_suffix in
+# src/build/opt_prefix_build.cpp); tar detects the format from content.
+archive_suffix = begin
+  base = url.to_s.sub(/[?#].*\z/m, "").split("/").last.to_s.downcase
+  %w[.tar.gz .tar.xz .tar.bz2 .tar.zst .tar.lz .tar.lzma .tar.z .tgz .txz .tbz2 .tbz .tar .zip .7z]
+    .find { |sfx| base.length > sfx.length && base.end_with?(sfx) } || ".src"
+end
+tarball = den_home / "cache" / "sources" / "#{name}-#{version}#{archive_suffix}"
 tarball.dirname.mkpath
 
 # A cached tarball is only reused if it still matches; otherwise fetch again.
@@ -199,7 +366,11 @@ build_dir.rmtree if build_dir.exist?
 build_dir.mkpath
 
 $stderr.puts "==> Extracting"
-system("tar", "xzf", tarball.to_s, "-C", build_dir.to_s) or abort "extraction failed"
+if archive_suffix == ".zip"
+  system("unzip", "-q", tarball.to_s, "-d", build_dir.to_s) or abort "extraction failed"
+else
+  system("tar", "xf", tarball.to_s, "-C", build_dir.to_s) or abort "extraction failed"
+end
 
 entries = build_dir.children.select(&:directory?)
 src_dir = entries.length == 1 ? entries.first : build_dir
@@ -213,6 +384,13 @@ Dir.chdir(src_dir) do
   f.define_singleton_method(:buildpath) { src_dir }
   f.instance_variable_set(:@buildpath, src_dir)
   f.install
+end
+
+if den_opt_state.call != opt_before
+  FileUtils.rm_rf(opt_path) if opt_before.nil? # created by the build: never leave it in place
+  dest.rmtree if dest.exist?
+  abort "error: source build wrote #{opt_path} directly (an install step ignored DESTDIR; " \
+        "see docs/source-builds.md)"
 end
 
 # --- Post-install: fix dylib paths ---

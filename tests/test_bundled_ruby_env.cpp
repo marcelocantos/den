@@ -283,13 +283,15 @@ TEST_SUITE("build::bundled_ruby_env") {
 
     // ── -s builds through the bundled Ruby, offline (file:// sources) ───────
 
-    // A source tarball whose Makefile installs a script into $(PREFIX)/bin.
+    // A source tarball whose Makefile installs a script into
+    // $(DESTDIR)$(PREFIX)/bin (source builds stage through DESTDIR; see
+    // docs/source-builds.md).
     fs::path make_source(const fs::path& dir, const std::string& name, const std::string& version) {
         auto src = dir / "src" / (name + "-" + version);
         write(src / name, "#!/bin/sh\necho " + name + " " + version + "\n");
-        write(src / "Makefile", "install:\n\tmkdir -p $(PREFIX)/bin\n\tcp " + name +
-                                    " $(PREFIX)/bin/" + name + "\n\tchmod 755 $(PREFIX)/bin/" +
-                                    name + "\n");
+        const std::string bin = "$(DESTDIR)$(PREFIX)/bin";
+        write(src / "Makefile", "install:\n\tmkdir -p " + bin + "\n\tcp " + name + " " + bin + "/" +
+                                    name + "\n\tchmod 755 " + bin + "/" + name + "\n");
         auto tarball = dir / (name + "-" + version + ".tar.gz");
         run("tar -czf " + tarball.string() + " -C " + (dir / "src").string() + " " + name + "-" +
             version);
