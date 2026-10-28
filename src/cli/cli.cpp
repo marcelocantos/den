@@ -27,6 +27,7 @@
 #include "../provider/homebrew_provider.h"
 #include "../provider/registry.h"
 #include "../selfupdate/daemon_restart.h"
+#include "../selfupdate/launchd_restart.h"
 #include "../selfupdate/selfupdate.h"
 #include "../settings/settings.h"
 #include "../smoke/runner.h"
@@ -1147,12 +1148,22 @@ void Cli::M::setup() {
             }
         }
 
-        // Update the resolved provider's manifest bucket to the requested version.
-        with_manifest(cfg.den_home, active,
-                      [&](Manifest& m) { m.packages[provider_name][use_name] = use_version; });
-
-        auto links = materialise(cfg.den_home, cfg.store, active);
-        std::cout << "Switched " << use_name << " to " << use_version << " (" << links
+        // Switch the manifest entry and relink as one unit: a version that
+        // cannot be linked leaves the current one recorded and linked.
+        std::string from;
+        {
+            auto m = read_manifest(cfg.den_home, active);
+            if (auto b = m.packages.find(provider_name); b != m.packages.end()) {
+                if (auto it = b->second.find(use_name); it != b->second.end())
+                    from = it->second;
+            }
+        }
+        VersionChangeOptions vopts;
+        vopts.install = false;
+        auto res =
+            apply_version_changes(cfg, provider, nullptr, {{use_name, from, use_version}}, vopts);
+        report_version_change_failures(cfg, res, "switch");
+        std::cout << "Switched " << use_name << " to " << use_version << " (" << res.links
                   << " symlinks).\n";
     });
 
@@ -1403,6 +1414,7 @@ void Cli::M::setup() {
 
         auto state = read_daemon_state(cfg.den_home);
         format_daemon_status(std::cout, state);
+        format_degraded_trust(std::cout, summarize_degraded_installs(cfg));
 
         auto s = read_settings(cfg.den_home);
         std::cout << "Auto-download: " << (s.daemon.auto_download ? "on" : "off") << "\n";
@@ -1438,16 +1450,15 @@ void Cli::M::setup() {
             std::ofstream f(plist_path);
             f << plist;
         }
-        // Prefer bootstrap for modern launchctl; fall back to load -w.
-        std::string uid = std::to_string(static_cast<unsigned>(::getuid()));
-        auto boot = "launchctl bootout gui/" + uid + " " + plist_path.string() +
-                    " 2>/dev/null; "
-                    "launchctl bootstrap gui/" +
-                    uid + " " + plist_path.string();
-        auto rc = std::system(boot.c_str());
-        if (rc != 0) {
-            rc = std::system(("launchctl load -w " + plist_path.string()).c_str());
-        }
+        // bootout gui/<uid>/<label> + bootstrap gui/<uid> <plist>, launchctl
+        // run with a scrubbed environment, then confirm a running pid (see
+        // selfupdate/launchd_restart.h).
+        auto ops = real_launchd_ops("dev.den.daemon", plist_path);
+        auto before = ops.launchctl({"print", ops.domain + "/" + ops.label});
+        auto old = parse_launchctl_print(before.spawned && before.exit_code == 0, before.output);
+        std::ostringstream detail;
+        int rc = restart_launchd_job(ops, old.pid, detail) == LaunchdRestartResult::Failed ? 1 : 0;
+        std::cout << detail.str();
         if (rc == 0)
             std::cout << "Daemon installed and started.\n  Plist: " << plist_path << "\n";
         else
@@ -1463,7 +1474,8 @@ void Cli::M::setup() {
         auto home = fs::path(std::getenv("HOME") ? std::getenv("HOME") : "/tmp");
         auto plist_path = home / "Library" / "LaunchAgents" / "dev.den.daemon.plist";
         if (fs::exists(plist_path)) {
-            std::system(("launchctl unload -w " + plist_path.string()).c_str());
+            auto ops = real_launchd_ops("dev.den.daemon", plist_path);
+            (void)ops.launchctl({"bootout", ops.domain + "/" + ops.label});
             fs::remove(plist_path);
             std::cout << "Daemon uninstalled.\n";
         } else {

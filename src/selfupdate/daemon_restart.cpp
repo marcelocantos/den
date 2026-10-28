@@ -9,6 +9,7 @@
 
 #include <cstdlib>
 #include <exception>
+#include <sstream>
 #include <system_error>
 
 #include <unistd.h>
@@ -35,22 +36,29 @@ DaemonRestartOutcome restart_daemon_after_update(const DaemonRestartEnv& env, st
         return DaemonRestartOutcome::NotRunning;
     }
     if (env.launchd_plist) {
-        const auto plist = sh_quote(env.launchd_plist->string());
-        const auto domain = sh_quote(env.launchd_domain);
-        // bootout stops the old process (SIGTERM; the daemon shuts down
-        // cleanly) and unregisters the job; bootstrap registers it again from
-        // the plist, re-reading the new binary.
-        (void)env.run("launchctl bootout " + domain + " " + plist + " 2>/dev/null");
-        int rc = env.run("launchctl bootstrap " + domain + " " + plist);
-        if (rc == 0) {
+        if (env.inside_launchd_job) {
+            auto pid = env.spawn_detached ? env.spawn_detached() : std::nullopt;
+            if (pid) {
+                out << "Restarting the den daemon onto the new binary from a detached helper (pid "
+                    << *pid << "; log: " << env.helper_log.string() << ").\n";
+                return DaemonRestartOutcome::Scheduled;
+            }
+            out << "Could not start the detached restart helper; run `den daemon install` to "
+                   "reload the daemon on the new binary.\n";
+            return DaemonRestartOutcome::Failed;
+        }
+        std::ostringstream detail;
+        auto r = env.restart_launchd ? env.restart_launchd(detail) : LaunchdRestartResult::Failed;
+        out << detail.str();
+        if (r != LaunchdRestartResult::Failed) {
             out << "Restarted the den daemon so it runs the new binary.\n"
                 << "  (If `launchctl print` shows `last exit reason = OS_REASON_CODESIGNING` for "
                    "dev.den.daemon, that is the old process's exit around the binary swap; it "
                    "is transient and harmless. See docs/self-update.md.)\n";
             return DaemonRestartOutcome::Relaunched;
         }
-        out << "Could not restart the den daemon via launchd (launchctl bootstrap exited " << rc
-            << "); run `den daemon install` to reload it on the new binary.\n";
+        out << "Could not restart the den daemon via launchd; run `den daemon install` to "
+               "reload it on the new binary.\n";
         return DaemonRestartOutcome::Failed;
     }
     try {
@@ -67,23 +75,36 @@ DaemonRestartOutcome restart_daemon_after_update(const DaemonRestartEnv& env, st
 }
 
 DaemonRestartOutcome restart_daemon_after_update(const Config& cfg, std::ostream& out) {
+    static const std::string kLabel = "dev.den.daemon";
     DaemonRestartEnv env;
     env.daemon_running = is_daemon_running(cfg);
 #ifdef __APPLE__
-    const char* home = std::getenv("HOME");
-    if (home && *home) {
-        auto plist = fs::path(home) / "Library" / "LaunchAgents" / "dev.den.daemon.plist";
+    const auto senv = scrubbed_env_for_current_user();
+    if (!senv.home.empty()) {
+        auto plist = fs::path(senv.home) / "Library" / "LaunchAgents" / (kLabel + ".plist");
         std::error_code ec;
         if (fs::is_regular_file(plist, ec)) {
             env.launchd_plist = plist;
         }
     }
     env.launchd_domain = "gui/" + std::to_string(static_cast<unsigned>(::getuid()));
+    env.inside_launchd_job = running_inside_launchd_job(kLabel);
+    env.helper_log = cfg.den_home / "daemon-restart.log";
+    if (env.launchd_plist) {
+        const auto plist = *env.launchd_plist;
+        env.restart_launchd = [plist](std::ostream& o) {
+            auto ops = real_launchd_ops(kLabel, plist);
+            auto before = ops.launchctl({"print", ops.domain + "/" + ops.label});
+            auto st = parse_launchctl_print(before.spawned && before.exit_code == 0, before.output);
+            return restart_launchd_job(ops, st.pid, o);
+        };
+        env.spawn_detached = [plist, senv, domain = env.launchd_domain, log = env.helper_log] {
+            return spawn_detached_restart(
+                detached_restart_script(resolve_launchctl(), senv, domain, kLabel, plist), log,
+                senv);
+        };
+    }
 #endif
-    env.run = [](const std::string& cmd) {
-        SPDLOG_DEBUG("self-update: running {}", cmd);
-        return std::system(cmd.c_str());
-    };
     env.stop = [&cfg] { stop_daemon(cfg); };
     return restart_daemon_after_update(env, out);
 }

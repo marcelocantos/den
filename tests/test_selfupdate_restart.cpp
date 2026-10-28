@@ -22,8 +22,10 @@ namespace den {
 namespace test_selfupdate_restart {
 
 struct Recorder {
-    std::vector<std::string> cmds;
-    int bootstrap_rc = 0;
+    std::vector<std::string> calls;
+    LaunchdRestartResult launchd_result = LaunchdRestartResult::Restarted;
+    std::optional<pid_t> helper_pid = 4242;
+    bool inside_job = false;
     int stops = 0;
     bool stop_throws = false;
 
@@ -32,9 +34,15 @@ struct Recorder {
         e.daemon_running = running;
         e.launchd_plist = std::move(plist);
         e.launchd_domain = "gui/501";
-        e.run = [this](const std::string& cmd) {
-            cmds.push_back(cmd);
-            return cmd.find("bootstrap") != std::string::npos ? bootstrap_rc : 0;
+        e.inside_launchd_job = inside_job;
+        e.helper_log = "/h/.den/daemon-restart.log";
+        e.restart_launchd = [this](std::ostream&) {
+            calls.push_back("restart");
+            return launchd_result;
+        };
+        e.spawn_detached = [this] {
+            calls.push_back("detached");
+            return helper_pid;
         };
         e.stop = [this] {
             ++stops;
@@ -59,37 +67,67 @@ TEST_SUITE("selfupdate_restart") {
                   std::filesystem::path("/Users/x/Library/LaunchAgents/dev.den.daemon.plist")),
             out);
         CHECK(o == DaemonRestartOutcome::NotRunning);
-        CHECK(r.cmds.empty());
+        CHECK(r.calls.empty());
         CHECK(r.stops == 0);
         CHECK(out.str().empty());
     }
 
-    TEST_CASE("launchd daemon is re-bootstrapped (bootout, then bootstrap) onto the new binary") {
+    TEST_CASE("launchd daemon is restarted in-process when we are not part of its job") {
         Recorder r;
         std::ostringstream out;
         auto o = restart_daemon_after_update(
             r.env(true,
-                  std::filesystem::path("/Users/o'k/Library/LaunchAgents/dev.den.daemon.plist")),
+                  std::filesystem::path("/Users/x/Library/LaunchAgents/dev.den.daemon.plist")),
             out);
         CHECK(o == DaemonRestartOutcome::Relaunched);
-        REQUIRE(r.cmds.size() == 2);
-        CHECK(r.cmds[0] == "launchctl bootout 'gui/501' '/Users/o'\\''k/Library/LaunchAgents/"
-                           "dev.den.daemon.plist' 2>/dev/null");
-        CHECK(r.cmds[1] == "launchctl bootstrap 'gui/501' '/Users/o'\\''k/Library/LaunchAgents/"
-                           "dev.den.daemon.plist'");
+        CHECK(r.calls == std::vector<std::string>{"restart"});
         CHECK(r.stops == 0);
         CHECK(out.str().find("Restarted the den daemon") != std::string::npos);
         CHECK(out.str().find("OS_REASON_CODESIGNING") != std::string::npos);
         CHECK(out.str().find("docs/self-update.md") != std::string::npos);
     }
 
-    TEST_CASE("failed bootstrap is reported with the recovery command") {
+    TEST_CASE("a restart that needed the one tolerated codesign retry still counts") {
         Recorder r;
-        r.bootstrap_rc = 5;
+        r.launchd_result = LaunchdRestartResult::RestartedAfterCodesignRetry;
+        std::ostringstream out;
+        auto o = restart_daemon_after_update(
+            r.env(true, std::filesystem::path("/p/dev.den.daemon.plist")), out);
+        CHECK(o == DaemonRestartOutcome::Relaunched);
+    }
+
+    TEST_CASE("failed launchd restart is reported with the recovery command") {
+        Recorder r;
+        r.launchd_result = LaunchdRestartResult::Failed;
         std::ostringstream out;
         auto o = restart_daemon_after_update(
             r.env(true, std::filesystem::path("/p/dev.den.daemon.plist")), out);
         CHECK(o == DaemonRestartOutcome::Failed);
+        CHECK(out.str().find("den daemon install") != std::string::npos);
+    }
+
+    TEST_CASE("inside the daemon's own job the restart runs from a detached helper") {
+        Recorder r;
+        r.inside_job = true;
+        std::ostringstream out;
+        auto o = restart_daemon_after_update(
+            r.env(true, std::filesystem::path("/p/dev.den.daemon.plist")), out);
+        CHECK(o == DaemonRestartOutcome::Scheduled);
+        // Never an in-process bootout: it would kill us mid-sequence.
+        CHECK(r.calls == std::vector<std::string>{"detached"});
+        CHECK(out.str().find("detached helper (pid 4242") != std::string::npos);
+        CHECK(out.str().find("daemon-restart.log") != std::string::npos);
+    }
+
+    TEST_CASE("a detached helper that cannot start is reported") {
+        Recorder r;
+        r.inside_job = true;
+        r.helper_pid = std::nullopt;
+        std::ostringstream out;
+        auto o = restart_daemon_after_update(
+            r.env(true, std::filesystem::path("/p/dev.den.daemon.plist")), out);
+        CHECK(o == DaemonRestartOutcome::Failed);
+        CHECK(r.calls == std::vector<std::string>{"detached"});
         CHECK(out.str().find("den daemon install") != std::string::npos);
     }
 
@@ -99,7 +137,7 @@ TEST_SUITE("selfupdate_restart") {
         auto o = restart_daemon_after_update(r.env(true, std::nullopt), out);
         CHECK(o == DaemonRestartOutcome::Stopped);
         CHECK(r.stops == 1);
-        CHECK(r.cmds.empty());
+        CHECK(r.calls.empty());
         CHECK(out.str().find("den daemon run") != std::string::npos);
     }
 

@@ -115,15 +115,11 @@ uint32_t link_opt_only(const fs::path& pkg_path, const fs::path& env_dir, const 
     return ec ? 0 : 1;
 }
 
-/// A root-env path den refused to clobber, with the package that wanted it.
-struct PrefixConflict {
-    std::string package;
-    fs::path path;
-};
-
 uint32_t materialise_one(const fs::path& den_home, const fs::path& store,
                          const std::string& env_path, const PackageIndex* idx,
                          const MaterialiseOptions& opts, std::vector<PrefixConflict>& conflicts);
+
+} // namespace
 
 std::string describe_conflicts(const fs::path& prefix,
                                const std::vector<PrefixConflict>& conflicts) {
@@ -153,23 +149,28 @@ std::string describe_conflicts(const fs::path& prefix,
     return out.str();
 }
 
-} // namespace
-
-uint32_t materialise(const fs::path& den_home, const fs::path& store, const std::string& env_path,
-                     const PackageIndex* idx, const MaterialiseOptions& opts) {
-    std::vector<PrefixConflict> conflicts;
-    const auto links = materialise_one(den_home, store, env_path, idx, opts, conflicts);
+MaterialiseResult materialise_checked(const fs::path& den_home, const fs::path& store,
+                                      const std::string& env_path, const PackageIndex* idx,
+                                      const MaterialiseOptions& opts) {
+    MaterialiseResult result;
+    result.links = materialise_one(den_home, store, env_path, idx, opts, result.conflicts);
     // A change to this env's manifest changes the resolved set of every env
     // that inherits from it, so re-materialise descendants too. Their own
     // overrides win in resolve(), so overridden packages stay overridden.
     for (const auto& child : env_descendants(den_home, env_path)) {
         SPDLOG_DEBUG("materialise: refreshing descendant env '{}'", child);
-        materialise_one(den_home, store, child, idx, opts, conflicts);
+        materialise_one(den_home, store, child, idx, opts, result.conflicts);
     }
-    if (!conflicts.empty()) {
-        throw UserError(describe_conflicts(store.parent_path(), conflicts));
+    return result;
+}
+
+uint32_t materialise(const fs::path& den_home, const fs::path& store, const std::string& env_path,
+                     const PackageIndex* idx, const MaterialiseOptions& opts) {
+    auto result = materialise_checked(den_home, store, env_path, idx, opts);
+    if (!result.conflicts.empty()) {
+        throw UserError(describe_conflicts(store.parent_path(), result.conflicts));
     }
-    return links;
+    return result.links;
 }
 
 namespace {
@@ -310,13 +311,26 @@ uint32_t materialise_root(const fs::path& den_home, const fs::path& store, const
                 total += root_opt_link(ctx, pkg_path, name);
                 continue;
             }
+            const bool overwrite =
+                opts.overwrite.count(name) > 0 || opts.overwrite.count(entry) > 0;
             if (current) {
+                // Check the new version links cleanly before taking the old
+                // one down. A refused swap leaves the old version linked and
+                // recorded, so a caller can put the manifest back and be
+                // exactly where it started.
+                auto blocked = prefix_link_conflicts(ctx, pkg_path, name, subdirs, overwrite);
+                if (!blocked.empty()) {
+                    SPDLOG_WARN("not switching {} {} -> {}: {} conflicting path(s) in {}", name,
+                                *current, version, blocked.size(), ctx.prefix.string());
+                    for (auto& path : blocked) {
+                        conflicts.push_back({name, std::move(path)});
+                    }
+                    continue;
+                }
                 unlink_from_prefix(ctx, name);
             }
 
-            auto result =
-                link_into_prefix(ctx, pkg_path, name, subdirs,
-                                 opts.overwrite.count(name) > 0 || opts.overwrite.count(entry) > 0);
+            auto result = link_into_prefix(ctx, pkg_path, name, subdirs, overwrite);
             if (!result.conflicts.empty()) {
                 for (auto& path : result.conflicts) {
                     conflicts.push_back({name, std::move(path)});

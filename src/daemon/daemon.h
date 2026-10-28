@@ -18,6 +18,8 @@ namespace den {
 
 namespace fs = std::filesystem;
 
+class PackageProvider;
+
 // ---- Data types ------------------------------------------------------------
 
 struct PendingUpgrade {
@@ -60,6 +62,13 @@ struct DaemonState {
     std::optional<uint64_t> last_upgrade;
     std::vector<std::string> errors;
 };
+
+/// Apply one pending upgrade for the daemon's upgrade pass: install it,
+/// record it in the active env and link it, as one unit. If the new version
+/// cannot be linked it is rolled back (see apply_version_changes) and a
+/// UserError is thrown, which run_upgrade_pass records as a failed apply.
+void apply_daemon_upgrade(const Config& config, PackageProvider& provider, const PackageIndex& idx,
+                          const PendingUpgrade& pu);
 
 // ---- Lifecycle -------------------------------------------------------------
 

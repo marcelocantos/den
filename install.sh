@@ -215,16 +215,47 @@ latest_version() {
     fi
 }
 
+# download URL DEST: fetch, retrying (DEN_DOWNLOAD_ATTEMPTS tries in all,
+# default 3, sleeping DEN_DOWNLOAD_RETRY_DELAY*n seconds between them) only on
+# errors that say nothing about the bytes: DNS/connect failures, timeouts,
+# TLS handshake or record errors (e.g. curl 56 "bad decrypt" from LibreSSL),
+# truncated transfers and HTTP 408/429/5xx. Anything else (a 404, say)
+# fails at once. The checksum is verified by the caller afterwards and a
+# mismatch is fatal: it is never retried.
 download() {
     _url="$1"
     _dest="$2"
-    if check_cmd curl; then
-        curl -fsSL "$_url" -o "$_dest"
-    elif check_cmd wget; then
-        wget -qO "$_dest" "$_url"
-    else
-        err "need curl or wget"
-    fi
+    _max="${DEN_DOWNLOAD_ATTEMPTS:-3}"
+    _delay="${DEN_DOWNLOAD_RETRY_DELAY:-2}"
+    _try=1
+    while :; do
+        _drc=0
+        _code=""
+        if check_cmd curl; then
+            _code="$(curl -fsSL -w '%{http_code}' "$_url" -o "$_dest")" && return 0 || _drc=$?
+        elif check_cmd wget; then
+            wget -qO "$_dest" "$_url" && return 0 || _drc=$?
+            # wget: 4 = network failure, 8 = server error response.
+            case "$_drc" in 4) _drc=7 ;; 8) _drc=22; _code=500 ;; esac
+        else
+            err "need curl or wget"
+        fi
+        if [ "$_try" -ge "$_max" ] || ! is_transient_download_error "$_drc" "$_code"; then
+            err "download failed: $_url (exit $_drc${_code:+, http $_code})"
+        fi
+        say "download of $_url failed (exit $_drc${_code:+, http $_code}); retrying ($_try of $((_max - 1)))..."
+        sleep $((_delay * _try))
+        _try=$((_try + 1))
+    done
+}
+
+# is_transient_download_error CURL_EXIT HTTP_CODE
+is_transient_download_error() {
+    case "$1" in
+        5|6|7|16|18|28|35|52|55|56|92) return 0 ;;
+        22) case "$2" in 408|429|5[0-9][0-9]) return 0 ;; esac ;;
+    esac
+    return 1
 }
 
 verify_checksum() {

@@ -26,6 +26,30 @@ struct MaterialiseOptions {
     std::set<std::string> overwrite;
 };
 
+/// A root-env path den refused to clobber, with the package that wanted it.
+struct PrefixConflict {
+    std::string package;
+    fs::path path;
+};
+
+/// What materialise did: symlinks created, and root-env paths it refused to
+/// clobber (the packages that wanted them were left as they were).
+struct MaterialiseResult {
+    uint32_t links = 0;
+    std::vector<PrefixConflict> conflicts;
+};
+
+/// materialise, but conflicts are returned instead of thrown, so a caller
+/// can undo the manifest change that caused them.
+MaterialiseResult materialise_checked(const fs::path& den_home, const fs::path& store,
+                                      const std::string& env_path,
+                                      const PackageIndex* idx = nullptr,
+                                      const MaterialiseOptions& opts = {});
+
+/// The message materialise throws for `conflicts` in `prefix`.
+std::string describe_conflicts(const fs::path& prefix,
+                               const std::vector<PrefixConflict>& conflicts);
+
 /// Materialise an environment by resolving its manifest (walking the
 /// parent chain) and linking all resolved packages from the store.
 /// Keg-only packages get an opt/ symlink but are not linked into
@@ -40,7 +64,9 @@ struct MaterialiseOptions {
 ///
 /// A root package whose links would clobber something den does not manage is
 /// left unlinked; once every package has been processed a UserError lists the
-/// conflicting paths.
+/// conflicting paths. A root package already linked at another version keeps
+/// that version linked (and recorded) when the new one would conflict: the
+/// swap is checked before the old links come down.
 /// Returns the total number of symlinks created.
 uint32_t materialise(const fs::path& den_home, const fs::path& store, const std::string& env_path,
                      const PackageIndex* idx = nullptr, const MaterialiseOptions& opts = {});

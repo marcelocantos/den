@@ -24,16 +24,35 @@ binary. `den self-update` therefore checks for a running daemon once the new
 binary is in place:
 
 - **launchd-managed** (`den daemon install`): the job is re-bootstrapped —
-  `launchctl bootout` (the daemon receives SIGTERM and shuts down cleanly)
-  followed by `launchctl bootstrap` of the same plist — so launchd re-reads the
-  program and starts it on the new binary immediately. The output says
+  `launchctl bootout gui/<uid>/dev.den.daemon` (the daemon receives SIGTERM and
+  shuts down cleanly) followed by
+  `launchctl bootstrap gui/<uid> ~/Library/LaunchAgents/dev.den.daemon.plist` —
+  so launchd re-reads the program and starts it on the new binary. den then
+  waits up to 15 seconds for `launchctl print` to report a new pid. One
+  `OS_REASON_CODESIGNING` spawn failure is tolerated (den kickstarts the job
+  once); a second one is reported as a failure. The output says
   `Restarted the den daemon so it runs the new binary.`
+  When the update is triggered by the daemon itself, the bootout would kill
+  the process doing the restart, so den hands the bootout/bootstrap to a
+  detached one-shot helper (`/bin/sh`, double-forked into its own session)
+  that outlives the daemon and logs to `~/.den/daemon-restart.log`.
 - **started by hand** (`den daemon run`): the daemon is sent SIGTERM and
   self-update tells you to start it again.
 - **not running**: nothing happens.
 
 If the restart fails, self-update says so and points at `den daemon install`,
-which reloads the launchd job.
+which reloads the launchd job the same way.
+
+`launchctl` is always run with a scrubbed environment (`env -i` with only
+`HOME`, `USER` and `PATH=/usr/bin:/bin:/usr/sbin:/sbin`), so nothing from the
+calling session (`SSH_AUTH_SOCK`, `SSH_*`, `TERM`, shell variables) can reach
+the service: launchd builds the daemon's environment from the plist's
+`EnvironmentVariables`, its own defaults and the gui domain only.
+
+**This is a stopgap.** It relies on behaviour observed on macOS 27 — that
+re-bootstrapping a job drops the launch constraint launchd recorded for the old
+binary — not on a documented guarantee. The real fix is signing den with a
+team identity, so the recorded requirement stays satisfied across updates.
 
 ## `last exit reason = OS_REASON_CODESIGNING`
 

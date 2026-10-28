@@ -17,6 +17,7 @@
 #include "../store/link.h"
 #include "../store/store.h"
 #include "../tap/url_formula.h"
+#include "../trust/degraded_installs.h"
 #include "../trust/trust_model.h"
 
 #include <spdlog/spdlog.h>
@@ -127,43 +128,46 @@ bool install_one(const Config& config, const Package& pkg) {
             fixed_cellar_refusal(pkg, *best, required_bottle_cellar(*best, archive), config.store));
     }
 
-    // 🎯T42/T64: independent trust cross-check BEFORE we download or extract.
+    // 🎯T42/T64: trust cross-check BEFORE we download or extract.
     //
     // Source A is the hash Homebrew's API gave us (archive.sha256, baked into
-    // the index). Source B is den's replica snapshot, served from a SEPARATE
-    // origin (raw.githubusercontent.com). An attacker must compromise BOTH to
-    // swap a bottle: they would need a matching SHA256 in Homebrew's API *and*
-    // in den's GitHub replica (which is diff-verified against GHCR in CI).
+    // the index). Source B is den's replica snapshot — the LOCAL copy shipped
+    // with den (or a <den_home>/trust override); nothing is fetched here.
+    // Replica entries are seeded by CI from formulae.brew.sh's own hashes,
+    // each confirmed by pulling the bottle from GHCR, so B catches A changing
+    // a hash after the snapshot was taken, not a bottle that was already bad
+    // when it was seeded.
     //
-    // We consult the bundled local snapshot here. fetch from the live CDN is
-    // intentionally avoided on the hot install path (network cost, offline
-    // installs); the replica-verify CI pipeline keeps the bundled snapshot
-    // fresh and GHCR-verified.
+    // A missing entry or missing snapshot degrades to single-source (warned
+    // and recorded in the degraded-install ledger). A snapshot that exists
+    // but cannot be read refuses: corrupting the file must not be a way to
+    // switch the cross-check off.
+    std::optional<DegradedInstall> degraded;
+    bool trust_verified = false;
     {
         MaybeHash homebrew_hash = archive.sha256.empty() ? std::nullopt : MaybeHash(archive.sha256);
-        MaybeHash replica_hash;
-        try {
-            auto replica = load_local_replica(config);
-            replica_hash = replica_lookup(replica, pkg.name, pkg.upstream_version(), *best);
-        } catch (const std::exception& e) {
-            // A corrupt replica snapshot leaves the replica source unreachable
-            // (nullopt) rather than aborting — the cross-check then degrades to
-            // single-source with a warning.
-            SPDLOG_WARN("trust replica unavailable for {} {}: {}", pkg.name, pkg.version, e.what());
-        }
+        ReplicaAnswer replica =
+            lookup_local_replica(config, pkg.name, pkg.upstream_version(), *best);
 
-        TrustCheckResult trust = cross_check_hashes(homebrew_hash, replica_hash);
+        TrustCheckResult trust = cross_check_hashes(homebrew_hash, replica);
         switch (trust.decision) {
         case TrustDecision::Proceed:
             SPDLOG_INFO("trust: {} {} cross-checked against replica — {}", pkg.name, pkg.version,
                         trust.message);
+            trust_verified = true;
             break;
         case TrustDecision::WarnProceed:
             SPDLOG_WARN("trust: {} {} — {} (degraded trust)", pkg.name, pkg.version, trust.message);
+            degraded = DegradedInstall{pkg.name,
+                                       pkg.version,
+                                       homebrew_hash ? replica_status_tag(replica.status)
+                                                     : "homebrew-hash-missing",
+                                       *best,
+                                       {}};
             break;
         case TrustDecision::Refuse:
             throw UserError("refusing to install '" + pkg.name + " " + pkg.version +
-                            "': independent trust check failed — " + trust.message);
+                            "': trust check failed — " + trust.message);
         }
     }
 
@@ -265,6 +269,15 @@ bool install_one(const Config& config, const Package& pkg) {
     // were already in the shared Cellar, so a Homebrew install is never
     // marked as ours and `den cleanup` will not delete it.
     mark_keg_owned(dest, pkg.name, pkg.version, pkg.version_scheme);
+
+    // Keep single-source installs visible after the warning has scrolled
+    // away (`den doctor`, `den daemon status`).
+    if (degraded) {
+        degraded->keg = dest;
+        record_degraded_install(config, *degraded);
+    } else if (trust_verified) {
+        clear_degraded_install(config, pkg.name, pkg.version);
+    }
 
     // Text files relocated to <prefix>/opt/<name> (e.g. node shebangs) need
     // the shared opt link; create it, or move it along from an older den keg.
