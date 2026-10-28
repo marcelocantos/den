@@ -4,6 +4,7 @@
 #include "upgrade_pass.h"
 
 #include "../activity/activity.h"
+#include "../core/version.h"
 #include "../store/pins.h"
 #include "inuse.h"
 
@@ -74,6 +75,15 @@ UpgradePassResult run_upgrade_pass(const fs::path& cellar, const fs::path& den_h
             SPDLOG_WARN("upgrade_pass: skipping malformed pending entry (name='{}')", pu.name);
             still_pending.push_back(pu);
             continue;
+        }
+
+        // Defence in depth: compute_pending never queues a downgrade, but
+        // state.pending may come from elsewhere (an older den's state file).
+        if (version_delta(pu.installed, pu.available) != VersionDelta::Newer) {
+            SPDLOG_WARN("upgrade_pass: {} {} -> {} is not an upgrade; not applying", pu.name,
+                        pu.installed, pu.available);
+            result.not_newer.push_back(pu);
+            continue; // dropped from pending
         }
 
         fs::path installed_keg = cellar / pu.name / pu.installed;

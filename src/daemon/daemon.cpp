@@ -4,6 +4,7 @@
 #include "daemon.h"
 #include "../activity/activity.h"
 #include "../core/error.h"
+#include "../core/version.h"
 #include "../env/environment.h"
 #include "../env/manifest.h"
 #include "../index/index.h"
@@ -295,6 +296,21 @@ DaemonState read_daemon_state(const fs::path& den_home) {
             }
         }
 
+        if (j.contains("index_older") && j["index_older"].is_array()) {
+            for (const auto& p : j["index_older"]) {
+                if (!p.is_object())
+                    continue;
+                PendingUpgrade pu;
+                if (p.contains("name") && p["name"].is_string())
+                    pu.name = p["name"].get<std::string>();
+                if (p.contains("installed") && p["installed"].is_string())
+                    pu.installed = p["installed"].get<std::string>();
+                if (p.contains("available") && p["available"].is_string())
+                    pu.available = p["available"].get<std::string>();
+                state.index_older.push_back(std::move(pu));
+            }
+        }
+
         if (j.contains("deferred") && j["deferred"].is_array()) {
             for (const auto& d : j["deferred"]) {
                 if (!d.is_object())
@@ -333,6 +349,12 @@ void write_daemon_state(const fs::path& den_home, const DaemonState& state) {
     }
     j["pending"] = pending;
 
+    nlohmann::json older = nlohmann::json::array();
+    for (const auto& p : state.index_older) {
+        older.push_back({{"name", p.name}, {"installed", p.installed}, {"available", p.available}});
+    }
+    j["index_older"] = older;
+
     nlohmann::json deferred = nlohmann::json::array();
     for (const auto& d : state.deferred) {
         deferred.push_back({{"name", d.name},
@@ -365,8 +387,11 @@ void write_daemon_state(const fs::path& den_home, const DaemonState& state) {
 // ---- Maintenance cycle (🎯T13) ---------------------------------------------
 
 std::vector<PendingUpgrade> compute_pending(const std::map<std::string, std::string>& installed,
-                                            const PackageIndex& idx) {
+                                            const PackageIndex& idx,
+                                            std::vector<PendingUpgrade>* index_older) {
     std::vector<PendingUpgrade> out;
+    if (index_older)
+        index_older->clear();
     for (const auto& [name, version] : installed) {
         const Package* pkg = idx.find(name);
         if (!pkg || pkg->version.empty() || pkg->version == version)
@@ -375,9 +400,27 @@ std::vector<PendingUpgrade> compute_pending(const std::map<std::string, std::str
             continue; // cask upgrades stay manual
         if (pkg->disabled)
             continue;
-        out.push_back({name, version, pkg->version});
+        switch (version_delta(version, pkg->version)) {
+        case VersionDelta::Newer:
+            out.push_back({name, version, pkg->version});
+            break;
+        case VersionDelta::Older:
+            // Never downgrade from an upgrade path: the index can lag what
+            // is installed (a stale cache or mirror) or upstream can move a
+            // formula back (e.g. openssl@3 3.6.x -> 3.5 LTS). Report it.
+            if (index_older)
+                index_older->push_back({name, version, pkg->version});
+            break;
+        case VersionDelta::Same:
+            break;
+        }
     }
     return out; // std::map iteration → already sorted by name
+}
+
+std::string index_older_message(const PendingUpgrade& p) {
+    return p.name + " " + p.installed + ": index older than installed (index has " + p.available +
+           "); not downgrading. To downgrade explicitly: den use " + p.name + " " + p.available;
 }
 
 MaintenanceReport run_maintenance_cycle(const fs::path& cellar, const fs::path& den_home,
@@ -399,7 +442,7 @@ MaintenanceReport run_maintenance_cycle(const fs::path& cellar, const fs::path& 
     }
 
     try {
-        state.pending = compute_pending(hooks.installed(), idx);
+        state.pending = compute_pending(hooks.installed(), idx, &state.index_older);
     } catch (const std::exception& e) {
         state.errors.push_back(std::string("outdated check: ") + e.what());
         report.pending = state.pending.size();
@@ -411,7 +454,10 @@ MaintenanceReport run_maintenance_cycle(const fs::path& cellar, const fs::path& 
                             [&](const PendingUpgrade& p) { return p.name == d.name; });
     });
     report.pending = state.pending.size();
+    report.index_older = state.index_older.size();
     log_daemon(den_home, std::to_string(report.pending) + " package(s) outdated");
+    for (const auto& o : state.index_older)
+        log_daemon(den_home, index_older_message(o));
 
     if (settings.auto_download && hooks.prefetch) {
         // A pinned package is never upgraded (the upgrade pass and `den

@@ -12,6 +12,7 @@
 #include "../build/source_build.h"
 #include "../core/config.h"
 #include "../core/error.h"
+#include "../core/version.h"
 #include "../daemon/daemon.h"
 #include "../doctor/doctor.h"
 #include "../env/environment.h"
@@ -1196,6 +1197,14 @@ void Cli::M::setup() {
                 std::cout << "  " << p.name << " " << p.installed << " -> " << p.available << "\n";
             }
         }
+        if (!state.index_older.empty()) {
+            std::cout << "Not downgrading (index older than installed): "
+                      << state.index_older.size() << "\n";
+            for (const auto& p : state.index_older) {
+                std::cout << "  " << p.name << " " << p.installed << " (index has " << p.available
+                          << ")\n";
+            }
+        }
 
         if (is_daemon_running(cfg)) {
             std::cout << "Daemon: running\n";
@@ -1413,8 +1422,16 @@ void Cli::M::setup() {
         for (const auto& pkg : installed) {
             const auto* index_pkg = idx.find(pkg.name);
             if (index_pkg && index_pkg->version != pkg.version) {
+                const auto delta = version_delta(pkg.version, index_pkg->version);
+                if (delta == VersionDelta::Same)
+                    continue;
                 std::cout << std::left << std::setw(static_cast<int>(max_name + 2)) << pkg.name
                           << pkg.version << " -> " << index_pkg->version;
+                if (delta == VersionDelta::Older) {
+                    // Never offered as an upgrade; listed so it is not a surprise.
+                    std::cout << "  [index older than installed; not upgrading]\n";
+                    continue;
+                }
                 if (pins.count(pkg.name)) {
                     std::cout << "  [pinned at " << pins.at(pkg.name) << "]";
                 }
