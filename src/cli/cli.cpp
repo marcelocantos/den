@@ -35,7 +35,10 @@
 #include "../store/store.h"
 #include "../supervisor/supervisor.h"
 #include "../tap/tap.h"
+#include "../trust/degraded_installs.h"
 #include "../trust/trust_model.h"
+#include "../trust/unattended.h"
+#include "trust_review.h"
 
 #include <CLI11.hpp>
 #include <nlohmann/json.hpp>
@@ -207,6 +210,7 @@ struct Cli::M {
 
     // Top-level flags.
     bool help_agent = false;
+    bool unattended = false;
 
     // install
     std::vector<std::string> install_names;
@@ -302,6 +306,8 @@ void Cli::M::setup() {
     app.require_subcommand(0, 1);
 
     app.add_flag("--help-agent", help_agent, "Print help text and agent guide");
+    app.add_flag("--unattended", unattended,
+                 "Apply the unattended trust policy (trust.unattended) as the daemon does");
 
     // --- install ---
     auto* install = app.add_subcommand("install", "Install packages");
@@ -337,15 +343,59 @@ void Cli::M::setup() {
                 return;
             }
             auto active = active_env_path(cfg.den_home);
+            // Unattended source builds follow trust.unattended_source_builds
+            // (trust/unattended.h): off, or allowlisted formulae whose source
+            // hash cross-checks. Everything else is deferred and reported.
+            TrustPolicy policy = current_trust_policy(cfg);
+            std::vector<std::string> deferred;
             for (const auto& name : install_names) {
                 auto* pkg = idx.find(name);
                 std::string version = pkg ? pkg->version : "unknown";
+                if (policy.unattended && pkg) {
+                    MaybeHash source_hash =
+                        pkg->source_sha256 ? MaybeHash(*pkg->source_sha256) : std::nullopt;
+                    ReplicaAnswer replica =
+                        lookup_local_replica(cfg, pkg->name, pkg->upstream_version(), "source");
+                    TrustCheckResult check = cross_check_hashes(source_hash, replica);
+                    bool accepted = is_install_accepted(cfg, pkg->name, version);
+                    switch (source_build_action(policy, name, check.decision, accepted)) {
+                    case SourceBuildAction::Build:
+                        break;
+                    case SourceBuildAction::Refuse:
+                        throw UserError("refusing to build '" + name + " " + version +
+                                        "' from source: trust check failed — " + check.message);
+                    case SourceBuildAction::Defer: {
+                        bool listed =
+                            policy.source_builds && policy.source_build_allowlist.count(name);
+                        DegradedInstall d{
+                            pkg->name, version, "unattended-source-build", "source", {}};
+                        d.status = !policy.source_builds ? "trust.unattended_source_builds=off"
+                                   : !listed             ? "not in trust.source_build_allowlist"
+                                                         : replica_status_tag(replica.status);
+                        d.bottle_sha = pkg->source_sha256.value_or("");
+                        record_refused_install(cfg, d);
+                        std::cerr << "deferred: source build of " << name << " " << version << " ("
+                                  << *policy.unattended << ": " << d.status
+                                  << "); review with `den trust review`\n";
+                        deferred.push_back(name);
+                        continue;
+                    }
+                    }
+                }
                 auto dest = den::build_from_source(cfg, idx, name, version);
                 with_manifest(cfg.den_home, active,
                               [&](Manifest& m) { m.packages["homebrew"][name] = version; });
+                // Built: a deferral (or the accept that let it through) is done.
+                clear_refused_install(cfg, name, version);
             }
-            auto links = materialise(cfg.den_home, cfg.store, active, &idx, link_opts);
-            std::cout << "Materialised: " << links << " symlinks.\n";
+            if (deferred.size() < install_names.size()) {
+                auto links = materialise(cfg.den_home, cfg.store, active, &idx, link_opts);
+                std::cout << "Materialised: " << links << " symlinks.\n";
+            }
+            if (!deferred.empty()) {
+                throw UserError("deferred " + std::to_string(deferred.size()) +
+                                " unattended source build(s); nothing was built for them");
+            }
             return;
         }
 
@@ -934,6 +984,35 @@ void Cli::M::setup() {
                   << " symlinks.\n";
     });
 
+    // --- trust ---
+    auto* trust_cmd =
+        app.add_subcommand("trust", "Review installs the unattended trust policy held back");
+    trust_cmd->require_subcommand(1);
+    trust_cmd->add_subcommand("review", "List held-back, accepted and degraded installs")
+        ->callback([] {
+            auto cfg = Config::detect();
+            format_trust_review(std::cout, summarize_degraded_installs(cfg));
+        });
+    static std::string trust_accept_target;
+    auto* trust_accept = trust_cmd->add_subcommand(
+        "accept", "Let one held-back <formula>@<version> install unattended");
+    trust_accept->add_option("target", trust_accept_target, "<formula>@<version>")->required();
+    trust_accept->callback([] {
+        if (auto why = unattended_reason())
+            throw UserError("`den trust accept` needs a person: this run is unattended (" + *why +
+                            ")");
+        auto target = parse_formula_at_version(trust_accept_target);
+        if (!target)
+            throw UserError("expected <formula>@<version>, got '" + trust_accept_target + "'");
+        auto cfg = Config::detect();
+        if (!accept_refused_install(cfg, target->first, target->second))
+            throw UserError("nothing held back for " + trust_accept_target +
+                            " (see `den trust review`)");
+        std::cout << "Accepted " << trust_accept_target
+                  << ". The daemon installs it on its next pass; `den upgrade " << target->first
+                  << "` installs it now.\n";
+    });
+
     // --- doctor ---
     auto* doctor_cmd = app.add_subcommand("doctor", "Check system for potential problems");
     doctor_cmd->callback([] {
@@ -1423,7 +1502,10 @@ void Cli::M::setup() {
 
         auto state = read_daemon_state(cfg.den_home);
         format_daemon_status(std::cout, state);
-        format_degraded_trust(std::cout, summarize_degraded_installs(cfg));
+        auto ledger = summarize_degraded_installs(cfg);
+        format_degraded_trust(std::cout, ledger);
+        format_trust_status(std::cout, ledger,
+                            make_trust_policy(read_settings(cfg.den_home).trust, std::nullopt));
 
         auto s = read_settings(cfg.den_home);
         std::cout << "Auto-download: " << (s.daemon.auto_download ? "on" : "off") << "\n";
@@ -1908,6 +1990,16 @@ Cli::Cli() : m(std::make_unique<M>()) {
 Cli::~Cli() = default;
 
 int Cli::run(int argc, char** argv) {
+    // Subcommand callbacks run inside parse(), so mark the run unattended
+    // before parsing rather than from the flag's value afterwards.
+    for (int i = 1; i < argc; ++i) {
+        if (std::string_view(argv[i]) == "--unattended") {
+            set_unattended(std::string("--unattended"));
+            break;
+        }
+        if (std::string_view(argv[i]) == "--")
+            break;
+    }
     try {
         m->app.parse(argc, argv);
     } catch (const CLI::ParseError& e) {

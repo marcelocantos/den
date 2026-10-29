@@ -119,6 +119,21 @@ std::vector<Finding> findings_from_trust_report(const TrustReport& report) {
         }
         warn(findings, std::move(msg));
     }
+    if (!degraded.ledger_error && degraded.refused > 0) {
+        std::string msg = "trust: " + format_trust_ledger(degraded) +
+                          " — held back or deferred by the unattended trust policy:";
+        constexpr size_t kMaxListed = 10;
+        for (size_t i = 0; i < degraded.refused_installs.size() && i < kMaxListed; ++i) {
+            const auto& d = degraded.refused_installs[i];
+            msg += (i ? ", " : " ") + d.name + "@" + d.version;
+        }
+        if (degraded.refused_installs.size() > kMaxListed) {
+            msg +=
+                ", … (+" + std::to_string(degraded.refused_installs.size() - kMaxListed) + " more)";
+        }
+        msg += "; review with `den trust review`";
+        warn(findings, std::move(msg));
+    }
 
     if (report.active_advanced_layers.empty() && report.replica_source_active) {
         warn(findings, "trust: no advanced trust layers active (🎯T44 not yet wired)");
@@ -146,6 +161,8 @@ void check_trust_model(const Config& config, std::vector<Finding>& findings) {
     std::cout << "[trust] replica source: " << report.replica_source << "\n";
     std::cout << "[trust] degraded installs: " << format_degraded_counts(report.degraded_installs)
               << "\n";
+    if (!report.degraded_installs.ledger_error)
+        std::cout << "[trust] held back (unattended): " << report.degraded_installs.refused << "\n";
     std::cout << "[trust] layers: ";
     if (report.active_advanced_layers.empty()) {
         std::cout << "none";

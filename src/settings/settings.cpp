@@ -110,7 +110,47 @@ inline void from_json(const nlohmann::json& j, TapSettings& t) {
     }
 }
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Settings, daemon, store, search, taps, casks)
+inline void to_json(nlohmann::json& j, const TrustSettings& t) {
+    j = nlohmann::json{
+        {"unattended", t.unattended},
+        {"notify", t.notify},
+        {"unattended_source_builds", t.unattended_source_builds},
+        {"source_build_allowlist", t.source_build_allowlist},
+    };
+}
+
+inline void from_json(const nlohmann::json& j, TrustSettings& t) {
+    t = TrustSettings{};
+    if (!j.is_object())
+        return;
+    if (j.contains("unattended") && j["unattended"].is_string())
+        t.unattended = j["unattended"].get<std::string>();
+    if (j.contains("notify"))
+        json_as_bool(j["notify"], &t.notify);
+    if (j.contains("unattended_source_builds") && j["unattended_source_builds"].is_string())
+        t.unattended_source_builds = j["unattended_source_builds"].get<std::string>();
+    if (j.contains("source_build_allowlist")) {
+        const auto& v = j["source_build_allowlist"];
+        std::vector<std::string> names;
+        if (v.is_array()) {
+            for (const auto& n : v)
+                if (n.is_string() && !n.get_ref<const std::string&>().empty())
+                    names.push_back(n.get<std::string>());
+        } else if (v.is_string()) {
+            std::stringstream ss(v.get<std::string>());
+            std::string n;
+            while (std::getline(ss, n, ',')) {
+                auto b = n.find_first_not_of(" \t");
+                auto e = n.find_last_not_of(" \t");
+                if (b != std::string::npos)
+                    names.push_back(n.substr(b, e - b + 1));
+            }
+        }
+        t.source_build_allowlist = std::move(names);
+    }
+}
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Settings, daemon, store, search, taps, trust, casks)
 
 // ---------------------------------------------------------------------------
 // File helpers
@@ -293,7 +333,8 @@ void set_setting(const fs::path& den_home, const std::string& key, const std::st
     // Known boolean keys always store JSON booleans (not "true"/"false" strings).
     // Without this, first-time `den set daemon.auto_upgrade true` wrote a string
     // that from_json ignored, so the daemon kept the default false.
-    const bool known_bool = (key == "daemon.auto_download" || key == "daemon.auto_upgrade");
+    const bool known_bool =
+        (key == "daemon.auto_download" || key == "daemon.auto_upgrade" || key == "trust.notify");
     if (known_bool || (cur->contains(leaf) && (*cur)[leaf].is_boolean())) {
         if (value == "true")
             (*cur)[leaf] = true;
@@ -304,6 +345,13 @@ void set_setting(const fs::path& den_home, const std::string& key, const std::st
         save_json_atomic(den_home, j);
         return;
     }
+
+    // Enumerated trust keys: reject typos here rather than letting a bad value
+    // fail closed later without explanation.
+    if (key == "trust.unattended" && value != "warn" && value != "refuse")
+        throw std::invalid_argument("expected 'warn' or 'refuse' for key: " + key);
+    if (key == "trust.unattended_source_builds" && value != "off" && value != "allowlist")
+        throw std::invalid_argument("expected 'off' or 'allowlist' for key: " + key);
 
     // Infer the stored type from the existing value, if present.
     if (cur->contains(leaf)) {

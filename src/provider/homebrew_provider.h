@@ -4,7 +4,11 @@
 #pragma once
 
 #include "../index/package.h"
+#include "../trust/trust_model.h"
 #include "package_provider.h"
+
+#include <optional>
+#include <string>
 
 namespace den {
 
@@ -48,6 +52,23 @@ class HomebrewProvider : public PackageProvider {
 /// casks or packages with no archive for this platform. The trust
 /// cross-check still runs at install time, before extraction.
 std::optional<fs::path> prefetch_bottle(const Config& config, const Package& pkg);
+
+/// The trust cross-check of one bottle, without downloading it.
+struct BottleTrust {
+    TrustDecision decision = TrustDecision::Refuse;
+    std::string message;
+    std::string reason_tag; // replica_status_tag() or "homebrew-hash-missing"
+    std::string bottle_tag;
+};
+
+/// Cross-check the bottle install_one would pour for `pkg` (archive.sha256
+/// against den's local replica snapshot). Nothing for casks, URL formulae and
+/// packages with no bottle for this platform: they are not screened.
+std::optional<BottleTrust> evaluate_bottle_trust(const Config& config, const Package& pkg);
+
+/// The same check for an explicit bottle tag and archive.
+BottleTrust evaluate_bottle_trust(const Config& config, const Package& pkg, const std::string& tag,
+                                  const Package::Archive& archive);
 
 /// Pour one formula keg (no dependency resolution, no manifest change) into
 /// config.store, write its DEN_RECEIPT and opt link. Used by `den

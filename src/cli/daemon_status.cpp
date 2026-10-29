@@ -37,6 +37,17 @@ void format_daemon_status(std::ostream& out, const DaemonState& state) {
                 << (d.reason.empty() ? "in use" : d.reason) << "]\n";
         }
     }
+
+    if (!state.trust_held.empty()) {
+        out << "Held back by the unattended trust policy (see `den trust review`):\n";
+        for (const auto& h : state.trust_held)
+            out << "  " << h.name << " " << h.installed << " -> " << h.available << "  ["
+                << h.reason << "]\n";
+    }
+    if (state.last_trust_notification) {
+        out << "Last held-back notification: " << (now_secs() - *state.last_trust_notification)
+            << "s ago\n";
+    }
 }
 
 void format_degraded_trust(std::ostream& out, const DegradedInstallSummary& summary) {
