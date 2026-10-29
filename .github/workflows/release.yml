@@ -1,7 +1,7 @@
-# Binaries are distributed via install.sh and GitHub Release assets. GA
-# releases are normally cut by promote-rc.yml (the marcelocantos/homebrew-tap
-# formula is then published with `make release-tap` on the dev Mac); releases
-# promote-rc creates use github.token and so do not trigger this workflow.
+# Binaries are distributed via install.sh and GitHub Release assets only
+# (there is no Homebrew formula). GA releases are normally cut by
+# promote-rc.yml; releases promote-rc creates use github.token and so do not
+# trigger this workflow.
 name: Release
 
 on:

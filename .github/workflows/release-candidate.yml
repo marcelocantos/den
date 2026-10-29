@@ -277,22 +277,6 @@ jobs:
           RC_TAG="${{ needs.preflight.outputs.rc_tag }}"
           tar czf "harness-linux-logs-${RC_TAG}.tar.gz" harness-logs/
 
-      # Homebrew bottles: the darwin-aarch64 binary repackaged as
-      # den/<version>/... with an INSTALL_RECEIPT.json, one asset per
-      # supported arm64 macOS tag (see scripts/homebrew-bottles.py). They
-      # go in dist/ so the checksums, dry-run artifact and release upload
-      # below pick them up. den.rb is a formula pointing at this RC (with
-      # the bottle block), for tapping the RC locally before promotion.
-      - name: Build Homebrew bottles
-        run: |
-          RC_TAG="${{ needs.preflight.outputs.rc_tag }}"
-          VERSION="${{ github.event.inputs.version }}"
-          darwin="dist/den-${VERSION}-darwin-aarch64.tar.gz"
-          python3 scripts/homebrew-bottles.py build --version "$VERSION" --tarball "$darwin" --out dist
-          python3 scripts/homebrew-bottles.py verify --version "$VERSION" --tarball "$darwin" --dir dist
-          python3 scripts/homebrew-bottles.py formula --version "$VERSION" --release-tag "$RC_TAG" --dir dist > den.rb
-          cat den.rb
-
       - name: Generate consolidated checksums
         run: |
           VERSION="${{ github.event.inputs.version }}"
@@ -330,10 +314,6 @@ jobs:
             echo "| \`den-${VERSION}-darwin-aarch64.tar.gz\` | macOS arm64 |"
             echo "| \`den-${VERSION}-linux-x86_64.tar.gz\` | Linux x86_64 |"
             echo "| \`den-${VERSION}-linux-aarch64.tar.gz\` | Linux arm64 |"
-            for tag in arm64_golden_gate arm64_tahoe arm64_sequoia arm64_sonoma; do
-              echo "| \`den-${VERSION}.${tag}.bottle.tar.gz\` | Homebrew bottle (${tag}) |"
-            done
-            echo "| \`den.rb\` | Homebrew formula for this RC (bottled) |"
             echo "| \`den-${VERSION}-checksums.txt\` | SHA256 checksums |"
             echo "| \`harness-linux-logs-${RC_TAG}.tar.gz\` | Linux harness logs |"
             echo ""
@@ -367,7 +347,6 @@ jobs:
             dist/*.tar.gz
             dist/*.sha256
             ${{ env.CHECKSUMS_FILE }}
-            den.rb
             release-notes.md
             harness-linux-logs-${{ needs.preflight.outputs.rc_tag }}.tar.gz
           if-no-files-found: error
@@ -406,7 +385,6 @@ jobs:
             dist/*.tar.gz \
             dist/*.sha256 \
             "${{ env.CHECKSUMS_FILE }}" \
-            den.rb \
             "harness-linux-logs-${RC_TAG}.tar.gz"
 
       - name: Print summary

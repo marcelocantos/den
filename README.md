@@ -63,18 +63,6 @@ replaces it). An installed den moves to another release with
 `den self-update --version X.Y.Z[-rc.N]`; asking for the release that is
 already installed (identical binary) is a no-op unless you add `--force`.
 
-Or with Homebrew (macOS, Apple Silicon):
-
-```bash
-brew install marcelocantos/tap/den
-brew trust --formula marcelocantos/tap/den   # Homebrew 7 and later
-```
-
-Homebrew 7 only loads formulae from third-party taps you have trusted.
-`brew install marcelocantos/tap/den` trusts it as it installs, but if you
-installed before Homebrew 7 (or `brew upgrade` skips den), run the
-`brew trust` line once. It trusts this one formula, not the whole tap.
-
 Or build from source:
 
 ```bash
