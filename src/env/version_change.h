@@ -32,6 +32,9 @@ struct RolledBackChange {
     VersionChange change; // `to` is the version that was attempted
     std::vector<fs::path> conflicts;
     bool keg_removed = false; // the new keg was poured by this attempt and is gone again
+    /// Set for a dependent that joined the batch only because `with` (one of
+    /// its runtime dependencies) moved; it is undone when `with` is.
+    std::string with;
 };
 
 struct VersionChangeResult {
@@ -41,6 +44,12 @@ struct VersionChangeResult {
     /// Conflicts nothing was rolled back for (fresh installs, which keep the
     /// manifest entry so a later materialise retries, as before).
     std::vector<PrefixConflict> conflicts;
+    /// Dependents added to the batch by `upgrade_dependents` (also listed in
+    /// `applied` or `rolled_back`, like any other change).
+    std::vector<VersionChange> dependents;
+    /// Dependents with a revision bump that were left alone because they are
+    /// pinned (`to` is the index version they would have moved to).
+    std::vector<VersionChange> pinned_dependents;
 };
 
 struct VersionChangeOptions {
@@ -50,6 +59,12 @@ struct VersionChangeOptions {
     bool install = true;
     /// Add the provider's auto deps to the manifest (`den install`).
     bool record_auto_deps = false;
+    /// Also move installed runtime dependents of the batch whose index entry
+    /// is a revision bump of the installed version (same upstream version,
+    /// higher `_<revision>`), as `brew upgrade` does: homebrew-core bumps a
+    /// dependent's revision when a dependency changes ABI, so the two have to
+    /// move together. Needs an index. Pinned dependents are left alone.
+    bool upgrade_dependents = false;
 };
 
 /// Move packages in the active environment to new versions as one unit per
@@ -59,8 +74,13 @@ struct VersionChangeOptions {
 /// was: its manifest entry returns to `from`, the old version stays linked
 /// and recorded, the new keg is removed from the store if this attempt poured
 /// it, and `<prefix>/opt/<name>` is pointed back where it was if the pour
-/// moved it. An install that throws undoes every pour in the batch before the
-/// error propagates; nothing reaches the manifest.
+/// moved it. Opt links are snapshotted for the whole batch: a dependency's
+/// `<prefix>/opt/<dep>` that the batch moved forward is pointed back too when
+/// no change that stays applied needs it, so existing dependents keep loading
+/// the dependency they had. A dependent added by `upgrade_dependents` is
+/// rolled back with the dependency that brought it in. An install that throws
+/// undoes every pour and every opt link the batch moved before the error
+/// propagates; nothing reaches the manifest.
 VersionChangeResult apply_version_changes(const Config& config, PackageProvider& provider,
                                           const PackageIndex* idx,
                                           std::vector<VersionChange> changes,

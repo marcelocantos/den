@@ -69,7 +69,8 @@ struct DaemonState {
 };
 
 /// Apply one pending upgrade for the daemon's upgrade pass: install it,
-/// record it in the active env and link it, as one unit. If the new version
+/// record it in the active env and link it, as one unit, together with any
+/// installed dependents the index revision-bumped for it. If the new version
 /// cannot be linked it is rolled back (see apply_version_changes) and a
 /// UserError is thrown, which run_upgrade_pass records as a failed apply.
 void apply_daemon_upgrade(const Config& config, PackageProvider& provider, const PackageIndex& idx,

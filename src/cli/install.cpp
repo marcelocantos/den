@@ -280,7 +280,25 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
     // Each package moves as a unit: one that cannot be linked at its new
     // version is put back (manifest, links, opt link) and its new keg removed.
     std::cout << "==> Materialising environment...\n";
-    auto res = apply_version_changes(config, provider, &idx, changes);
+    // Installed dependents whose index entry is a revision bump (homebrew-core
+    // rebuilt them for the new dependency) join the batch, as with brew.
+    VersionChangeOptions opts;
+    opts.upgrade_dependents = true;
+    auto res = apply_version_changes(config, provider, &idx, changes, opts);
+    if (!res.dependents.empty()) {
+        std::cout << "Also upgraded " << res.dependents.size()
+                  << " dependent(s) rebuilt for the new version:\n";
+        for (const auto& d : res.dependents) {
+            std::cout << "  " << d.name << " " << d.from << " -> " << d.to << "\n";
+        }
+    }
+    if (!res.pinned_dependents.empty()) {
+        std::cout << "Not upgrading " << res.pinned_dependents.size()
+                  << " pinned dependent(s) (they may need the old version):\n";
+        for (const auto& d : res.pinned_dependents) {
+            std::cout << "  " << d.name << " " << d.from << " (pinned; " << d.to << " available)\n";
+        }
+    }
 
     if (!res.applied.empty()) {
         auto ts = now_secs();
