@@ -3,6 +3,7 @@
 
 #include "store.h"
 
+#include "../build/macho_scan.h"
 #include "../build/relocate.h"
 #include "../env/manifest.h"
 #include "link.h"
@@ -321,6 +322,112 @@ void remove_empty_formula_dir(const fs::path& store, const fs::path& keg) {
 
 } // namespace
 
+namespace {
+
+// "<name>/<version>" when `load` names a path inside a keg of `store` (given
+// as written and as resolved, since dyld sees load paths literally but the
+// store may itself sit behind a symlink such as /tmp -> /private/tmp).
+std::optional<std::string> versioned_keg_of(const std::string& load,
+                                            const std::vector<fs::path>& store_roots) {
+    if (load.empty() || load.front() != '/') {
+        return std::nullopt; // @rpath / @loader_path / @executable_path
+    }
+    const auto lp = fs::path(load).lexically_normal();
+    for (const auto& root : store_roots) {
+        const auto rel = lp.lexically_relative(root);
+        if (rel.empty()) {
+            continue;
+        }
+        auto it = rel.begin();
+        const auto name = it->string();
+        if (name.empty() || name == "." || name == "..") {
+            continue;
+        }
+        if (++it == rel.end()) {
+            continue;
+        }
+        const auto version = it->string();
+        if (version.empty() || version == "." || version == "..") {
+            continue;
+        }
+        return name + "/" + version;
+    }
+    return std::nullopt;
+}
+
+} // namespace
+
+std::vector<KeptReference> macho_pinned_kegs(const fs::path& store,
+                                             const std::vector<InstalledPackage>& survivors,
+                                             const std::vector<InstalledPackage>& candidates) {
+    std::vector<KeptReference> kept;
+    if (candidates.empty()) {
+        return kept;
+    }
+    std::map<std::string, const InstalledPackage*> pending;
+    for (const auto& c : candidates) {
+        pending[c.name + "/" + c.version] = &c;
+    }
+
+    std::vector<fs::path> roots{store.lexically_normal()};
+    std::error_code cec;
+    const auto canon = fs::weakly_canonical(store, cec);
+    if (!cec && canon.lexically_normal() != roots.front()) {
+        roots.push_back(canon.lexically_normal());
+    }
+
+    std::vector<InstalledPackage> work(survivors.begin(), survivors.end());
+    while (!work.empty() && !pending.empty()) {
+        const auto keg = work.back();
+        work.pop_back();
+        const auto self = keg.name + "/" + keg.version;
+        std::error_code ec;
+        for (fs::recursive_directory_iterator
+                 it(keg.path, fs::directory_options::skip_permission_denied, ec),
+             end;
+             !ec && it != end && !pending.empty(); it.increment(ec)) {
+            std::error_code sec;
+            const auto st = it->symlink_status(sec);
+            if (sec || !fs::is_regular_file(st)) {
+                continue; // symlinked files are scanned where they live
+            }
+            const auto info = macho_info(it->path());
+            if (!info.is_macho) {
+                continue;
+            }
+            for (const auto& cmd : info.commands) {
+                const auto ref = versioned_keg_of(cmd.path, roots);
+                if (!ref || *ref == self) {
+                    continue;
+                }
+                auto hit = pending.find(*ref);
+                if (hit == pending.end()) {
+                    continue;
+                }
+                const auto& target = *hit->second;
+                SPDLOG_DEBUG("cleanup: keeping {} {}: {} still loads {}", target.name,
+                             target.version, it->path().string(), cmd.path);
+                kept.push_back(KeptReference{
+                    .keg = target,
+                    .by = keg,
+                    .file = it->path(),
+                    .load_path = cmd.path,
+                });
+                work.push_back(target); // what it names must stay too
+                pending.erase(hit);
+            }
+        }
+    }
+
+    std::sort(kept.begin(), kept.end(), [](const KeptReference& a, const KeptReference& b) {
+        if (a.keg.name != b.keg.name) {
+            return a.keg.name < b.keg.name;
+        }
+        return a.keg.version < b.keg.version;
+    });
+    return kept;
+}
+
 CleanupReport cleanup_kegs(const fs::path& store, const fs::path& den_home, const fs::path& cache,
                            bool dry_run) {
     // Versions any environment still resolves to. A keg stays while one env
@@ -333,14 +440,36 @@ CleanupReport cleanup_kegs(const fs::path& store, const fs::path& den_home, cons
     }
 
     CleanupReport report;
+    // Removal candidates: den-owned kegs no environment references.
+    std::vector<InstalledPackage> candidates;
+    std::vector<InstalledPackage> survivors;
     for (const auto& pkg : list_installed(store)) {
         if (referenced.count(pkg.name + "/" + pkg.version)) {
+            survivors.push_back(pkg);
             continue;
         }
         // No receipt means den did not install this keg (Homebrew did, or den
         // poured it before receipts existed). Leave it alone.
         if (!keg_owned_by_den(pkg.path)) {
             ++report.kept_unowned;
+            survivors.push_back(pkg);
+            continue;
+        }
+        candidates.push_back(pkg);
+    }
+
+    // A manifest is not the only thing that keeps a keg alive: a dependent
+    // whose load commands name <store>/<dep>/<version>/… still needs that
+    // version after <dep> moves on. Keep every candidate a surviving keg
+    // names that way (and, transitively, whatever a kept keg names).
+    report.kept_referenced = macho_pinned_kegs(store, survivors, candidates);
+    std::set<std::string> pinned;
+    for (const auto& k : report.kept_referenced) {
+        pinned.insert(k.keg.name + "/" + k.keg.version);
+    }
+
+    for (const auto& pkg : candidates) {
+        if (pinned.count(pkg.name + "/" + pkg.version)) {
             continue;
         }
         if (!dry_run) {
