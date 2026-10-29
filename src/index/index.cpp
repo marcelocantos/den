@@ -84,6 +84,20 @@ std::vector<std::string> json_string_array(const json& j, const char* key) {
     return out;
 }
 
+/// Lowercase hex of exactly `n` digits.
+bool is_lower_hex(const std::string& s, size_t n) {
+    return s.size() == n && std::all_of(s.begin(), s.end(), [](char c) {
+               return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+           });
+}
+bool is_sha256_hex(const std::string& s) {
+    return is_lower_hex(s, 64);
+}
+/// A full git commit id (SHA-1 or SHA-256 object format).
+bool is_git_commit(const std::string& s) {
+    return is_lower_hex(s, 40) || is_lower_hex(s, 64);
+}
+
 /// Transform a single Homebrew formula JSON object into a Package.
 Package transform_formula(const json& f) {
     Package pkg;
@@ -194,6 +208,20 @@ Package transform_formula(const json& f) {
     // Ruby source path (for fetching formula without brew cat).
     if (f.contains("ruby_source_path") && f["ruby_source_path"].is_string()) {
         pkg.ruby_source_path = f["ruby_source_path"].get<std::string>();
+    }
+    // The commit and checksum that pin the formula file.
+    if (f.contains("tap_git_head") && f["tap_git_head"].is_string()) {
+        auto head = f["tap_git_head"].get<std::string>();
+        if (is_git_commit(head))
+            pkg.tap_git_head = std::move(head);
+    }
+    if (f.contains("ruby_source_checksum") && f["ruby_source_checksum"].is_object()) {
+        const auto& rc = f["ruby_source_checksum"];
+        if (rc.contains("sha256") && rc["sha256"].is_string()) {
+            auto sha = rc["sha256"].get<std::string>();
+            if (is_sha256_hex(sha))
+                pkg.ruby_source_sha256 = std::move(sha);
+        }
     }
 
     // Source URL.
@@ -466,6 +494,10 @@ json package_to_json(const Package& pkg) {
         j["source_sha256"] = *pkg.source_sha256;
     if (pkg.ruby_source_path)
         j["ruby_source_path"] = *pkg.ruby_source_path;
+    if (pkg.tap_git_head)
+        j["tap_git_head"] = *pkg.tap_git_head;
+    if (pkg.ruby_source_sha256)
+        j["ruby_source_sha256"] = *pkg.ruby_source_sha256;
     if (!pkg.old_names.empty())
         j["old_names"] = pkg.old_names;
 
@@ -557,6 +589,12 @@ Package package_from_json(const json& j) {
     }
     if (j.contains("ruby_source_path") && j["ruby_source_path"].is_string()) {
         pkg.ruby_source_path = j["ruby_source_path"].get<std::string>();
+    }
+    if (j.contains("tap_git_head") && j["tap_git_head"].is_string()) {
+        pkg.tap_git_head = j["tap_git_head"].get<std::string>();
+    }
+    if (j.contains("ruby_source_sha256") && j["ruby_source_sha256"].is_string()) {
+        pkg.ruby_source_sha256 = j["ruby_source_sha256"].get<std::string>();
     }
     pkg.old_names = json_string_array(j, "old_names");
 

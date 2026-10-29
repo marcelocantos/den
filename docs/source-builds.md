@@ -174,6 +174,34 @@ keeping the URL's archive suffix (`.tar.gz`, `.tar.xz`, `.tar.bz2`,
 `.tar.zst`, `.zip`, …; `.src` when the URL has none). Extraction detects the
 format from content: `tar xf` in the Ruby build, libarchive in the fallback.
 
+## Verified inputs
+
+A homebrew-core formula's Ruby source is fetched at the commit the index
+records (`tap_git_head` in Homebrew's formula JSON), not from `master`, and
+checked against the index's `ruby_source_checksum`. A mismatch stops the
+build. An index without the commit falls back to `master` with a warning.
+
+The source tarball must have a sha256, and so must every `resource` and
+external patch: the bundled Ruby build refuses one without, and does not fall
+back to the parser.
+
+## Receipt
+
+A source-built keg's `DEN_RECEIPT.json` records, beside the fields every den
+keg has:
+
+- `built_from_source`: `true`.
+- `source`: the tarball `url` and `sha256`, plus `resources` (`name`, `url`,
+  `sha256`) and `patches` (`url`, `sha256`).
+- `formula`: the `tap`, the `commit` the Ruby source was fetched at (empty for
+  a local tap or an unpinned fetch), and its `path`.
+- `toolchain`: the macOS `sdk` path and the first line of `clang --version`.
+- `opt_prefix_baked`: the `<prefix>/opt/<name>` path the build compiled in.
+
+`den doctor` lists source-built kegs. It warns about any whose formula, at the
+same version, now names a source tarball with a different sha256, and
+suggests `den install --build-from-source <name>` to rebuild it.
+
 ## Per-formula overrides
 
 The generic mode is the rule. A formula whose install step ignores DESTDIR
