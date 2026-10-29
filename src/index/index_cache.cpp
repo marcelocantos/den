@@ -35,7 +35,8 @@ constexpr std::array<char, 8> kMagic = {'D', 'E', 'N', 'I', 'D', 'X', '\0', '\0'
 // v8: records carry Package::version_scheme (Homebrew formula version_scheme).
 // v9: records carry Package::tap_git_head and ruby_source_sha256 (pinned
 //     formula source).
-constexpr uint32_t kFormatVersion = 9;
+// v10: records carry Package::post_install_steps (declarative post_install).
+constexpr uint32_t kFormatVersion = 10;
 constexpr uint32_t kEndianTag = 0x01020304;
 constexpr size_t kHeaderSize = 80;
 constexpr size_t kEntrySize = 24;
@@ -413,6 +414,7 @@ std::string encode_package(const Package& pkg) {
     put_opt(b, pkg.tap_git_head);
     put_opt(b, pkg.ruby_source_sha256);
     put_strs(b, pkg.old_names);
+    put_str(b, pkg.post_install_steps);
     return b;
 }
 
@@ -473,6 +475,7 @@ Package decode_package(const char* data, size_t len) {
     pkg.tap_git_head = r.opt();
     pkg.ruby_source_sha256 = r.opt();
     pkg.old_names = r.strs();
+    pkg.post_install_steps = r.str();
     if (!r.done()) {
         throw CorruptCache("trailing bytes in record");
     }
