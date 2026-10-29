@@ -68,6 +68,8 @@ Package formula(const std::string& name, const std::string& version,
     p.source_url = "https://example.com/" + name + ".tar.gz";
     p.source_sha256 = std::string(64, 'c');
     p.ruby_source_path = "Formula/" + name.substr(0, 1) + "/" + name + ".rb";
+    p.tap_git_head = std::string(40, 'e');
+    p.ruby_source_sha256 = std::string(64, 'f');
     return p;
 }
 
@@ -125,6 +127,8 @@ void check_same(const Package& a, const Package& b) {
     CHECK(a.source_url == b.source_url);
     CHECK(a.source_sha256 == b.source_sha256);
     CHECK(a.ruby_source_path == b.ruby_source_path);
+    CHECK(a.tap_git_head == b.tap_git_head);
+    CHECK(a.ruby_source_sha256 == b.ruby_source_sha256);
     CHECK(a.keg_only == b.keg_only);
     CHECK(a.keg_only_reason == b.keg_only_reason);
     CHECK(a.conflicts_with == b.conflicts_with);
@@ -377,7 +381,7 @@ TEST_SUITE("index_cache") {
         // Pins the on-disk format version: bump this alongside kFormatVersion
         // whenever the record layout changes, so an older den's cache is
         // never decoded with the new layout.
-        constexpr uint32_t kExpectedFormatVersion = 8;
+        constexpr uint32_t kExpectedFormatVersion = 9;
         IndexCacheTmpDir tmp;
         auto json = tmp.path / "index.json";
         save_index(fixture(), json);

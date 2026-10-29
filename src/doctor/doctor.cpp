@@ -25,6 +25,7 @@
 #include <sstream>
 #include <string>
 #include <sys/stat.h>
+#include <tuple>
 #include <vector>
 
 namespace den {
@@ -359,7 +360,7 @@ void check_file_permissions(const Config& config, std::vector<Finding>& findings
     for (const auto& p : sensitive) {
         if (!fs::exists(p))
             continue;
-        struct stat st {};
+        struct stat st{};
         if (::stat(p.c_str(), &st) != 0) {
             warn(findings, "cannot stat " + p.string() + ": " + std::strerror(errno));
             continue;
@@ -410,7 +411,86 @@ const char* severity_label(Severity s) {
     return "unknown";
 }
 
+// ---------------------------------------------------------------------------
+// Check: source-built kegs (receipt) and pending rebuilds
+// ---------------------------------------------------------------------------
+
+void check_source_builds(const Config& config, std::vector<Finding>& findings,
+                         std::vector<std::string>& notes) {
+    SPDLOG_DEBUG("check: source-built kegs");
+    std::error_code ec;
+    if (!fs::is_directory(config.store, ec))
+        return;
+    std::optional<PackageIndex> idx;
+    const auto index_path = config.cache / "index.json";
+    if (fs::exists(index_path, ec)) {
+        try {
+            idx = load_index(index_path);
+        } catch (const std::exception& e) {
+            SPDLOG_DEBUG("source-build rebuild check skipped: {}", e.what());
+        }
+    }
+    const auto kegs = source_built_kegs(config.store, idx ? &*idx : nullptr);
+    auto note = format_source_built_kegs(kegs);
+    if (!note.empty())
+        notes.push_back(std::move(note));
+    std::string pending;
+    int count = 0;
+    for (const auto& k : kegs) {
+        if (k.pending_rebuild.empty())
+            continue;
+        ++count;
+        pending += "\n    " + k.name + "/" + k.version + ": " + k.pending_rebuild;
+    }
+    if (count == 0)
+        return;
+    warn(findings, std::to_string(count) +
+                       " source-built keg(s) were built from a source the current formula no "
+                       "longer names:" +
+                       pending + "\n  Rebuild them (den install --build-from-source <name>).");
+}
+
 } // namespace
+
+std::vector<SourceBuiltKeg> source_built_kegs(const fs::path& store, const PackageIndex* idx) {
+    std::vector<SourceBuiltKeg> out;
+    for (const auto& keg : list_installed(store)) {
+        auto receipt = read_source_build_receipt(keg.path);
+        if (!receipt)
+            continue;
+        SourceBuiltKeg k{keg.name, keg.version, std::move(*receipt), {}};
+        const Package* pkg = idx ? idx->find(keg.name) : nullptr;
+        if (pkg && pkg->version == keg.version && pkg->source_sha256 &&
+            !pkg->source_sha256->empty() && !k.receipt.source.sha256.empty() &&
+            *pkg->source_sha256 != k.receipt.source.sha256)
+            k.pending_rebuild = "built from sha256 " + k.receipt.source.sha256 +
+                                ", the formula now names " + *pkg->source_sha256;
+        out.push_back(std::move(k));
+    }
+    std::sort(out.begin(), out.end(), [](const SourceBuiltKeg& a, const SourceBuiltKeg& b) {
+        return std::tie(a.name, a.version) < std::tie(b.name, b.version);
+    });
+    return out;
+}
+
+std::string format_source_built_kegs(const std::vector<SourceBuiltKeg>& kegs) {
+    if (kegs.empty())
+        return {};
+    std::string text = "source-built kegs: " + std::to_string(kegs.size());
+    for (const auto& k : kegs) {
+        text += "\n    " + k.name + " " + k.version;
+        const auto& f = k.receipt;
+        if (!f.formula_tap.empty()) {
+            text += " (" + f.formula_tap;
+            if (!f.formula_commit.empty())
+                text += "@" + f.formula_commit.substr(0, 12);
+            text += ")";
+        }
+        if (!k.pending_rebuild.empty())
+            text += " [rebuild pending]";
+    }
+    return text;
+}
 
 std::string shared_prefix_hint() {
     return "den is still installing into Homebrew's folder, so Homebrew upgrades can break "
@@ -649,6 +729,7 @@ std::vector<Finding> doctor(const Config& config) {
     check_broken_symlinks(config, findings);
     check_missing_packages(config, findings);
     check_brew_dependencies(config, findings, notes);
+    check_source_builds(config, findings, notes);
     check_file_permissions(config, findings);
     check_host_toolchain(config, findings);
     check_trust_model(config, findings);

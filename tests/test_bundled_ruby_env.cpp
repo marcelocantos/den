@@ -15,6 +15,7 @@
 #include "../src/index/package.h"
 #include "../src/ruby/bundle.h"
 #include "../src/ruby/ruby_env.h"
+#include "../src/store/store.h"
 
 #include <doctest.h>
 
@@ -349,6 +350,18 @@ TEST_SUITE("build::bundled_ruby_env") {
                                                           (s.prefix() / "Cellar").string() + "\n" +
                                                           (s.home / "ruby" / "homebrew").string());
             CHECK(fs::is_regular_file(keg / "DEN_RECEIPT.json"));
+            // The receipt records the verified tarball and the tap the
+            // formula came from (docs/source-builds.md, "Receipt").
+            auto receipt = read_source_build_receipt(keg);
+            REQUIRE(receipt);
+            CHECK(receipt->source.url == "file://" + tarball.string());
+            CHECK(receipt->source.sha256 == hash_file(tarball));
+            CHECK(receipt->resources.empty());
+            CHECK(receipt->patches.empty());
+            CHECK(receipt->formula_tap == "test/rbtap");
+            CHECK(receipt->formula_commit.empty());
+            CHECK(receipt->opt_prefix_baked == (s.prefix() / "opt/rbtool").string());
+            CHECK_FALSE(receipt->toolchain_clang.empty());
         }
     }
 
@@ -360,6 +373,27 @@ TEST_SUITE("build::bundled_ruby_env") {
         auto at = text.find(real);
         REQUIRE(at != std::string::npos);
         return text.replace(at, real.size(), sha);
+    }
+
+    TEST_CASE("e2e: -s refuses a resource with no sha256") {
+        Scratch s(false);
+        auto tarball = make_source(s.tmp.path, "rbtool", "1.2");
+        auto text = formula("Rbtool", "1.2", tarball);
+        const std::string install = "\n  def install\n";
+        auto at = text.find(install);
+        REQUIRE(at != std::string::npos);
+        text.insert(at, "\n  resource \"extra\" do\n    url \"file://" + tarball.string() +
+                            "\"\n  end\n");
+        write(s.tmp.path / "tap/Formula/rbtool.rb", text);
+        auto tap = s.den("tap add test/rbtap --url " + (s.tmp.path / "tap").string());
+        INFO(tap);
+        auto out = s.den("install -s test/rbtap/rbtool");
+        INFO(out);
+        CHECK(out.find("no sha256 for rbtool resource extra; refusing to build with an "
+                       "unverified resource") != std::string::npos);
+        CHECK(out.find("==> Built rbtool") == std::string::npos);
+        CHECK(out.find("falling back") == std::string::npos);
+        CHECK_FALSE(fs::exists(s.prefix() / "Cellar/rbtool/1.2"));
     }
 
     TEST_CASE("e2e: -s refuses a source tarball whose sha256 does not match") {

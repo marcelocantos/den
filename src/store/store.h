@@ -74,13 +74,39 @@ std::optional<InstalledPackage> which_package(const fs::path& store, const fs::p
 /// Filename of the receipt den writes at the root of a keg it poured or built.
 inline constexpr std::string_view kDenReceiptFilename = "DEN_RECEIPT.json";
 
+/// What den records about a keg it built from source (docs/source-builds.md,
+/// "Receipt"): the verified inputs, where the recipe came from, the
+/// toolchain, and the opt path the build baked in.
+struct SourceBuildReceipt {
+    struct Input {
+        std::string name; // resource name; empty for the main source and patches
+        std::string url;
+        std::string sha256;
+    };
+    Input source;                 // the stable tarball
+    std::vector<Input> resources; // formula `resource` blocks
+    std::vector<Input> patches;   // external patches
+    std::string formula_tap;      // "homebrew/core", or "<user>/<repo>" for a tap
+    std::string formula_commit;   // the tap commit the .rb was fetched at; empty if unpinned
+    std::string formula_path;     // "Formula/t/tree.rb", or the tap's local file
+    std::string toolchain_sdk;    // macOS SDK path; empty elsewhere or if unknown
+    std::string toolchain_clang;  // first line of the compiler's --version
+    std::string opt_prefix_baked; // <prefix>/opt/<name>
+};
+
 /// Record that den poured or built the keg at `keg` (a `store/<name>/<version>`
 /// directory). No-op, with a warning, if that directory is missing. Safe to
 /// call only for a keg den just created — never for one found already present.
 /// `version_scheme` is the formula's Homebrew version_scheme at pour time,
 /// recorded so upgrade ordering can compare (version_scheme, version).
+/// A source build passes `source`, recorded as "built_from_source": true plus
+/// "source", "formula", "toolchain" and "opt_prefix_baked".
 void mark_keg_owned(const fs::path& keg, const std::string& name, const std::string& version,
-                    int version_scheme = 0);
+                    int version_scheme = 0, const SourceBuildReceipt* source = nullptr);
+
+/// The source-build fields of the den receipt at `keg`, or nullopt when the
+/// keg has no den receipt or was not built from source.
+std::optional<SourceBuildReceipt> read_source_build_receipt(const fs::path& keg);
 
 /// The Homebrew version_scheme of the installed keg at `keg`: the
 /// "version_scheme" den recorded in DEN_RECEIPT.json, else Homebrew's
