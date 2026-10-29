@@ -45,7 +45,9 @@ void uninstall_packages(const Config& config, PackageProvider& provider,
 
 /// Upgrade packages. If `names` is empty, upgrades all packages whose
 /// installed version differs from the index's available version. Each
-/// install is dispatched through `provider`. An upgrade whose new version
+/// install is dispatched through `provider`. Installed runtime dependents the
+/// index revision-bumped (same upstream version, higher `_<revision>`) are
+/// upgraded in the same batch; pinned ones are reported and left. An upgrade whose new version
 /// cannot be linked is rolled back (see apply_version_changes) and the call
 /// throws a UserError naming it, after the other upgrades are applied.
 void upgrade_packages(const Config& config, PackageProvider& provider, const PackageIndex& idx,
