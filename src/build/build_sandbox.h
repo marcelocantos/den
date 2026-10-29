@@ -27,6 +27,7 @@
 #include "../core/config.h"
 
 #include <filesystem>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -87,5 +88,13 @@ void require_build_sandbox();
 /// `/usr/bin/sandbox-exec -p '<profile>' /bin/sh -c '<cmd>'`. Unchanged where
 /// the sandbox is not supported.
 std::string sandboxed_shell_command(const BuildSandbox& sandbox, const std::string& cmd);
+
+/// Language tool caches for build commands, all under sandbox.temp_dir:
+/// GOCACHE, GOMODCACHE, GOPATH, PIP_CACHE_DIR, npm_config_cache and
+/// CARGO_HOME. Their defaults sit under $HOME/Library/Caches (which the
+/// sandbox denies) or in the home directory (~/go, ~/.npm, ~/.cargo, which a
+/// build should not leave state in); the temp directory is writable under the
+/// profile and is removed after the build.
+std::map<std::string, std::string> build_cache_env(const BuildSandbox& sandbox);
 
 } // namespace den

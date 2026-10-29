@@ -387,6 +387,48 @@ TEST_SUITE("build_sandbox") {
 #endif
     }
 
+    TEST_CASE("build_cache_env puts every tool cache under the cache temp dir") {
+        BuildSandbox sb;
+        sb.temp_dir = "/h/cache/tmp/foo-1.2";
+        const auto env = build_cache_env(sb);
+        CHECK(env.size() == 6);
+        CHECK(env.at("GOCACHE") == "/h/cache/tmp/foo-1.2/go-build");
+        CHECK(env.at("GOMODCACHE") == "/h/cache/tmp/foo-1.2/go/pkg/mod");
+        CHECK(env.at("GOPATH") == "/h/cache/tmp/foo-1.2/go");
+        CHECK(env.at("PIP_CACHE_DIR") == "/h/cache/tmp/foo-1.2/pip");
+        CHECK(env.at("npm_config_cache") == "/h/cache/tmp/foo-1.2/npm");
+        CHECK(env.at("CARGO_HOME") == "/h/cache/tmp/foo-1.2/cargo");
+    }
+
+    TEST_CASE("build commands get tool caches they can write in the cache temp dir") {
+        TempTree t;
+        const auto cfg = make_config(t.root);
+        fs::create_directories(cfg.store);
+        const std::string name = "den-sandbox-caches";
+        // Each cache must be writable under the sandbox; the build records
+        // where they pointed.
+        const auto idx =
+            fixture(t.root, name, "DenSandboxCaches",
+                    "VARS = GOCACHE GOMODCACHE GOPATH PIP_CACHE_DIR npm_config_cache CARGO_HOME\n"
+                    "all:\n"
+                    "\tfor v in $(VARS); do d=$$(printenv $$v); "
+                    "test -n \"$$d\" && mkdir -p \"$$d\" && echo x > \"$$d/probe\" && "
+                    "echo \"$$v=$$d\" >> caches.txt || exit 1; done\n"
+                    "install:\n"
+                    "\tmkdir -p $(DESTDIR)$(PREFIX)/share\n"
+                    "\tcp caches.txt $(DESTDIR)$(PREFIX)/share/\n");
+
+        const auto keg = build_from_source(cfg, idx, name, "1.0");
+        const auto tmp = fs::weakly_canonical(cfg.cache / "tmp" / (name + "-1.0"));
+        CHECK(slurp(keg / "share" / "caches.txt") ==
+              "GOCACHE=" + (tmp / "go-build").string() + "\n" + "GOMODCACHE=" +
+                  (tmp / "go" / "pkg" / "mod").string() + "\n" + "GOPATH=" + (tmp / "go").string() +
+                  "\n" + "PIP_CACHE_DIR=" + (tmp / "pip").string() + "\n" + "npm_config_cache=" +
+                  (tmp / "npm").string() + "\n" + "CARGO_HOME=" + (tmp / "cargo").string() + "\n");
+        // The caches went with the build's temp directory.
+        CHECK_FALSE(fs::exists(tmp));
+    }
+
 #ifdef __APPLE__
     TEST_CASE("a build step writing outside the allowed dirs fails the build") {
         TempTree t;

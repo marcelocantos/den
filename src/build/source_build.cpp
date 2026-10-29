@@ -417,9 +417,14 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
     }
     // den_build.rb runs each command the formula's install method runs
     // (Formula#system) under this profile.
-    const std::string ruby_sandbox_env =
-        sandboxed ? "DEN_BUILD_SANDBOX_PROFILE=" + shell_quote(seatbelt_profile(sandbox)) + " "
-                  : std::string();
+    // Every path also gets its language tool caches under the cache temp
+    // directory (build_cache_env).
+    std::string ruby_sandbox_env;
+    for (const auto& [k, v] : build_cache_env(sandbox))
+        ruby_sandbox_env += k + "=" + shell_quote(v) + " ";
+    if (sandboxed)
+        ruby_sandbox_env +=
+            "DEN_BUILD_SANDBOX_PROFILE=" + shell_quote(seatbelt_profile(sandbox)) + " ";
 
     // Fetch formula source from GitHub (no brew dependency).
     FormulaOrigin origin;
@@ -579,6 +584,8 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
     std::map<std::string, std::string> env;
     env["PREFIX"] = opt.string();
     env["TMPDIR"] = sandbox.temp_dir.string();
+    for (const auto& [k, v] : build_cache_env(sandbox))
+        env[k] = v;
     std::string pkg_config_path, cpath, library_path;
     for (const auto& pkg : list_installed(config.store)) {
         auto pc = pkg.path / "lib" / "pkgconfig";
