@@ -479,6 +479,63 @@ TEST_SUITE("cli::integration") {
     }
 
     // -----------------------------------------------------------------------
+    // 16b. Unresolvable packages exit non-zero. `den install` with no index
+    //      and `den info` on a missing package used to log a message and exit
+    //      0, so scripts could not tell failure from success.
+    // -----------------------------------------------------------------------
+    TEST_CASE("install with an empty index exits non-zero with a clear message") {
+        TempDir home;
+        const std::string cellar = (home.path / "brew" / "Cellar").string();
+
+        auto r = run_den_with_cellar("install nosuchpkg", home.path.string(), cellar);
+        CHECK(r.exit_code == 1);
+        CHECK(r.output.find("error: the package index is empty; run `den update` first") !=
+              std::string::npos);
+        CHECK_FALSE(fs::exists(home.path / "envs" / "default" / "bin" / "nosuchpkg"));
+
+        auto s = run_den_with_cellar("install -s nosuchpkg", home.path.string(), cellar);
+        CHECK(s.exit_code == 1);
+        CHECK(s.output.find("error: the package index is empty; run `den update` first") !=
+              std::string::npos);
+    }
+
+    TEST_CASE("info on a missing package exits non-zero with a clear message") {
+        TempDir home;
+        const std::string cellar = (home.path / "brew" / "Cellar").string();
+
+        // Empty index: say so, rather than implying the name is wrong.
+        auto empty = run_den_with_cellar("info nosuchpkg", home.path.string(), cellar);
+        CHECK(empty.exit_code == 1);
+        CHECK(empty.output.find("error: package not found: nosuchpkg (the package index is "
+                                "empty; run `den update` first)") != std::string::npos);
+
+        // Populated index without the package.
+        fs::create_directories(home.path / "cache");
+        std::ofstream(home.path / "cache" / "index.json") << R"({
+  "packages": [{
+    "name": "realpkg", "version": "1.0.0", "description": "present",
+    "homepage": "", "license": "", "artifact_type": "binary",
+    "deprecated": false, "disabled": false,
+    "dependencies": [], "build_dependencies": [], "archives": {}
+  }]
+})";
+        auto missing = run_den_with_cellar("info nosuchpkg", home.path.string(), cellar);
+        CHECK(missing.exit_code == 1);
+        CHECK(missing.output.find("error: package not found: nosuchpkg (run `den update` to "
+                                  "refresh the index)") != std::string::npos);
+
+        // A package that is present still succeeds.
+        auto found = run_den_with_cellar("info realpkg", home.path.string(), cellar);
+        CHECK(found.exit_code == 0);
+        CHECK(found.output.find("Version:      1.0.0") != std::string::npos);
+
+        // And install of a name missing from a populated index fails too.
+        auto inst = run_den_with_cellar("install nosuchpkg", home.path.string(), cellar);
+        CHECK(inst.exit_code == 1);
+        CHECK(inst.output.find("nosuchpkg") != std::string::npos);
+    }
+
+    // -----------------------------------------------------------------------
     // 17. cleanup — shared Cellar. A Homebrew keg must survive; a den-owned
     //     version nothing references is removed. --dry-run deletes nothing.
     // -----------------------------------------------------------------------
