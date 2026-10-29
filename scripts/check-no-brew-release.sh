@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Guard: den is not released or distributed through Homebrew. Fails if any
-# workflow under .github/workflows or the Makefile mentions tapper,
+# workflow under .github/workflows, the Makefile or scripts/verify-release.sh
+# (whose tap step uses a fixture tap from this repo) mentions tapper,
 # release-tap, den's own bottles (homebrew-bottles, *.bottle.tar.gz, a
 # `bottle do` block) or the marcelocantos tap.
 #
@@ -20,7 +21,8 @@ root="${1:-$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)}"
 pattern='tapper|release-tap|marcelocantos/(homebrew-)?tap|homebrew-bottles|\.bottle\.tar\.gz|bottle do([[:space:]]|$)'
 
 files=""
-for f in "$root"/.github/workflows/*.yml "$root"/.github/workflows/*.yaml "$root"/Makefile; do
+for f in "$root"/.github/workflows/*.yml "$root"/.github/workflows/*.yaml "$root"/Makefile \
+    "$root"/scripts/verify-release.sh; do
     [ -f "$f" ] && files="$files
 $f"
 done

@@ -72,6 +72,19 @@ expect_hit "bottle upload" .github/workflows/ci.yml '      - run: gh release upl
 expect_hit "bottle block" Makefile '#   bottle do'
 expect_hit "case-insensitive" .github/workflows/ci.yml '      - name: Publish via Tapper'
 
+# scripts/verify-release.sh is scanned: its tap step must use the fixture tap.
+clean_tree
+mkdir -p "$work/t/scripts"
+printf 's_tap() {\n    den tap add den-fixture/verify-release "$src"\n}\n' >"$work/t/scripts/verify-release.sh"
+if out=$(sh "$SCRIPT" "$work/t" 2>&1); then ok "clean verify-release.sh passes"; else bad "clean verify-release.sh passes: $out"; fi
+printf 'VR_TAP=${VR_TAP:-marcelocantos/tap}\n' >>"$work/t/scripts/verify-release.sh"
+out=$(sh "$SCRIPT" "$work/t" 2>&1); rc=$?
+if [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -qF "scripts/verify-release.sh:4:"; then
+    ok "marcelocantos/tap in verify-release.sh"
+else
+    bad "marcelocantos/tap in verify-release.sh (exit $rc): $out"
+fi
+
 # A .yaml workflow is scanned too.
 clean_tree
 printf 'x: tapper\n' >"$work/t/.github/workflows/other.yaml"
