@@ -72,6 +72,13 @@ resolve() {
     rc=$?
 }
 
+# has <needle>: $out contains <needle> once whitespace runs, line breaks
+# included, are collapsed to single spaces. CMake wraps message() text at a
+# width that differs between versions, so a phrase may span lines.
+has() {
+    printf '%s\n' "$out" | tr -s ' \t\n' '   ' | grep -qF -- "$1"
+}
+
 expect_corpus() { # name expected
     if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -qxF -- "-- CORPUS=$2"; then
         ok "$1"
@@ -90,7 +97,7 @@ $out"
         return
     fi
     for needle in "$@"; do
-        if ! printf '%s\n' "$out" | grep -qF -- "$needle"; then
+        if ! has "$needle"; then
             not_ok "$name" "missing '$needle' in:
 $out"
             return
@@ -142,7 +149,7 @@ mkdir -p "$plain"
 out=$(env -u DEN_CORPUS_DIR cmake -DCMAKE_DIR="$CMAKE_DIR" -DSRC="$plain" \
     -DOVERRIDE="$corpus" -P "$probe" 2>&1)
 rc=$?
-if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -qF "cannot compare its commit" &&
+if [ "$rc" -eq 0 ] && has "cannot compare its commit" &&
     printf '%s\n' "$out" | grep -qxF -- "-- CORPUS=$corpus"; then
     ok "unknown pin: override used with a warning"
 else
