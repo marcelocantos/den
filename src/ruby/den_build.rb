@@ -451,10 +451,14 @@ end
 
 # The live opt path must come through the build untouched: an install step
 # that ignores DESTDIR would otherwise write into the linked (older) keg.
+# A link that already names this build's keg (left behind when that keg was
+# removed) is compared by target only: den fills that keg itself below.
+den_opt_own_keg = opt_path.symlink? &&
+                  (opt_path.dirname / opt_path.readlink).cleanpath == dest.cleanpath
 den_opt_state = lambda do
   next nil unless opt_path.exist? || opt_path.symlink?
   files = []
-  if opt_path.directory?
+  if opt_path.directory? && !den_opt_own_keg
     root = "#{opt_path}/"
     Find.find(root) do |path|
       st = File.lstat(path)

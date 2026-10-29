@@ -358,16 +358,21 @@ void merge_destdir_stage(const fs::path& stage, const fs::path& opt_prefix, cons
     fs::remove_all(stage, ec);
 }
 
-OptPathGuard::OptPathGuard(fs::path opt_path) : opt_path_(std::move(opt_path)) {
+OptPathGuard::OptPathGuard(fs::path opt_path, const fs::path& own_keg)
+    : opt_path_(std::move(opt_path)) {
     std::error_code ec;
     auto st = fs::symlink_status(opt_path_, ec);
     existed_ = !ec && fs::exists(st);
     if (!existed_)
         return;
     was_symlink_ = fs::is_symlink(st);
-    if (was_symlink_)
+    if (was_symlink_) {
         link_target_ = fs::read_symlink(opt_path_, ec);
-    listing_ = list_tree(opt_path_);
+        auto resolved = (opt_path_.parent_path() / link_target_).lexically_normal();
+        own_keg_link_ = !own_keg.empty() && resolved == own_keg.lexically_normal();
+    }
+    if (!own_keg_link_)
+        listing_ = list_tree(opt_path_);
 }
 
 bool OptPathGuard::unchanged() const {
@@ -409,7 +414,7 @@ void OptPathGuard::check() const {
     if (fs::is_symlink(st) != was_symlink_ ||
         (was_symlink_ && fs::read_symlink(opt_path_, ec) != link_target_))
         throw UserError("source build replaced " + opt_path_.string() + hint);
-    if (list_tree(opt_path_) != listing_)
+    if (!own_keg_link_ && list_tree(opt_path_) != listing_)
         throw UserError("source build modified files under " + opt_path_.string() + hint);
 }
 

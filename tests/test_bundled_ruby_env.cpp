@@ -356,6 +356,24 @@ TEST_SUITE("build::bundled_ruby_env") {
         }
     };
 
+    TEST_CASE("e2e: -s rebuilds a keg whose opt link was left behind") {
+        // Removing a keg by hand leaves <prefix>/opt/<name> naming it. The
+        // rebuild fills that keg itself; the opt guard must not take that
+        // for an install step writing through the opt path.
+        Scratch s(false);
+        auto tarball = make_source(s.tmp.path, "rbtool", "1.2");
+        write(s.tmp.path / "tap/Formula/rbtool.rb", formula("Rbtool", "1.2", tarball));
+        auto tap = s.den("tap add test/rbtap --url " + (s.tmp.path / "tap").string());
+        INFO(tap);
+        fs::create_directories(s.prefix() / "opt");
+        fs::create_directory_symlink("../Cellar/rbtool/1.2", s.prefix() / "opt/rbtool");
+        auto out = s.den("install -s test/rbtap/rbtool");
+        INFO(out);
+        CHECK(out.find("bundled ruby build failed") == std::string::npos);
+        CHECK(out.find("==> Built rbtool 1.2") != std::string::npos);
+        CHECK(run((s.prefix() / "Cellar/rbtool/1.2/bin/rbtool").string()) == "rbtool 1.2\n");
+    }
+
     TEST_CASE("e2e: -s builds a local tap formula through the bundled Ruby") {
         for (bool migrate : {false, true}) {
             INFO("migrate=" << migrate);

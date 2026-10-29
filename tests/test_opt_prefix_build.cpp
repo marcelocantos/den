@@ -418,6 +418,24 @@ TEST_SUITE("opt_prefix_build") {
             OptPathGuard guard(opt);
             CHECK_NOTHROW(guard.check());
         }
+        SUBCASE("a stale link to the keg being built is checked by target only") {
+            const auto new_keg = prefix / "Cellar" / "foo" / "1.0";
+            fs::create_directories(opt.parent_path());
+            fs::create_directory_symlink("../Cellar/foo/1.0", opt); // dangling
+            OptPathGuard guard(opt, new_keg);
+            write(new_keg / "bin" / "foo", "1.0"); // den fills its own keg
+            CHECK_NOTHROW(guard.check());
+            fs::remove(opt);
+            fs::create_directory_symlink("../Cellar/foo/0.9", opt);
+            CHECK_THROWS_AS(guard.check(), UserError);
+        }
+        SUBCASE("a link to another keg is still listed") {
+            fs::create_directories(opt.parent_path());
+            fs::create_directory_symlink("../Cellar/foo/0.9", opt);
+            OptPathGuard guard(opt, prefix / "Cellar" / "foo" / "1.0");
+            write(opt / "bin" / "bar", "1.0");
+            CHECK_THROWS_AS(guard.check(), UserError);
+        }
     }
 
     TEST_CASE("extract_archive unpacks .tar.xz and .tar.bz2 sources") {
