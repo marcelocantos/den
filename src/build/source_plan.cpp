@@ -7,6 +7,7 @@
 #include "../index/bottle_cellar.h"
 #include "../platform/platform.h"
 #include "../provider/homebrew_provider.h"
+#include "../store/link.h"
 #include "../store/store.h"
 #include "../trust/degraded_installs.h"
 #include "../trust/trust_model.h"
@@ -236,9 +237,22 @@ SourcePlanResult run_source_plan(const Config& config, const PackageIndex& idx,
                                  const SourcePlan& plan, const TrustPolicy& policy,
                                  const SourcePlanRunner& runner) {
     SourcePlanResult out;
+    // Every keg in the plan needs <prefix>/opt/<name> before the next build
+    // starts, not only at the final materialise: kegs built in opt-prefix
+    // mode (and poured ones) load their dependencies' libraries through
+    // opt/, and a later build in the same plan runs them (the bundled Ruby
+    // fetches through the poured curl, git's build runs gettext's msgfmt).
+    // Missing or dangling links are created; links den doesn't own are left.
+    auto opt_link = [&](const std::string& name, const std::filesystem::path& keg) {
+        std::error_code ec;
+        if (std::filesystem::is_directory(keg, ec))
+            ensure_prefix_opt_link(config.store, keg_name(name), keg);
+    };
     for (const auto& step : plan.steps) {
-        if (step.action == SourceStepAction::Installed)
+        if (step.action == SourceStepAction::Installed) {
+            opt_link(step.name, config.store / keg_name(step.name) / step.version);
             continue;
+        }
         const Package* pkg = idx.find(step.name);
         if (!pkg)
             throw UserError("'" + step.name + "' is not in the package index");
@@ -274,6 +288,7 @@ SourcePlanResult run_source_plan(const Config& config, const PackageIndex& idx,
                 continue;
             }
             clear_refused_install(config, step.name, step.version);
+            opt_link(step.name, config.store / keg_name(step.name) / step.version);
             out.poured.push_back(step.name);
             continue;
         }
@@ -285,8 +300,9 @@ SourcePlanResult run_source_plan(const Config& config, const PackageIndex& idx,
         if (!step.why.empty() && step.why != "requested")
             std::cout << "==> " << step.name << " " << step.version << ": " << step.why
                       << "; building from source\n";
-        runner.build(config, idx, step.name, step.version);
+        auto keg = runner.build(config, idx, step.name, step.version);
         clear_refused_install(config, step.name, step.version);
+        opt_link(step.name, keg);
         out.built.push_back(step.name);
     }
     return out;
