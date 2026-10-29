@@ -35,6 +35,11 @@ struct RolledBackChange {
     /// Set for a dependent that joined the batch only because `with` (one of
     /// its runtime dependencies) moved; it is undone when `with` is.
     std::string with;
+    /// Set when the new keg fails linkage verification: libraries installed
+    /// kegs load through `<prefix>/opt/<name>` that the old keg had and the
+    /// new one does not, one "app 1.0: bin/app loads <path>" line each. The
+    /// change is undone before anything switches.
+    std::vector<std::string> broken_loads;
 };
 
 struct VersionChangeResult {
@@ -65,6 +70,13 @@ struct VersionChangeOptions {
     /// dependent's revision when a dependency changes ABI, so the two have to
     /// move together. Needs an index. Pinned dependents are left alone.
     bool upgrade_dependents = false;
+    /// Before the manifest switches, check that every keg active after the
+    /// batch still finds the libraries it loads through `<prefix>/opt/<dep>`
+    /// for each dependency the batch moves (a library the old keg had and the
+    /// new keg lacks, such as a soname bump with no rebuilt dependent, fails).
+    /// A change that fails is rolled back with its brought-in dependents
+    /// (RolledBackChange::broken_loads). Needs an index.
+    bool verify_linkage = true;
 };
 
 /// Move packages in the active environment to new versions as one unit per

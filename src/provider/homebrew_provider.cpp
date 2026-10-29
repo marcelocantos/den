@@ -247,6 +247,7 @@ bool install_one(const Config& config, const Package& pkg) {
         RelocationOptions reloc;
         reloc.dependencies = pkg.dependencies;
         reloc.skip_linkage = archive.relocation == RelocationType::Portable;
+        reloc.shared_prefix = config.shares_homebrew_cellar();
         if (!reloc.skip_linkage) {
             std::cout << "==> Relocating " << pkg.name << "\n";
         }

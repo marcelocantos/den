@@ -131,8 +131,10 @@ non-Mach-O files are skipped (`src/build/macho_fixup.h`).
 * **Dependencies by opt path.** A load command or rpath that names a
   dependency's versioned keg (`<prefix>/Cellar/<dep>/<version>/…`) becomes
   `<prefix>/opt/<dep>/…`, so the keg follows its dependency's opt link.
-  Bottles are different: den pins their dependencies to the exact versioned
-  keg (see `pin_opt_reference` in `src/build/relocate.h`).
+  Bottles do the same where den owns `<prefix>/opt/<dep>`; in a prefix
+  shared with Homebrew, or where the link names a keg den did not pour, den
+  pins them to the exact versioned keg (see `bind_opt_reference` in
+  `src/build/relocate.h`).
 * **Ids by opt path.** An absolute dylib id becomes
   `<prefix>/opt/<name>/<path in keg>`, the stable name that dependents link
   against. `@rpath/…` ids are kept.

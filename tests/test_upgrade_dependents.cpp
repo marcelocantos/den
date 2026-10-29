@@ -369,6 +369,70 @@ TEST_SUITE("upgrade_dependents") {
         CHECK(out.find("app 1.0 (pinned; 1.0_1 available)") != std::string::npos);
         CHECK(f.manifest("app") == "1.0");
         CHECK(f.prov.installed_log == std::vector<std::string>{"depa@2.0"});
+        // The pinned app 1.0 loads libdepa.1, which depa 2.0 drops, so
+        // linkage verification holds depa back too rather than break app.
+        CHECK(out.find("upgrade of depa 1.0 -> 2.0 was rolled back before switching") !=
+              std::string::npos);
+        CHECK(f.manifest("depa") == "1.0");
+        CHECK(f.app_says() == "depa 1.0");
+    }
+
+    // The negative case: a soname bump the index has no rebuilt dependent
+    // for. Before A2's linkage verification, the new depa switched in and app
+    // failed to load; now the change is rolled back before anything switches.
+    TEST_CASE("linkage verification: a soname bump with no rebuilt dependent rolls back") {
+        Fixture f;
+        f.kegs.depa("2.0", 2); // drops libdepa.1, which app 1.0 loads via opt/depa
+        f.set_index({pkg("depa", "2.0", 0), pkg("app", "1.0", 0, {"depa"})});
+
+        SUBCASE("den upgrade") {
+            auto out = quiet([&] { upgrade_packages(f.cfg, f.prov, f.idx, {"depa"}); });
+            INFO(out);
+            CHECK(out.find("upgrade of depa 1.0 -> 2.0 was rolled back before switching: depa "
+                           "2.0 no longer has 1 library") != std::string::npos);
+            CHECK(out.find("app 1.0: bin/app loads " +
+                           (f.cfg.homebrew_prefix / "opt" / "depa" / "lib").string() + "/" +
+                           lib_file(1)) != std::string::npos);
+            CHECK(
+                out.find("depa stays at 1.0 (still linked); the 2.0 keg den poured was removed") !=
+                std::string::npos);
+            CHECK(f.manifest("depa") == "1.0");
+            CHECK(f.opt("depa") == "../Cellar/depa/1.0");
+            CHECK_FALSE(fs::exists(f.cfg.store / "depa" / "2.0"));
+            CHECK(f.app_says() == "depa 1.0");
+            CHECK(read_activity(f.cfg.den_home).empty());
+        }
+        SUBCASE("the result names the broken loads") {
+            VersionChangeOptions opts;
+            opts.upgrade_dependents = true;
+            auto res = apply_version_changes(f.cfg, f.prov, &f.idx, {{"depa", "1.0", "2.0"}}, opts);
+            REQUIRE(res.rolled_back.size() == 1);
+            CHECK(res.applied.empty());
+            CHECK(res.rolled_back[0].keg_removed);
+            REQUIRE(res.rolled_back[0].broken_loads.size() == 1);
+            CHECK(res.rolled_back[0].broken_loads[0].starts_with("app 1.0: bin/app loads "));
+            CHECK(f.app_says() == "depa 1.0");
+        }
+        SUBCASE("without verification the switch breaks app") {
+            VersionChangeOptions opts;
+            opts.verify_linkage = false;
+            auto res = apply_version_changes(f.cfg, f.prov, &f.idx, {{"depa", "1.0", "2.0"}}, opts);
+            CHECK(res.rolled_back.empty());
+            CHECK(f.manifest("depa") == "2.0");
+            CHECK(f.app_says() != "depa 1.0");
+        }
+    }
+
+    TEST_CASE("linkage verification passes a compatible upgrade") {
+        Fixture f;
+        f.kegs.depa("1.1", 1); // same soname
+        f.set_index({pkg("depa", "1.1", 0), pkg("app", "1.0", 0, {"depa"})});
+        auto out = quiet([&] { upgrade_packages(f.cfg, f.prov, f.idx, {"depa"}); });
+        INFO(out);
+        CHECK(out.find("ERROR") == std::string::npos);
+        CHECK(f.manifest("depa") == "1.1");
+        CHECK(f.opt("depa") == "../Cellar/depa/1.1");
+        CHECK(f.app_says() == "depa 1.1");
     }
 
     TEST_CASE("a dependency that rolls back takes its dependent with it") {

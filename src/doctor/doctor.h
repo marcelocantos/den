@@ -114,6 +114,28 @@ std::vector<SourceBuiltKeg> source_built_kegs(const fs::path& store, const Packa
 /// line each), or an empty string when there are none.
 std::string format_source_built_kegs(const std::vector<SourceBuiltKeg>& kegs);
 
+/// How den's own kegs bind the dependencies they load (one scan of their
+/// Mach-O and ELF files).
+struct KegLinkage {
+    /// Kegs still pinned to a dependency's versioned keg
+    /// (`<Cellar>/<dep>/<version>/...`): they keep loading that version after
+    /// the dependency upgrades. "app 1.0 -> depa 1.0 (2 load paths, e.g.
+    /// bin/app)", sorted.
+    std::vector<std::string> pinned;
+    /// Libraries kegs load through `<prefix>/opt/<dep>` where that link is
+    /// missing or dangling, or (for an exact Mach-O load path) the keg it
+    /// names lacks the file. "app 1.0: bin/app loads <path>: <why>", sorted.
+    std::vector<std::string> broken_opt;
+};
+
+/// Scan every den-owned keg in `config.store`.
+KegLinkage scan_keg_linkage(const Config& config);
+
+/// The doctor note for `pinned` ("kegs pinned to versioned dependency kegs:
+/// N" and one indented line each), or empty. In a prefix shared with
+/// Homebrew (`shared`) pins are expected and only the count is shown.
+std::string format_pinned_kegs(const std::vector<std::string>& pinned, bool shared);
+
 /// Run all health checks and print a summary.
 /// Returns the list of findings so callers can set a non-zero exit code
 /// when there are errors.

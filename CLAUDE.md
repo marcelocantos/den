@@ -72,8 +72,9 @@ rendered Markdown copy.
   placeholders, which den rewrites on pour. On macOS it rewrites Mach-O
   ids, load commands and rpaths via `otool`/`install_name_tool`
   (falling back to `/Library/Developer/CommandLineTools/usr/bin` when
-  the xcode-select shim is broken), pins `opt/<dep>` references to the
-  exact dependency keg, and fails and rolls back the pour if any
+  the xcode-select shim is broken), binds `opt/<dep>` references through
+  `<prefix>/opt/<dep>` when den owns that link and pins them to the exact
+  dependency keg otherwise (always in a prefix shared with Homebrew), and fails and rolls back the pour if any
   placeholder survives. Den never creates or repoints Homebrew's shared
   `<prefix>/opt` links on macOS (#64). On Linux, den rewrites ELF
   interpreter/RPATH entries with patchelf and creates a prefix `opt`
