@@ -376,11 +376,13 @@ TEST_SUITE("build::bundled_ruby_env") {
                   "    ENV.append \"LDFLAGS\", \"-L/den/probe\"\n"
                   "    ENV[\"MAKEFLAGS\"] = \"-j8\"\n"
                   "    ENV.deparallelize\n"
+                  "    system ENV.cc, \"--version\"\n"
+                  "    system ENV.cxx, \"--version\"\n"
                   "    system \"make\", \"install\", \"PREFIX=#{prefix}\"\n"
                   "    (share/\"fixture\").mkpath\n"
                   "    (share/\"fixture/env\").write [ENV[\"CFLAGS\"], ENV[\"CXXFLAGS\"], "
                   "ENV[\"LDFLAGS\"], ENV[\"MAKEFLAGS\"], formula_opt_prefix(\"some/tap/zlib\"), "
-                  "formula_opt_lib(\"zlib\")].join(\"\\n\")\n"
+                  "formula_opt_lib(\"zlib\"), \"cc=#{ENV.cc}\", \"cxx=#{ENV.cxx}\"].join(\"\\n\")\n"
                   "  end\nend\n");
         auto tap = s.den("tap add test/envtap --url " + (s.tmp.path / "tap").string());
         INFO(tap);
@@ -399,6 +401,14 @@ TEST_SUITE("build::bundled_ruby_env") {
         // Newer Homebrew path helpers resolve under den's prefix.
         CHECK(env.find("\n" + (s.prefix() / "opt/zlib").string() + "\n") != std::string::npos);
         CHECK(env.find("\n" + (s.prefix() / "opt/zlib/lib").string()) != std::string::npos);
+        // ENV.cc and ENV.cxx name a compiler (git passes "CC=#{ENV.cc}" to
+        // make; an empty CC= breaks every compile).
+        auto cc = env.find("\ncc=");
+        auto cxx = env.find("\ncxx=");
+        REQUIRE(cc != std::string::npos);
+        REQUIRE(cxx != std::string::npos);
+        CHECK(env.compare(cc, 5, "\ncc=\n") != 0);
+        CHECK(cxx + 5 < env.size());
     }
 
     // Same fixture, but with the formula's sha256 replaced.

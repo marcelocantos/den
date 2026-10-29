@@ -376,6 +376,13 @@ unless ENV.respond_to?(:append_to_cflags)
   ENV.extend(DenStdenvFixes)
 end
 
+# Formulae hand the compiler to make themselves (git: "CC=#{ENV.cc}").
+# Homebrew's build environment always names one; without it ENV.cc is nil
+# and the command line gets an empty CC=, which overrides make's default
+# and breaks every compile. Name the platform compiler unless the caller did.
+ENV["CC"] = (RUBY_PLATFORM.include?("darwin") ? "clang" : "cc") if ENV["CC"].to_s.empty?
+ENV["CXX"] = (RUBY_PLATFORM.include?("darwin") ? "clang++" : "c++") if ENV["CXX"].to_s.empty?
+
 lib_paths = installed.values.map { |p| (p / "lib").to_s }.select { |p| File.directory?(p) }
 inc_paths = installed.values.map { |p| (p / "include").to_s }.select { |p| File.directory?(p) }
 pc_paths = installed.values.flat_map { |p|
