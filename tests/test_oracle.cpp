@@ -47,6 +47,15 @@ static constexpr const char* kCorpusDir = DEN_CORPUS_DIR;
 static constexpr const char* kCorpusDir = "";
 #endif
 
+// The in-repo fixtures (baselines, golden/) live beside the submodule path in
+// the source tree, wherever the corpus itself is (DEN_CORPUS_DIR may name a
+// shared checkout outside it).
+#ifdef DEN_SOURCE_DIR
+static constexpr const char* kFixtureDir = DEN_SOURCE_DIR "/tests/corpus";
+#else
+static constexpr const char* kFixtureDir = "tests/corpus";
+#endif
+
 namespace den {
 
 namespace {
@@ -173,7 +182,8 @@ TEST_SUITE("formula_parser_oracle") {
             MESSAGE("homebrew-core submodule not initialised at "
                     << kCorpusDir
                     << " — skipping oracle tests. Run `git submodule update --init "
-                       "tests/corpus/homebrew-core` to enable them.");
+                       "tests/corpus/homebrew-core`, or configure with DEN_CORPUS_DIR "
+                       "naming a shared checkout, to enable them.");
             return;
         }
         CHECK(fs::exists(root / "Formula"));
@@ -184,7 +194,7 @@ TEST_SUITE("formula_parser_oracle") {
         if (root.empty())
             return;
 
-        auto baseline_path = fs::path(kCorpusDir).parent_path() / "simple_formulae.txt";
+        auto baseline_path = fs::path(kFixtureDir) / "simple_formulae.txt";
         auto names = read_baseline(baseline_path);
         REQUIRE_MESSAGE(!names.empty(),
                         "simple_formulae.txt is empty or missing: " << baseline_path);
@@ -234,7 +244,7 @@ TEST_SUITE("formula_parser_oracle") {
         if (root.empty())
             return;
 
-        auto corpus_dir = fs::path(kCorpusDir).parent_path();
+        auto corpus_dir = fs::path(kFixtureDir);
         auto baseline_path = corpus_dir / "simple_formulae.txt";
         auto golden_dir = corpus_dir / "golden";
         auto names = read_baseline(baseline_path);
@@ -292,7 +302,7 @@ TEST_SUITE("formula_parser_oracle") {
         if (root.empty())
             return;
 
-        auto baseline_path = fs::path(kCorpusDir).parent_path() / "complex_formulae.txt";
+        auto baseline_path = fs::path(kFixtureDir) / "complex_formulae.txt";
         auto lines = read_baseline(baseline_path);
         REQUIRE_MESSAGE(!lines.empty(),
                         "complex_formulae.txt is empty or missing: " << baseline_path);

@@ -444,22 +444,20 @@ std::vector<Scenario> load_scenarios(const fs::path& yaml_path) {
 
 // ---------------------------------------------------------------------------
 // Locate the corpus YAML file relative to this source file's directory.
-// The CMake build passes DEN_CORPUS_DIR (pointing at tests/corpus/homebrew-core);
-// we derive the dep_scenarios.yaml path from it.
+// The CMake build passes DEN_SOURCE_DIR (the repo root); dep_scenarios.yaml
+// lives in its tests/corpus.
 // ---------------------------------------------------------------------------
 
-#ifdef DEN_CORPUS_DIR
-static constexpr const char* kCorpusDir = DEN_CORPUS_DIR;
+#ifdef DEN_SOURCE_DIR
+static constexpr const char* kSourceDir = DEN_SOURCE_DIR;
 #else
-static constexpr const char* kCorpusDir = "";
+static constexpr const char* kSourceDir = "";
 #endif
 
 static fs::path scenarios_path() {
-    // DEN_CORPUS_DIR = .../tests/corpus/homebrew-core
-    // dep_scenarios.yaml lives at .../tests/corpus/dep_scenarios.yaml
-    if (std::string(kCorpusDir).empty())
+    if (std::string(kSourceDir).empty())
         return {};
-    return fs::path(kCorpusDir).parent_path() / "dep_scenarios.yaml";
+    return fs::path(kSourceDir) / "tests" / "corpus" / "dep_scenarios.yaml";
 }
 
 // ---------------------------------------------------------------------------
@@ -502,7 +500,7 @@ TEST_SUITE("sat_solver::corpus") {
         auto path = scenarios_path();
         if (path.empty() || !fs::exists(path)) {
             MESSAGE("dep_scenarios.yaml not found at "
-                    << path.string() << " — re-run cmake to regenerate DEN_CORPUS_DIR");
+                    << path.string() << " — re-run cmake to regenerate DEN_SOURCE_DIR");
             return;
         }
         auto scenarios = yaml::load_scenarios(path);

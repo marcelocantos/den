@@ -108,15 +108,13 @@ struct TempDir {
 
 } // namespace
 
-// DEN_CORPUS_DIR is defined by CMakeLists.txt as <repo_root>/tests/corpus/...
-// We derive the repo root from it.
-#ifndef DEN_CORPUS_DIR
-#error "DEN_CORPUS_DIR must be defined by the build system"
+// DEN_SOURCE_DIR is defined by CMakeLists.txt as the repo root.
+#ifndef DEN_SOURCE_DIR
+#error "DEN_SOURCE_DIR must be defined by the build system"
 #endif
 
 static fs::path repo_root() {
-    // DEN_CORPUS_DIR == <repo_root>/tests/corpus/homebrew-core
-    return fs::path(DEN_CORPUS_DIR).parent_path().parent_path().parent_path();
+    return fs::path(DEN_SOURCE_DIR);
 }
 
 TEST_SUITE("bench_suite_present") {

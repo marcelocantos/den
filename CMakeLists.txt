@@ -134,17 +134,35 @@ add_test(
 # glob so the submodule's contents are ignored even if it grows .cpp
 # files in the future.
 file(GLOB TEST_SOURCES tests/*.cpp)
+
+# homebrew-core for the oracle tests: the submodule, or a shared checkout of
+# the same commit named by DEN_CORPUS_DIR (see cmake/corpus_dir.cmake).
+include(cmake/corpus_dir.cmake)
+set(DEN_CORPUS_DIR "" CACHE PATH
+    "Shared homebrew-core checkout for the tests (default: $ENV{DEN_CORPUS_DIR}, else the tests/corpus/homebrew-core submodule)")
+den_resolve_corpus_dir(DEN_CORPUS_DIR_RESOLVED "${CMAKE_SOURCE_DIR}" "${DEN_CORPUS_DIR}")
+
 if(TEST_SOURCES)
     add_executable(den_tests ${TEST_SOURCES})
     target_link_libraries(den_tests PRIVATE den_lib vendor_headers)
     target_include_directories(den_tests PRIVATE ${CMAKE_SOURCE_DIR}/vendor/include)
-    # Oracle tests (🎯T18) read formula Ruby source from the homebrew-core
-    # submodule. Pass the path as a compile-time constant so the tests can
-    # locate the corpus and skip gracefully if it isn't initialised.
+    # Oracle tests (🎯T18) read formula Ruby source from homebrew-core.
+    # Pass the path as a compile-time constant so the tests can locate the
+    # corpus and skip gracefully if it isn't initialised. In-repo fixtures
+    # (tests/corpus/*.txt, golden/, ...) are found via DEN_SOURCE_DIR, never
+    # relative to DEN_CORPUS_DIR, which may live outside the tree.
     target_compile_definitions(den_tests PRIVATE
-        DEN_CORPUS_DIR="${CMAKE_SOURCE_DIR}/tests/corpus/homebrew-core"
+        DEN_CORPUS_DIR="${DEN_CORPUS_DIR_RESOLVED}"
         DEN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
     add_test(NAME den_tests COMMAND den_tests)
+endif()
+
+# A shared corpus must track the submodule pin as it moves (merges re-pin it
+# without re-running cmake).
+if(NOT DEN_CORPUS_DIR_RESOLVED STREQUAL "${CMAKE_SOURCE_DIR}/tests/corpus/homebrew-core")
+    add_test(NAME corpus_pin
+        COMMAND ${CMAKE_COMMAND} -DCORPUS=${DEN_CORPUS_DIR_RESOLVED}
+                -DSRC=${CMAKE_SOURCE_DIR} -P ${CMAKE_SOURCE_DIR}/cmake/check_corpus.cmake)
 endif()
 
 # Harness helper regression: installed_pkg_runs must reject wrong-arch /

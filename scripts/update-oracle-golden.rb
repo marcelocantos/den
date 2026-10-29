@@ -22,12 +22,14 @@ require "pathname"
 
 ROOT = Pathname.new(File.expand_path("..", __dir__))
 CORPUS = ROOT / "tests" / "corpus"
-BREW = CORPUS / "homebrew-core"
+# DEN_CORPUS_DIR names a shared homebrew-core checkout at the submodule's
+# pinned commit (see cmake/corpus_dir.cmake); default is the submodule.
+BREW = ENV["DEN_CORPUS_DIR"].to_s.empty? ? CORPUS / "homebrew-core" : Pathname.new(File.expand_path(ENV["DEN_CORPUS_DIR"]))
 GOLDEN = CORPUS / "golden"
 BASELINE = CORPUS / "simple_formulae.txt"
 
 unless BREW.directory? && (BREW / "Formula").directory?
-  abort "error: homebrew-core submodule not initialised at #{BREW}"
+  abort "error: homebrew-core not found at #{BREW} (init the submodule or set DEN_CORPUS_DIR)"
 end
 abort "error: baseline missing at #{BASELINE}" unless BASELINE.file?
 
