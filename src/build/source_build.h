@@ -5,6 +5,7 @@
 
 #include "../core/config.h"
 #include "../index/package.h"
+#include "../store/store.h"
 
 #include <filesystem>
 #include <string>
@@ -32,9 +33,30 @@ struct BuildRecipe {
     std::vector<std::string> build_steps;
 };
 
+/// Where a formula's Ruby source came from.
+struct FormulaOrigin {
+    std::string tap;    // "homebrew/core", or "<user>/<repo>" for a tap formula
+    std::string commit; // the commit fetched; empty when unpinned or local
+    std::string path;   // ruby_source_path ("Formula/t/tree.rb", or a local file)
+};
+
+/// The URL fetch_formula_source fetches a homebrew-core formula from: by
+/// `pkg.tap_git_head` when the index has one, else from master.
+std::string formula_source_url(const Package& pkg);
+
 /// Fetch formula Ruby source via ruby_source_path from the index.
-/// Returns the formula text, or empty string on failure.
-std::string fetch_formula_source(const PackageIndex& idx, const std::string& name);
+/// A homebrew-core formula is fetched at the index's tap_git_head and, when
+/// the index carries ruby_source_sha256, verified against it: a mismatch
+/// throws UserError (the recipe is not the one the index describes).
+/// Returns the formula text, or empty string when it cannot be fetched.
+/// `origin`, when given, receives where the text came from.
+std::string fetch_formula_source(const PackageIndex& idx, const std::string& name,
+                                 FormulaOrigin* origin = nullptr);
+
+/// Parse den_build.rb's result lines ("source=<url>\t<sha256>",
+/// "resource=<name>\t<url>\t<sha256>", "patch=<url>\t<sha256>") into the
+/// receipt's inputs. Other lines are ignored.
+void parse_ruby_build_inputs(const std::string& output, SourceBuildReceipt& receipt);
 
 BuildRecipe extract_build_recipe(const PackageIndex& idx, const std::string& name);
 

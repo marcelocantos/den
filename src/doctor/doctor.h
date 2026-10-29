@@ -6,6 +6,7 @@
 #include "../core/config.h"
 #include "../index/package.h"
 #include "../platform/platform.h"
+#include "../store/store.h"
 
 #include <filesystem>
 #include <optional>
@@ -92,6 +93,26 @@ std::vector<BrewDependency> remaining_brew_dependencies(const Config& config);
 /// The doctor text for `deps`: "remaining brew dependencies: N" and one
 /// indented line each.
 std::string format_brew_dependencies(const std::vector<BrewDependency>& deps);
+
+/// A keg den built from source, from its receipt.
+struct SourceBuiltKeg {
+    std::string name;
+    std::string version;
+    SourceBuildReceipt receipt;
+    /// Why the keg should be rebuilt, or empty: the index's formula for the
+    /// same version now names a source whose sha256 differs from the one the
+    /// keg was built from.
+    std::string pending_rebuild;
+};
+
+/// Kegs in `store` whose receipt says den built them from source, sorted by
+/// name then version. With `idx`, each is checked against the index's
+/// current formula for a pending rebuild.
+std::vector<SourceBuiltKeg> source_built_kegs(const fs::path& store, const PackageIndex* idx);
+
+/// The doctor note listing `kegs` ("source-built kegs: N" and one indented
+/// line each), or an empty string when there are none.
+std::string format_source_built_kegs(const std::vector<SourceBuiltKeg>& kegs);
 
 /// Run all health checks and print a summary.
 /// Returns the list of findings so callers can set a non-zero exit code
