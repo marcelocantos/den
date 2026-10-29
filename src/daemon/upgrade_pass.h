@@ -7,6 +7,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <stdexcept>
 #include <vector>
 
 namespace den {
@@ -27,6 +28,13 @@ struct UpgradePassResult {
     // a stale state file from an older den). Dropped, never applied: an
     // upgrade never downgrades.
     std::vector<PendingUpgrade> not_newer;
+};
+
+// Thrown by an `apply` hook when the upgrade has to wait rather than fail:
+// a dependent that would move in the same batch is in use. The pass records
+// a deferral (reason = what()), keeps the package pending and logs no error.
+struct UpgradeDeferred : std::runtime_error {
+    using std::runtime_error::runtime_error;
 };
 
 // Run one upgrade pass over the pending upgrades recorded in `state`.

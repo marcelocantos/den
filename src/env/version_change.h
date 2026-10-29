@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -50,6 +51,10 @@ struct VersionChangeResult {
     /// Dependents with a revision bump that were left alone because they are
     /// pinned (`to` is the index version they would have moved to).
     std::vector<VersionChange> pinned_dependents;
+    /// Dependents that joined the batch whose installed keg was in use
+    /// (VersionChangeOptions::keg_in_use). When set, nothing was poured or
+    /// changed: the whole batch waits, so the dependency chain moves together.
+    std::vector<VersionChange> deferred_in_use;
 };
 
 struct VersionChangeOptions {
@@ -65,6 +70,13 @@ struct VersionChangeOptions {
     /// dependent's revision when a dependency changes ABI, so the two have to
     /// move together. Needs an index. Pinned dependents are left alone.
     bool upgrade_dependents = false;
+    /// When set, called for the installed keg of each dependent that joins
+    /// the batch through `upgrade_dependents`, before anything is poured. If
+    /// any is in use, the batch is not applied at all and those dependents
+    /// are listed in VersionChangeResult::deferred_in_use. The daemon passes
+    /// its in-use probe, so a dependent it would otherwise move under a
+    /// running process defers its whole dependency chain.
+    std::function<bool(const fs::path& keg)> keg_in_use;
 };
 
 /// Move packages in the active environment to new versions as one unit per

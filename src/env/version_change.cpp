@@ -281,8 +281,25 @@ VersionChangeResult apply_version_changes(const Config& config, PackageProvider&
     // Dependents that have to move with the batch join it before anything
     // is written, so the whole set is one transaction.
     std::vector<std::vector<size_t>> brought_by(changes.size());
+    const size_t requested = changes.size();
     if (opts.upgrade_dependents && idx) {
         add_revision_bumped_dependents(config, *idx, pname, changes, brought_by, result);
+    }
+
+    // A dependent that would move under a running process holds back the
+    // whole batch: moving the dependency without it would leave the chain
+    // split, so nothing is poured until every dependent is free.
+    if (opts.keg_in_use) {
+        for (size_t i = requested; i < changes.size(); ++i) {
+            const auto& c = changes[i];
+            if (!c.from.empty() && opts.keg_in_use(config.store / keg_name(c.name) / c.from)) {
+                SPDLOG_INFO("deferring batch: dependent {} {} is in use", c.name, c.from);
+                result.deferred_in_use.push_back(c);
+            }
+        }
+        if (!result.deferred_in_use.empty()) {
+            return result;
+        }
     }
 
     // Every opt link as the batch found it (installs and materialise both
