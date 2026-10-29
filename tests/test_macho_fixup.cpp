@@ -419,6 +419,39 @@ TEST_SUITE("macho_fixup") {
         CHECK(has_problem(problems, bad, "cannot resolve dylib load: " + px.opt));
     }
 
+    TEST_CASE("verify_keg_macho reports loads and rpaths in another Homebrew's prefix") {
+        Prefix px;
+        const auto bin = px.ctx.keg / "bin" / "git";
+        // What git 2.56 linked when its Makefile assumed /opt/homebrew. Weak
+        // loads and rpaths skip the resolution check, so only the new check
+        // can see them.
+        const std::string intl = "/opt/homebrew/opt/gettext/lib/libintl.8.dylib";
+        write_bytes(bin,
+                    macho(kMachoExecute, {{kLcLoadDylib, "/usr/lib/libSystem.B.dylib"},
+                                          {kLcLoadWeakDylib, intl},
+                                          {kLcLoadWeakDylib, "/usr/local/opt/zlib/lib/libz.dylib"},
+                                          {kLcRpath, "/home/linuxbrew/.linuxbrew/lib"},
+                                          {kLcRpath, "/opt/homebrewx/lib"}}));
+        const auto problems = verify_keg_macho(px.ctx, false);
+        CHECK(problems.size() == 3);
+        CHECK(has_problem(problems, bin,
+                          "another Homebrew prefix (/opt/homebrew), outside den's: " + intl));
+        CHECK(has_problem(problems, bin, "(/usr/local/opt)"));
+        CHECK(has_problem(problems, bin, "(/home/linuxbrew/.linuxbrew)"));
+
+        // When den's prefix is that Homebrew's (migrate layout), it is den's own.
+        MachoFixContext own{px.ctx.keg, "/opt/homebrew/opt/git", "/opt/homebrew/Cellar", "git"};
+        write_bytes(bin, macho(kMachoExecute, {{kLcLoadWeakDylib, intl}}));
+        CHECK(verify_keg_macho(own, false).empty());
+        MachoFixContext usr{px.ctx.keg, "/usr/local/opt/git", "/usr/local/Cellar", "git"};
+        write_bytes(bin,
+                    macho(kMachoExecute, {{kLcLoadWeakDylib, "/usr/local/opt/zlib/lib/libz.dylib"},
+                                          {kLcLoadWeakDylib, intl}}));
+        const auto usr_problems = verify_keg_macho(usr, false);
+        CHECK(usr_problems.size() == 1);
+        CHECK(has_problem(usr_problems, bin, "(/opt/homebrew)"));
+    }
+
 #ifdef __APPLE__
 
     TEST_CASE("fixup_keg_macho: a fixed keg loads after its opt link and its dependency move") {
