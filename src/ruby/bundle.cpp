@@ -115,6 +115,7 @@ fs::path ensure_ruby_bundle(const fs::path& den_home) {
     // copy compiled into this den (cheap compare on every call).
     auto ruby_dir = ensure_ruby_bundle_embedded(den_home);
     refresh_den_build_script(ruby_dir);
+    ensure_bundle_library_link(ruby_dir);
     return ruby_dir;
 #else
     // Linux: lazy-download Homebrew Portable Ruby from the pinned GitHub

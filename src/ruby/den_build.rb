@@ -32,7 +32,9 @@ unless defined?(Formula)
 
   # Override paths to point at den's locations.
   bundle_dir = File.dirname(__FILE__)
-  ENV["HOMEBREW_LIBRARY"] = File.expand_path("homebrew", bundle_dir)
+  # Homebrew's layout: HOMEBREW_LIBRARY/Homebrew is the library itself (den
+  # links ruby/Library/Homebrew to ruby/homebrew).
+  ENV["HOMEBREW_LIBRARY"] = File.expand_path("Library", bundle_dir)
   ENV["HOMEBREW_BREW_FILE"] ||= "/dev/null"
   ENV["HOMEBREW_ORIGINAL_BREW_FILE"] ||= "/dev/null"
   ENV["HOMEBREW_NO_ANALYTICS"] = "1"
