@@ -371,6 +371,17 @@ std::string last_output_line(const std::string& output) {
 
 } // namespace
 
+bool bakes_fixed_prefix(const PackageIndex& idx, const std::string& requested) {
+    const Package* pkg = idx.find(requested);
+    if (!pkg)
+        return false;
+    for (const auto& [tag, archive] : pkg->archives) {
+        if (archive.relocation == RelocationType::HardcodedPrefix)
+            return true;
+    }
+    return false;
+}
+
 void allow_native_fallback(const fs::path& den_home, const std::string& name,
                            const std::string& version, const std::string& why,
                            SourceBuildReceipt& receipt) {
@@ -461,6 +472,13 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
     if (sandboxed)
         ruby_sandbox_env +=
             "DEN_BUILD_SANDBOX_PROFILE=" + shell_quote(seatbelt_profile(sandbox)) + " ";
+    // A formula whose bottles are fixed-cellar bakes its prefix into
+    // binaries, so an install step that ignores DESTDIR stays an error; any
+    // other formula retries that step into a staging keg
+    // (docs/source-builds.md).
+    const bool keg_fallback = !bakes_fixed_prefix(idx, requested);
+    if (keg_fallback)
+        ruby_sandbox_env += "DEN_BUILD_KEG_FALLBACK=1 ";
 
     // Fetch formula source from GitHub (no brew dependency).
     FormulaOrigin origin;
@@ -677,7 +695,33 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
         int step_rc = run_in_dir(
             src_dir, sandboxed_shell_command(sandbox, install ? with_destdir(cmd, stage) : cmd),
             env);
-        if (step_rc == 0 && install)
+        if (!install)
+            return step_rc;
+        // An install step that ignored DESTDIR: tree's Makefile, say, uses
+        // DESTDIR as its bin directory, so the binary lands loose in the
+        // stage and the man pages head for the live opt path (which the
+        // sandbox denies). Unless the formula bakes a fixed prefix, retry
+        // the step brew-style: install straight into the staging keg
+        // <stage><opt>, then relocate any text that names it back to <opt>.
+        const bool ignored = (sandboxed && step_rc != 0) ||
+                             (step_rc == 0 && !staged_strays(stage, opt, shared_prefix).empty()) ||
+                             (step_rc == 0 && !opt_guard.unchanged());
+        if (ignored && keg_fallback && opt_guard.settle()) {
+            std::error_code rm;
+            fs::remove_all(stage, rm);
+            const auto staged_keg = stage / opt.relative_path();
+            fs::create_directories(staged_keg);
+            std::cout << "==> Install step ignored DESTDIR; installing into a staging keg\n";
+            auto keg_env = env;
+            keg_env["PREFIX"] = staged_keg.string();
+            step_rc = run_in_dir(
+                src_dir, sandboxed_shell_command(sandbox, with_staged_keg(cmd, opt, staged_keg)),
+                keg_env);
+            if (step_rc != 0)
+                return step_rc;
+            relocate_staged_keg(staged_keg, opt);
+        }
+        if (step_rc == 0)
             merge_destdir_stage(stage, opt, dest, shared_prefix);
         return step_rc;
     };

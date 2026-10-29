@@ -244,13 +244,16 @@ den_merge_tree = lambda do |src, dst, replace|
   end
 end
 
-# Same contract as merge_destdir_stage in src/build/opt_prefix_build.cpp.
-den_merge_stage = lambda do
-  next unless stage.exist?
-  staged_keg = stage / opt_path.relative_path_from(Pathname.new("/"))
-  staged_etc = stage / (prefix_root / "etc").relative_path_from(Pathname.new("/"))
-  staged_var = stage / (prefix_root / "var").relative_path_from(Pathname.new("/"))
-  kept = [staged_keg, staged_etc, staged_var].map(&:to_s)
+den_root = Pathname.new("/")
+den_staged_keg = stage / opt_path.relative_path_from(den_root)
+den_keg_fallback = ENV.delete("DEN_BUILD_KEG_FALLBACK") == "1"
+
+# Same contract as staged_strays in src/build/opt_prefix_build.cpp.
+den_stage_strays = lambda do
+  next [] unless stage.exist?
+  staged_etc = stage / (prefix_root / "etc").relative_path_from(den_root)
+  staged_var = stage / (prefix_root / "var").relative_path_from(den_root)
+  kept = [den_staged_keg, staged_etc, staged_var].map(&:to_s)
   stray = []
   Find.find(stage.to_s) do |path|
     if kept.any? { |k| path == k || path.start_with?("#{k}/") }
@@ -259,21 +262,80 @@ den_merge_stage = lambda do
       stray << path.delete_prefix(stage.to_s)
     end
   end
+  stray
+end
+
+# Same contract as merge_destdir_stage in src/build/opt_prefix_build.cpp.
+den_merge_stage = lambda do
+  next unless stage.exist?
+  staged_etc = stage / (prefix_root / "etc").relative_path_from(den_root)
+  staged_var = stage / (prefix_root / "var").relative_path_from(den_root)
+  stray = den_stage_strays.call
   unless stray.empty?
     stage.rmtree
     abort "error: source build installed files outside its keg (expected everything under " \
           "#{opt_path}):\n  #{stray.join("\n  ")}"
   end
-  den_merge_tree.call(staged_keg, dest, true) if staged_keg.directory?
+  den_merge_tree.call(den_staged_keg, dest, true) if den_staged_keg.directory?
   den_merge_tree.call(staged_etc, prefix_root / "etc", false) if staged_etc.directory?
   den_merge_tree.call(staged_var, prefix_root / "var", false) if staged_var.directory?
   stage.rmtree
+end
+
+# Same contract as relocate_staged_keg in src/build/opt_prefix_build.cpp.
+den_relocate_staged = lambda do
+  from = den_staged_keg.to_s
+  binary = []
+  Find.find(from) do |path|
+    st = File.lstat(path)
+    if st.symlink?
+      target = File.readlink(path)
+      next unless target.include?(from)
+      File.unlink(path)
+      File.symlink(target.gsub(from, opt_path.to_s), path)
+    elsif st.file?
+      data = File.binread(path)
+      next unless data.include?(from)
+      if data.include?("\0")
+        binary << path.delete_prefix("#{from}/")
+        next
+      end
+      File.binwrite(path, data.gsub(from, opt_path.to_s))
+      File.chmod(st.mode & 07777, path)
+    end
+  end
+  unless binary.empty?
+    abort "error: source build baked its staging path into binary files, which den can't " \
+          "relocate (see docs/source-builds.md):\n  #{binary.join("\n  ")}"
+  end
+end
+
+# Defined below; the install-step retry checks the live opt path with them.
+den_opt_state = nil
+opt_before = nil
+den_opt_settle = lambda do
+  now = den_opt_state.call
+  next true if now == opt_before
+  next false unless opt_before.nil?
+  FileUtils.rm_rf(opt_path)
+  true
+end
+
+den_opt_re = /#{Regexp.escape(opt_path.to_s)}(?=\/|\z|[^\w.+@-])/
+den_retarget = lambda do |a|
+  case a
+  when Pathname then Pathname.new(a.to_s.gsub(den_opt_re, den_staged_keg.to_s))
+  when String then a.gsub(den_opt_re, den_staged_keg.to_s)
+  else a
+  end
 end
 
 f.define_singleton_method(:system) do |cmd, *args|
   cmd = den_rewrite.call(cmd)
   args = args.map { |a| den_rewrite.call(a) }
   kind = den_install_kind.call([cmd, *args])
+  plain_cmd = cmd
+  plain_args = args
   saved_env = {}
   ENV.to_h.each do |k, v|
     next unless v.match?(den_keg_re)
@@ -290,12 +352,47 @@ f.define_singleton_method(:system) do |cmd, *args|
     saved_env["DESTDIR"] = ENV.fetch("DESTDIR", nil) unless saved_env.key?("DESTDIR")
     ENV["DESTDIR"] = stage.to_s
   end
+  failure = nil
   begin
     super(cmd, *args)
+  rescue StandardError => e
+    raise unless kind
+    failure = e
   ensure
     saved_env.each { |k, v| ENV[k] = v }
   end
-  den_merge_stage.call if kind
+  next unless kind
+
+  # An install step that ignored DESTDIR (tree's Makefile uses it as its bin
+  # directory): unless the formula bakes a fixed prefix, retry it brew-style
+  # into the staging keg <stage><opt>, then relocate text naming it to <opt>.
+  # Same rule as run_step in src/build/source_build.cpp.
+  ignored = (failure && den_sandbox_profile) ||
+            (!failure && (!den_stage_strays.call.empty? || den_opt_state.call != opt_before))
+  if ignored && den_keg_fallback && den_opt_settle.call
+    stage.rmtree if stage.exist?
+    den_staged_keg.mkpath
+    $stderr.puts "==> Install step ignored DESTDIR; installing into a staging keg"
+    saved_env = {}
+    ENV.to_h.each do |k, v|
+      next unless v.match?(den_keg_re) || v.match?(den_opt_re)
+      saved_env[k] = v
+      ENV[k] = den_retarget.call(v.gsub(den_keg_re, opt_path.to_s))
+    end
+    if kind == :env
+      saved_env["DESTDIR"] = ENV.fetch("DESTDIR", nil) unless saved_env.key?("DESTDIR")
+      ENV.delete("DESTDIR")
+    end
+    begin
+      super(den_retarget.call(plain_cmd), *plain_args.map { |a| den_retarget.call(a) })
+    ensure
+      saved_env.each { |k, v| ENV[k] = v }
+    end
+    den_relocate_staged.call
+  elsif failure
+    raise failure
+  end
+  den_merge_stage.call
 end
 
 # Formula#system forks, sets up logging, and calls exec_cmd in the child,

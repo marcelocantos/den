@@ -90,6 +90,34 @@ appends `DESTDIR=` on the command line, which overrides a Makefile's own
 `cmake --build … --target install`, `ninja … install` and `meson install`
 (den exports `DESTDIR`).
 
+## Install steps that ignore DESTDIR
+
+Some Makefiles don't honour DESTDIR as a staging root. tree's, for one,
+assigns `DESTDIR=${PREFIX}/bin` and takes an absolute `MANDIR`, so a staged
+`make install` puts the binary loose in the stage and sends the man pages to
+the live opt path. den detects this in three ways:
+
+* the step fails under the [build sandbox](#build-sandbox-macos), which
+  denies the write into the prefix;
+* the step stages files outside `<stage><prefix>/opt/<name>`, etc and var;
+* the step changes the live opt path. On Linux, a directory the build created
+  there is removed before the retry.
+
+When that happens, den retries the step brew-style. It runs the same command
+with every `<prefix>/opt/<name>` in it, and `PREFIX` in its environment,
+pointing at the staging keg `<stage><prefix>/opt/<name>` instead, and without
+DESTDIR. The sandbox allows writes there. Text files and symlinks that name
+the staging keg are then rewritten to `<prefix>/opt/<name>`, and the staging
+keg merges into the versioned keg as usual. A binary that names the staging
+keg can't be relocated, so the build fails. The configure and compile steps
+already ran against the opt path, so only paths written by the install step
+itself are relocated.
+
+The retry is refused for formulas whose bottles are fixed-cellar (Homebrew
+`cellar` is a path rather than `:any`/`:any_skip_relocation`). Those formulas
+bake their prefix into binaries, so an install step that ignores DESTDIR still
+fails the build, as described under [Per-formula overrides](#per-formula-overrides).
+
 In the bundled-Ruby build (`src/ruby/den_build.rb`) the formula's own Ruby
 file operations (`bin.install`, `rm`, `inreplace` of an installed file) still
 work on the keg, because `prefix`, `bin`, `lib` and the rest are the keg's
@@ -279,8 +307,9 @@ suggests `den install --build-from-source <name>` to rebuild it.
 
 ## Per-formula overrides
 
-The generic mode is the rule. A formula whose install step ignores DESTDIR
-(it writes `<prefix>/opt/<name>` directly), or that must see its keg path
+The generic mode is the rule. A fixed-cellar formula whose install step
+ignores DESTDIR (it writes `<prefix>/opt/<name>` directly; other formulas are
+[retried into a staging keg](#install-steps-that-ignore-destdir)), or that must see its keg path
 while building, fails the build and leaves the live prefix as it was. Such a
 formula may get a per-formula override only as an escape hatch. Each override
 must be listed here with the reason it is needed and must have a regression

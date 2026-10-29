@@ -343,13 +343,18 @@ TEST_SUITE("build_sandbox") {
                                  "\techo 1.0 > $(PREFIX)/bin/extra\n"
                                  "\trm -f $(PREFIX)/lib/libtool.txt\n");
 
+#ifdef __APPLE__
+        // The sandbox denied every write, so the older keg is byte-identical,
+        // and den retried the step into a staging keg, which became 1.0.
+        build_from_source(cfg, idx, name, "1.0");
+        CHECK(fs::read_symlink(opt) == fs::path("../Cellar/" + name + "/0.9"));
+        CHECK(snapshot(old_keg) == before);
+        CHECK(slurp(cfg.store / name / "1.0" / "bin" / "tool") == "1.0\n");
+        CHECK(slurp(cfg.store / name / "1.0" / "bin" / "extra") == "1.0\n");
+#else
         CHECK_THROWS_AS(build_from_source(cfg, idx, name, "1.0"), UserError);
         CHECK(fs::read_symlink(opt) == fs::path("../Cellar/" + name + "/0.9"));
         CHECK_FALSE(fs::exists(cfg.store / name / "1.0"));
-#ifdef __APPLE__
-        // The sandbox denied every write: the older keg is byte-identical.
-        CHECK(snapshot(old_keg) == before);
-#else
         // Linux has no sandbox (documented gap): OptPathGuard fails the
         // build, but the write-through already happened.
         CHECK(snapshot(old_keg) != before);
