@@ -164,18 +164,17 @@ bool install_one(const Config& config, const Package& pkg) {
             SPDLOG_WARN("trust: {} {} — {} (degraded trust)", pkg.name, pkg.version, trust.message);
             degraded = DegradedInstall{pkg.name, pkg.version, trust.reason_tag, *best, {}};
             break;
-        case BottleAction::HoldBack: {
-            DegradedInstall refused{pkg.name, pkg.version, "unattended-refuse", *best, {}};
-            refused.state = "refused";
-            refused.status = trust.reason_tag;
-            refused.bottle_sha = archive.sha256;
-            record_refused_install(config, refused);
+        case BottleAction::HoldBack:
+            record_refused_install(config, trust_hold_entry(pkg, trust, archive.sha256));
             throw TrustHeldBack(pkg.name, pkg.version,
                                 "held back '" + pkg.name + " " + pkg.version + "' (" +
                                     *policy.unattended + ", trust.unattended=refuse): " +
                                     trust.message + "; review with `den trust review`");
-        }
         case BottleAction::Refuse:
+            // Nobody sees the error of an unattended run: the ledger keeps it
+            // for `den trust review` and `den doctor`.
+            if (policy.unattended)
+                record_refused_install(config, trust_hold_entry(pkg, trust, archive.sha256));
             throw UserError("refusing to install '" + pkg.name + " " + pkg.version +
                             "': trust check failed — " + trust.message);
         }
@@ -306,9 +305,21 @@ BottleTrust evaluate_bottle_trust(const Config& config, const Package& pkg, cons
     BottleTrust out;
     out.decision = check.decision;
     out.message = check.message;
-    out.reason_tag = homebrew_hash ? replica_status_tag(replica.status) : "homebrew-hash-missing";
+    out.reason_tag = homebrew_hash || replica.status == ReplicaLookupStatus::Unreadable
+                         ? replica_status_tag(replica.status)
+                         : "homebrew-hash-missing";
     out.bottle_tag = tag;
     return out;
+}
+
+DegradedInstall trust_hold_entry(const Package& pkg, const BottleTrust& trust,
+                                 const std::string& bottle_sha) {
+    DegradedInstall d{
+        pkg.name, pkg.version, hold_reason(trust.decision, trust.reason_tag), trust.bottle_tag, {}};
+    d.state = "refused";
+    d.status = trust.reason_tag;
+    d.bottle_sha = bottle_sha;
+    return d;
 }
 
 std::optional<BottleTrust> evaluate_bottle_trust(const Config& config, const Package& pkg) {

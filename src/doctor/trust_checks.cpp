@@ -3,7 +3,9 @@
 
 #include "trust_checks.h"
 
+#include "../settings/settings.h"
 #include "../trust/trust_model.h"
+#include "../trust/unattended.h"
 
 #include <spdlog/spdlog.h>
 
@@ -80,6 +82,7 @@ TrustReport build_trust_report(const Config& config) {
     }
 
     report.degraded_installs = summarize_degraded_installs(config);
+    report.settings_problems = trust_settings_problems(read_settings(config.den_home).trust);
 
     return report;
 }
@@ -100,6 +103,9 @@ std::vector<Finding> findings_from_trust_report(const TrustReport& report) {
                        "formulae.brew.sh only (degraded trust); reinstall den or seed "
                        "<den_home>/trust/known_hashes.json");
     }
+
+    for (const auto& problem : report.settings_problems)
+        warn(findings, "trust: " + problem);
 
     const auto& degraded = report.degraded_installs;
     if (degraded.ledger_error) {

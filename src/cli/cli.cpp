@@ -1005,6 +1005,12 @@ void Cli::M::setup() {
         if (!target)
             throw UserError("expected <formula>@<version>, got '" + trust_accept_target + "'");
         auto cfg = Config::detect();
+        for (const auto& d : summarize_degraded_installs(cfg).refused_installs)
+            if (d.name == target->first && d.version == target->second &&
+                !hold_is_acceptable(d.reason))
+                throw UserError(trust_accept_target + " is held back for '" + d.reason +
+                                "', which `den trust accept` cannot override: only a "
+                                "single-source hold can be accepted (see `den trust review`)");
         if (!accept_refused_install(cfg, target->first, target->second))
             throw UserError("nothing held back for " + trust_accept_target +
                             " (see `den trust review`)");

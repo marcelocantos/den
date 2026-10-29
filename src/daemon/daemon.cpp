@@ -651,30 +651,6 @@ void apply_daemon_upgrade(const Config& config, PackageProvider& provider, const
 
 namespace {
 
-// What upgrading `name` would install: the package plus every runtime
-// dependency (transitively) not already in the store at its index version.
-std::vector<std::string> packages_to_install(const Config& config, const PackageIndex& idx,
-                                             const std::string& name) {
-    std::vector<std::string> out;
-    std::set<std::string> seen;
-    std::vector<std::string> stack{name};
-    while (!stack.empty()) {
-        std::string n = stack.back();
-        stack.pop_back();
-        if (!seen.insert(n).second)
-            continue;
-        const Package* pkg = idx.find(n);
-        if (!pkg)
-            continue;
-        if (n != name && is_installed(config.store, keg_name(pkg->name), pkg->version))
-            continue;
-        out.push_back(n);
-        for (const auto& d : pkg->dependencies)
-            stack.push_back(d);
-    }
-    return out;
-}
-
 // Post a macOS notification without waiting for it (osascript is detached;
 // the shell exits at once). Elsewhere there is nothing to post to: the hold
 // is in the daemon log, `den daemon status` and `den doctor`.
@@ -733,50 +709,7 @@ MaintenanceHooks make_live_hooks(const Config& config, PackageIndex& idx, bool& 
         apply_daemon_upgrade(config, *provider, idx, pu);
         applied_any = true;
     };
-    h.trust_screen = [&config, &idx](const std::vector<PendingUpgrade>& pending) {
-        TrustPolicy policy = current_trust_policy(config);
-        auto to_install = [&config, &idx](const std::string& name) {
-            return packages_to_install(config, idx, name);
-        };
-        auto refusal = [&config, &idx,
-                        &policy](const std::string& name) -> std::optional<std::string> {
-            const Package* pkg = idx.find(name);
-            if (!pkg)
-                return std::nullopt; // apply reports the missing package
-            auto trust = evaluate_bottle_trust(config, *pkg);
-            if (!trust)
-                return std::nullopt;
-            bool accepted = trust->decision == TrustDecision::WarnProceed &&
-                            is_install_accepted(config, pkg->name, pkg->version);
-            switch (bottle_action(policy, trust->decision, accepted)) {
-            case BottleAction::Install:
-            case BottleAction::InstallDegraded:
-                return std::nullopt;
-            case BottleAction::HoldBack: {
-                DegradedInstall refused{
-                    pkg->name, pkg->version, "unattended-refuse", trust->bottle_tag, {}};
-                refused.status = trust->reason_tag;
-                refused.bottle_sha = pkg->archives.at(trust->bottle_tag).sha256;
-                record_refused_install(config, refused);
-                return "trust.unattended=refuse, " + trust->reason_tag;
-            }
-            case BottleAction::Refuse:
-                return "trust check failed: " + trust->message;
-            }
-            return std::nullopt;
-        };
-        auto held = screen_pending_upgrades(pending, to_install, refusal);
-        // Dependents held back for a dependency's sake go in the ledger too.
-        for (const auto& [name, reason] : held) {
-            if (!reason.starts_with("depends on "))
-                continue;
-            if (const Package* pkg = idx.find(name)) {
-                DegradedInstall dep{pkg->name, pkg->version, reason, {}, {}};
-                record_refused_install(config, dep);
-            }
-        }
-        return held;
-    };
+    h.trust_screen = live_trust_screen(config, idx);
     h.notify_held = [&config](const std::vector<std::string>& names) {
         if (!current_trust_policy(config).notify)
             return false;

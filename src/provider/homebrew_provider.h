@@ -4,6 +4,7 @@
 #pragma once
 
 #include "../index/package.h"
+#include "../trust/degraded_installs.h"
 #include "../trust/trust_model.h"
 #include "package_provider.h"
 
@@ -69,6 +70,11 @@ std::optional<BottleTrust> evaluate_bottle_trust(const Config& config, const Pac
 /// The same check for an explicit bottle tag and archive.
 BottleTrust evaluate_bottle_trust(const Config& config, const Package& pkg, const std::string& tag,
                                   const Package::Archive& archive);
+
+/// The ledger entry ("refused") for a bottle an unattended run holds back or
+/// refuses: reason hold_reason(), status trust.reason_tag.
+DegradedInstall trust_hold_entry(const Package& pkg, const BottleTrust& trust,
+                                 const std::string& bottle_sha);
 
 /// Pour one formula keg (no dependency resolution, no manifest change) into
 /// config.store, write its DEN_RECEIPT and opt link. Used by `den

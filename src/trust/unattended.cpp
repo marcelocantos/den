@@ -27,6 +27,20 @@ UnattendedMode parse_unattended_mode(const std::string& value) {
     return UnattendedMode::Refuse;
 }
 
+std::vector<std::string> trust_settings_problems(const TrustSettings& settings) {
+    std::vector<std::string> out;
+    if (settings.unattended != "warn" && settings.unattended != "refuse")
+        out.push_back("trust.unattended is '" + settings.unattended +
+                      "', which is not warn or refuse: unattended runs treat it as refuse. Fix "
+                      "with `den set trust.unattended warn` (or refuse)");
+    if (settings.unattended_source_builds != "off" &&
+        settings.unattended_source_builds != "allowlist")
+        out.push_back("trust.unattended_source_builds is '" + settings.unattended_source_builds +
+                      "', which is not off or allowlist: unattended runs treat it as off. Fix "
+                      "with `den set trust.unattended_source_builds off` (or allowlist)");
+    return out;
+}
+
 TrustPolicy make_trust_policy(const TrustSettings& settings,
                               std::optional<std::string> unattended) {
     TrustPolicy p;
@@ -69,6 +83,20 @@ std::optional<std::string> unattended_reason() {
 
 TrustPolicy current_trust_policy(const Config& config) {
     return make_trust_policy(read_settings(config.den_home).trust, unattended_reason());
+}
+
+std::string hold_reason(TrustDecision decision, const std::string& status_tag) {
+    if (decision == TrustDecision::WarnProceed)
+        return "single-source";
+    if (status_tag == "found")
+        return "hash-mismatch";
+    if (status_tag == "replica-unreadable")
+        return "replica-unreadable";
+    return "unverifiable";
+}
+
+bool hold_is_acceptable(const std::string& reason) {
+    return reason == "single-source" || reason == "unattended-source-build";
 }
 
 BottleAction bottle_action(const TrustPolicy& policy, TrustDecision decision, bool accepted) {

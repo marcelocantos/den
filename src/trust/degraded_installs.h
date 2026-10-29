@@ -17,9 +17,9 @@
 // Only entries whose keg still exists are counted, so `den cleanup` removing a
 // keg drops it from the counts without having to edit the ledger.
 //
-// Unattended installs (the daemon, `den --unattended`) also record what they
-// held back under trust.unattended=refuse or deferred as a source build:
-//   "<name>@<version>": { "state": "refused", "reason": "unattended-refuse",
+// Unattended installs (the daemon, `den --unattended`) also record every
+// bottle they held back or refused, and every source build they deferred:
+//   "<name>@<version>": { "state": "refused", "reason": "single-source",
 //                         "status": "no-replica-entry", "bottle_sha": "…",
 //                         "bottle_tag": "…", "recorded_at": … }
 // `den trust accept <name>@<version>` turns a refused entry into
@@ -71,7 +71,8 @@ void clear_degraded_install(const Config& config, const std::string& name,
                             const std::string& version);
 
 /// Record that an unattended install held name@version back (or deferred its
-/// source build). `install.reason` says why ("unattended-refuse",
+/// source build). `install.reason` says why (hold_reason(): "single-source",
+/// "hash-mismatch", "replica-unreadable", "unverifiable"; or
 /// "unattended-source-build", "depends on …"). Best effort, like
 /// record_degraded_install. An "accepted" entry is left alone.
 void record_refused_install(const Config& config, const DegradedInstall& install);

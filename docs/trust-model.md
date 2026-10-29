@@ -66,15 +66,34 @@ A run is unattended when it is the daemon, when `--unattended` is passed
 (`den --unattended upgrade`), or when it runs as den's launchd job
 (`XPC_SERVICE_NAME=dev.den.daemon`). A missing TTY on its own does not count,
 so CI and scripted installs behave as before, and `--yes` never counts.
-An unknown `trust.unattended` value is treated as `refuse`.
+An unknown `trust.unattended` value (or one of the wrong type) is treated as
+`refuse`, an unknown `trust.unattended_source_builds` as `off`, and
+`den doctor` warns about either.
 
 **Holding back skips, it does not abort.** Before each upgrade pass the
-daemon screens its pending upgrades. A formula that would be held back stays
-pending and sits the pass out, and so does every pending upgrade that would
-have to install it (its ledger reason is `depends on <formula>: …`). The rest
-of the pass carries on. Each held-back version gets a ledger entry
-`{state: "refused", reason: "unattended-refuse", status, bottle_sha,
-bottle_tag, recorded_at}`. If the screen itself fails, the pass is skipped.
+daemon screens its pending upgrades, and `den --unattended upgrade` screens
+its candidates with the same code. A formula that would be held back (single
+source under `refuse`) or refused (hashes disagree, snapshot unreadable)
+stays pending and sits the run out, and so does every pending upgrade that
+would have to install it. The rest carries on. The CLI prints the held set
+once and exits non-zero after upgrading the rest; the daemon notifies once.
+If the screen itself fails, nothing is upgraded.
+
+Every hold goes in the ledger as `{state: "refused", reason, status,
+bottle_sha, bottle_tag, recorded_at}`, so `den trust review` lists all of
+them. `reason` is one of:
+
+| reason | meaning |
+|---|---|
+| `single-source` | one hash source only (`status` says which is missing) |
+| `hash-mismatch` | Homebrew and the replica disagree |
+| `replica-unreadable` | the replica snapshot exists but cannot be read |
+| `unverifiable` | neither source has a hash |
+| `depends on <formula>: …` | held back because it would install `<formula>` |
+| `unattended-source-build` | a source build deferred (see source builds) |
+
+An unattended install that refuses outside a screened upgrade (for example
+a dependency) is recorded the same way.
 
 **Notifications.** At most one macOS notification per daemon pass, and only
 when the pass holds back something it did not hold back in the previous one.
@@ -85,7 +104,9 @@ when the last notification went out.
 **Review and accept.** `den trust review` lists what is held back or
 deferred, what has been accepted, and what was installed on a single source.
 `den trust accept <formula>@<version>` (for example
-`den trust accept openssl@3@3.6.3`) marks one exact version accepted. The next
+`den trust accept openssl@3@3.6.3`) marks one exact version accepted. Only a
+`single-source` hold or a deferred source build can be accepted; a mismatch
+or an unreadable snapshot has to be fixed at the source. The next
 unattended run installs it (recorded as a degraded install) and the refused
 entry goes away. A newer version is screened afresh. `accept` must be run
 interactively.

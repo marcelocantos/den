@@ -123,12 +123,18 @@ inline void from_json(const nlohmann::json& j, TrustSettings& t) {
     t = TrustSettings{};
     if (!j.is_object())
         return;
-    if (j.contains("unattended") && j["unattended"].is_string())
-        t.unattended = j["unattended"].get<std::string>();
+    // A value of the wrong type is kept as its JSON text rather than
+    // dropped back to the default, so it fails closed (trust.unattended →
+    // refuse, unattended_source_builds → off) and `den doctor` names it.
+    auto enum_value = [](const nlohmann::json& v) {
+        return v.is_string() ? v.get<std::string>() : v.dump();
+    };
+    if (j.contains("unattended"))
+        t.unattended = enum_value(j["unattended"]);
     if (j.contains("notify"))
         json_as_bool(j["notify"], &t.notify);
-    if (j.contains("unattended_source_builds") && j["unattended_source_builds"].is_string())
-        t.unattended_source_builds = j["unattended_source_builds"].get<std::string>();
+    if (j.contains("unattended_source_builds"))
+        t.unattended_source_builds = enum_value(j["unattended_source_builds"]);
     if (j.contains("source_build_allowlist")) {
         const auto& v = j["source_build_allowlist"];
         std::vector<std::string> names;

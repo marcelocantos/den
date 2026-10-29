@@ -8,13 +8,16 @@
 #include "../core/error.h"
 #include "../core/version.h"
 #include "../daemon/daemon.h"
+#include "../daemon/trust_screen.h"
 #include "../env/environment.h"
 #include "../env/manifest.h"
 #include "../env/version_change.h"
 #include "../store/pins.h"
 #include "../store/store.h"
+#include "../trust/unattended.h"
 
 #include <iostream>
+#include <map>
 #include <vector>
 
 namespace den {
@@ -211,7 +214,7 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
     }
 
     auto split = partition_pinned(candidates, pins);
-    const auto& upgrades = split.upgrade;
+    std::vector<UpgradeCandidate> upgrades = split.upgrade;
     if (!split.held.empty()) {
         std::cout << "Not upgrading " << split.held.size() << " pinned package(s):\n";
         for (const auto& h : split.held) {
@@ -220,16 +223,46 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
         }
     }
 
-    if (upgrades.empty()) {
-        if (explicitly_pinned.empty()) {
-            if (older.empty())
-                std::cout << "All packages are up to date.\n";
-            else
-                std::cout << "Nothing to upgrade.\n";
-            return;
+    // `den --unattended upgrade` screens its candidates exactly as the
+    // daemon's maintenance cycle does (screen_unattended_upgrades): a formula
+    // the trust policy holds back sits this run out with every candidate that
+    // would install it, each hold goes in the trust ledger, and the rest
+    // upgrade. The held set is reported once, here, and the run exits
+    // non-zero after the rest are applied.
+    std::map<std::string, std::string> trust_held;
+    if (TrustPolicy policy = current_trust_policy(config); policy.unattended && !upgrades.empty()) {
+        std::vector<PendingUpgrade> pending;
+        for (const auto& u : upgrades)
+            pending.push_back({u.name, u.installed, u.available});
+        trust_held = screen_unattended_upgrades(config, idx, pending, policy);
+        if (!trust_held.empty()) {
+            std::cout << "Held back " << trust_held.size()
+                      << " package(s) (unattended trust policy):\n";
+            for (const auto& u : upgrades)
+                if (auto it = trust_held.find(u.name); it != trust_held.end())
+                    std::cout << "  " << u.name << " " << u.installed << " -> " << u.available
+                              << ": " << it->second << "\n";
+            std::erase_if(upgrades,
+                          [&](const UpgradeCandidate& u) { return trust_held.contains(u.name); });
         }
-        throw UserError(std::to_string(explicitly_pinned.size()) +
-                        " requested package(s) are pinned");
+    }
+    auto fail_if_held = [&] {
+        if (!explicitly_pinned.empty())
+            throw UserError(std::to_string(explicitly_pinned.size()) +
+                            " requested package(s) are pinned");
+        if (!trust_held.empty())
+            throw UserError(std::to_string(trust_held.size()) +
+                            " package(s) held back by the unattended trust policy; review with "
+                            "`den trust review`");
+    };
+
+    if (upgrades.empty()) {
+        fail_if_held();
+        if (older.empty())
+            std::cout << "All packages are up to date.\n";
+        else
+            std::cout << "Nothing to upgrade.\n";
+        return;
     }
 
     std::cout << upgrades.size() << " package(s) to upgrade:\n";
@@ -266,10 +299,7 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
         std::cout << "==> " << res.rolled_back.size() << " package(s) rolled back.\n";
     }
     report_version_change_failures(config, res, "upgrade");
-    if (!explicitly_pinned.empty()) {
-        throw UserError(std::to_string(explicitly_pinned.size()) +
-                        " requested package(s) are pinned");
-    }
+    fail_if_held();
 }
 
 } // namespace den

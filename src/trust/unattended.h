@@ -11,10 +11,12 @@
 // decides what happens instead:
 //
 //                       trust.unattended=warn        trust.unattended=refuse
-//   hashes disagree     refuse (always)              refuse (always)
+//   hashes disagree     refuse, ledger (always)      refuse, ledger (always)
 //   no replica entry    pour, ledger, notify         hold back, ledger, notify
 //   replica inactive    pour, ledger                 hold back, ledger
-//   replica unreadable  refuse (fail closed)         refuse (fail closed)
+//   replica unreadable  refuse, ledger (fail closed) refuse, ledger (fail closed)
+//
+// An unknown trust.unattended value counts as refuse; `den doctor` warns.
 //
 // Unattended source builds are off unless trust.unattended_source_builds is
 // "allowlist" and the formula is in trust.source_build_allowlist; even then a
@@ -29,6 +31,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace den {
 
@@ -51,6 +54,12 @@ struct TrustPolicy {
     bool source_builds = false; // trust.unattended_source_builds == "allowlist"
     std::set<std::string> source_build_allowlist;
 };
+
+/// What is wrong with the trust settings, one line each: a trust.unattended
+/// that is not "warn" or "refuse" (treated as refuse), a
+/// trust.unattended_source_builds that is not "off" or "allowlist" (treated as
+/// off). Empty when they are fine. `den doctor` warns with these.
+std::vector<std::string> trust_settings_problems(const TrustSettings& settings);
 
 /// Build the policy from settings plus the unattended reason.
 TrustPolicy make_trust_policy(const TrustSettings& settings, std::optional<std::string> unattended);
@@ -84,6 +93,19 @@ enum class BottleAction {
 /// What to do with a bottle given its cross-check decision. `accepted` is
 /// true when the exact version was accepted with `den trust accept`.
 BottleAction bottle_action(const TrustPolicy& policy, TrustDecision decision, bool accepted);
+
+/// The ledger reason for a bottle an unattended run holds back or refuses,
+/// from its cross-check decision and status tag (BottleTrust::reason_tag):
+///   "single-source"      one hash source only (WarnProceed under refuse)
+///   "hash-mismatch"      Homebrew and the replica disagree
+///   "replica-unreadable" the replica snapshot exists but cannot be read
+///   "unverifiable"       neither source has a hash
+/// Only a "single-source" hold can be let through with `den trust accept`.
+std::string hold_reason(TrustDecision decision, const std::string& status_tag);
+
+/// True for ledger reasons `den trust accept` may let through: a
+/// single-source bottle or a deferred source build.
+bool hold_is_acceptable(const std::string& reason);
 
 enum class SourceBuildAction { Build, Defer, Refuse };
 

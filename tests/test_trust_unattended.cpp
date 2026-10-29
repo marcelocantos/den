@@ -99,7 +99,7 @@ TrustPolicy policy(bool unattended, UnattendedMode mode, bool source_builds = fa
 }
 
 DegradedInstall refused(const std::string& name, const std::string& version,
-                        const std::string& reason = "unattended-refuse") {
+                        const std::string& reason = "single-source") {
     DegradedInstall d{name, version, reason, "default", {}};
     d.status = "no-replica-entry";
     d.bottle_sha = std::string(64, 'a');
@@ -428,7 +428,7 @@ TEST_SUITE("trust_unattended::install") {
         auto s = summarize_degraded_installs(f.cfg);
         CHECK(s.total == 0);
         REQUIRE(s.refused == 1);
-        CHECK(s.refused_installs[0].reason == "unattended-refuse");
+        CHECK(s.refused_installs[0].reason == "single-source");
         CHECK(s.refused_installs[0].status == "no-replica-entry");
 
         // `den trust accept probe@1.0` lets this exact version through once.
