@@ -508,6 +508,72 @@ TEST_SUITE("post_install steps") {
         CHECK_FALSE(write_ca_certificates_bundle(fx.prefix, bare, true).written);
     }
 
+    TEST_CASE("pkgconf gets a den-owned copy of the system .pc set under the prefix") {
+        PostInstallFx fx;
+#ifdef __APPLE__
+        const std::string os = "mac";
+#else
+        const std::string os = "linux";
+#endif
+        auto bundle = fx.home / "ruby/homebrew/os" / os / "pkgconfig";
+        PostInstallFx::write(bundle / "26/zlib.pc", "Name: zlib\nVersion: 1.2.12\n");
+        fs::create_directory_symlink("26", bundle / "26.0");
+        auto dest = system_pkgconfig_dir(fx.prefix);
+        CHECK(dest == fx.prefix / "Library/Homebrew/os" / os / "pkgconfig");
+
+        // Nothing in the prefix yet: copied, as files, never links into
+        // DEN_HOME; a version alias stays a relative link.
+        auto r = write_system_pkgconfig(fx.prefix, fx.home, false);
+        CHECK(r.written);
+        CHECK(r.skipped.empty());
+        CHECK(fs::is_regular_file(fs::symlink_status(dest / "26/zlib.pc")));
+        CHECK(slurp(dest / "26/zlib.pc") == "Name: zlib\nVersion: 1.2.12\n");
+        CHECK(fs::is_symlink(dest / "26.0"));
+        CHECK(fs::read_symlink(dest / "26.0") == "26");
+        CHECK(slurp(dest / "26.0/zlib.pc") == "Name: zlib\nVersion: 1.2.12\n");
+
+        // A re-materialise leaves an existing copy alone; an install rebuilds
+        // it from the bundle and leaves no temporary directories behind.
+        PostInstallFx::write(bundle / "26/zlib.pc", "Name: zlib\nVersion: 1.3\n");
+        CHECK_FALSE(write_system_pkgconfig(fx.prefix, fx.home, false).written);
+        CHECK(slurp(dest / "26/zlib.pc") == "Name: zlib\nVersion: 1.2.12\n");
+        CHECK(write_system_pkgconfig(fx.prefix, fx.home, true).written);
+        CHECK(slurp(dest / "26/zlib.pc") == "Name: zlib\nVersion: 1.3\n");
+        int entries = 0;
+        for ([[maybe_unused]] const auto& e : fs::directory_iterator(dest.parent_path()))
+            ++entries;
+        CHECK(entries == 1);
+
+        // The newer bundle layout (ruby/Library/Homebrew) is found too.
+        PostInstallFx fx2;
+        PostInstallFx::write(fx2.home / "ruby/Library/Homebrew/os" / os / "pkgconfig/15/zlib.pc",
+                             "z\n");
+        CHECK(write_system_pkgconfig(fx2.prefix, fx2.home, true).written);
+        CHECK(slurp(system_pkgconfig_dir(fx2.prefix) / "15/zlib.pc") == "z\n");
+    }
+
+    TEST_CASE("the system .pc copy is skipped without a bundle or through a symlinked parent") {
+        PostInstallFx fx;
+        auto r = write_system_pkgconfig(fx.prefix, fx.home, true);
+        CHECK_FALSE(r.written);
+        CHECK_FALSE(r.skipped.empty());
+        CHECK_FALSE(fs::exists(fx.prefix / "Library"));
+
+#ifdef __APPLE__
+        const std::string os = "mac";
+#else
+        const std::string os = "linux";
+#endif
+        PostInstallFx::write(fx.home / "ruby/homebrew/os" / os / "pkgconfig/26/zlib.pc", "z\n");
+        fs::create_directories(fx.root / "outside");
+        fs::create_directories(fx.prefix);
+        fs::create_directory_symlink(fx.root / "outside", fx.prefix / "Library");
+        r = write_system_pkgconfig(fx.prefix, fx.home, true);
+        CHECK_FALSE(r.written);
+        CHECK_FALSE(r.skipped.empty());
+        CHECK(fs::is_empty(fx.root / "outside"));
+    }
+
     TEST_CASE("TLS verifies against a local host through openssl's cert.pem link") {
         // The server's CA is the only certificate in ca-certificates' bundle,
         // so a verified handshake proves the trust store den wrote is the one

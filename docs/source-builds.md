@@ -58,6 +58,24 @@ recorded in the trust ledger with `reason: "depends on <step>: deferred"`, so
 a chain is never half installed. When the daemon routes a keg this way and
 the build is deferred, it holds that package and its dependents back.
 
+### pkgconf's search path
+
+pkgconf bakes its default search path in at configure time. Homebrew's
+formula lists `/usr/local/lib/pkgconfig` and its library's system `.pc` set
+(`HOMEBREW_LIBRARY/Homebrew/os/mac/pkgconfig/<macOS>`: zlib, libcurl,
+sqlite3, ...), which for den would be the Ruby bundle under `DEN_HOME`. den
+rewrites the `--with-pkg-config-dir` it is given so the path is:
+
+    <prefix>/lib/pkgconfig:<prefix>/share/pkgconfig:/usr/lib/pkgconfig:
+    <prefix>/Library/Homebrew/os/mac/pkgconfig/<macOS>
+
+with no `/usr/local` and nothing under `DEN_HOME`. When pkgconf lands in the
+prefix, den copies the bundle's system `.pc` set to
+`<prefix>/Library/Homebrew/os/<os>/pkgconfig` (files, not links; rebuilt on
+install, upgrade and switch). That is also where a poured pkgconf bottle's
+`@@HOMEBREW_LIBRARY@@` relocates, so a built and a poured pkgconf search the
+same directory.
+
 ## Unattended source builds
 
 Interactive `den install -s` builds as described here. An unattended run

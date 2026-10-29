@@ -356,9 +356,26 @@ den_retarget = lambda do |a|
   end
 end
 
+# pkgconf's default search path (--with-pkg-config-dir=, baked in at
+# configure time): Homebrew's formula lists /usr/local/lib/pkgconfig and its
+# library's system .pc set, which for den is the Ruby bundle under DEN_HOME.
+# den drops /usr/local and points the system set at the copy it owns under the
+# prefix (write_system_pkgconfig in src/env/post_install.h, run when pkgconf
+# lands in the prefix).
+den_ruby_os_re = %r{\A#{Regexp.escape((den_home / "ruby").to_s)}/(?:.*/)?os/}
+den_pc_os = (prefix_root / "Library" / "Homebrew" / "os").to_s
+den_pc_dirs = lambda do |a|
+  next a unless a.is_a?(String) || a.is_a?(Pathname)
+  m = a.to_s.match(/\A((?:-D|--)with-pkg-config-dir=)(.*)\z/m)
+  next a unless m
+  dirs = m[2].split(File::PATH_SEPARATOR).reject { |d| d == "/usr/local" || d.start_with?("/usr/local/") }
+  dirs = dirs.map { |d| d.sub(den_ruby_os_re, "#{den_pc_os}/") }
+  "#{m[1]}#{dirs.uniq.join(File::PATH_SEPARATOR)}"
+end
+
 f.define_singleton_method(:system) do |cmd, *args|
-  cmd = den_rewrite.call(cmd)
-  args = args.map { |a| den_rewrite.call(a) }
+  cmd = den_pc_dirs.call(den_rewrite.call(cmd))
+  args = args.map { |a| den_pc_dirs.call(den_rewrite.call(a)) }
   kind = den_install_kind.call([cmd, *args])
   plain_cmd = cmd
   plain_args = args

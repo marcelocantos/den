@@ -113,6 +113,40 @@ struct CaBundleResult {
 CaBundleResult write_ca_certificates_bundle(const fs::path& prefix, const fs::path& keg,
                                             bool replace);
 
+// ---------------------------------------------------------------------------
+// pkgconf
+//
+// pkgconf bakes its default search path in at configure time. Homebrew's
+// formula puts its library's system .pc set there
+// (HOMEBREW_LIBRARY/Homebrew/os/mac/pkgconfig/<macOS>: zlib, libcurl,
+// sqlite3, ...), which for den is the Ruby bundle under DEN_HOME. den gives
+// pkgconf a copy it owns under the prefix instead, at
+// <prefix>/Library/Homebrew/os/<os>/pkgconfig: the same place a poured
+// pkgconf bottle's @@HOMEBREW_LIBRARY@@ relocates to, so a source-built and a
+// poured pkgconf search the same directory.
+// ---------------------------------------------------------------------------
+
+/// The system .pc directory pkgconf searches, under `prefix`:
+/// <prefix>/Library/Homebrew/os/{mac,linux}/pkgconfig.
+fs::path system_pkgconfig_dir(const fs::path& prefix);
+
+/// What copying the system .pc set did.
+struct SystemPcResult {
+    bool written = false;
+    /// Non-empty: nothing was written, and why.
+    std::string skipped;
+};
+
+/// Copy the bundled Homebrew library's os/<os>/pkgconfig tree (under
+/// `den_home`/ruby) to system_pkgconfig_dir(prefix). Files are copied, never
+/// linked into DEN_HOME; version aliases inside the tree (11.0 -> 11) stay
+/// relative links. With `replace` false only a missing directory is written;
+/// with `replace` true (install, upgrade, switch) it is rebuilt beside the
+/// old one and renamed into place. Never writes through a symlinked parent
+/// directory. Errors are reported, not thrown.
+SystemPcResult write_system_pkgconfig(const fs::path& prefix, const fs::path& den_home,
+                                      bool replace);
+
 /// `<prefix>/etc/<name>/cert.pem` symlinks (openssl's post_install links)
 /// whose target does not exist, as "<link> -> <target>", sorted.
 std::vector<std::string> dangling_cert_pem_links(const fs::path& prefix);

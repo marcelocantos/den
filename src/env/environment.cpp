@@ -237,7 +237,7 @@ uint32_t root_opt_link(const PrefixLinkContext& ctx, const fs::path& pkg_path,
 }
 
 /// Run a formula's declarative post_install symlink steps (see
-/// post_install.h), or den's native ca-certificates step, once its keg is in
+/// post_install.h), or den's native ca-certificates or pkgconf step, once its keg is in
 /// the prefix. `fresh` means this version
 /// was just linked (install, upgrade, switch), so a `force` step may replace
 /// what is there, as `brew postinstall` does; otherwise only missing links
@@ -255,6 +255,20 @@ uint32_t run_post_install_steps(const PrefixLinkContext& ctx, const Package* inf
                 SPDLOG_WARN("{}@{}: CA bundle not written: {}", name, version, result.skipped);
             } else {
                 SPDLOG_DEBUG("{}@{}: CA bundle not written: {}", name, version, result.skipped);
+            }
+        }
+        return result.written ? 1 : 0;
+    }
+    // pkgconf searches den's own copy of the system .pc set (post_install.h).
+    if (name == "pkgconf") {
+        auto result = write_system_pkgconfig(ctx.prefix, ctx.den_home, /*replace=*/fresh);
+        if (!result.skipped.empty()) {
+            if (fresh) {
+                SPDLOG_WARN("{}@{}: system .pc files not copied: {}", name, version,
+                            result.skipped);
+            } else {
+                SPDLOG_DEBUG("{}@{}: system .pc files not copied: {}", name, version,
+                             result.skipped);
             }
         }
         return result.written ? 1 : 0;
