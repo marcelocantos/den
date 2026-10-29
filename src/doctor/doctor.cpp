@@ -418,7 +418,8 @@ void check_host_toolchain(const Config& config, std::vector<Finding>& findings) 
                        "(run `xcode-select --install` to enable source builds)");
     }
     if (!facts.sdk_path) {
-        warn(findings, "macOS SDK path not detected (xcrun --show-sdk-path failed)");
+        warn(findings, "macOS SDK path not detected (no SDKROOT, xcode-select -p SDK, or Command "
+                       "Line Tools SDK)");
     }
 #else
     if (!facts.glibc) {

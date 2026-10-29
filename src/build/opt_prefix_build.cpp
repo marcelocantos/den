@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <fstream>
 #include <sstream>
 #include <system_error>
 
@@ -225,18 +226,40 @@ std::string with_destdir(const std::string& shell_cmd, const fs::path& stage) {
     return changed ? trim(out) : shell_cmd;
 }
 
-void merge_destdir_stage(const fs::path& stage, const fs::path& opt_prefix, const fs::path& keg,
-                         const fs::path& prefix) {
+std::string with_staged_keg(const std::string& shell_cmd, const fs::path& opt_prefix,
+                            const fs::path& staged_keg) {
+    const auto from = opt_prefix.string();
+    const auto to = staged_keg.string();
+    std::string out;
+    std::size_t pos = 0;
+    while (true) {
+        const auto hit = shell_cmd.find(from, pos);
+        if (hit == std::string::npos)
+            break;
+        const auto end = hit + from.size();
+        // Only a whole path component: `<opt>` or `<opt>/...`, not `<opt>x`.
+        const bool whole =
+            end == shell_cmd.size() || shell_cmd[end] == '/' ||
+            !(std::isalnum(static_cast<unsigned char>(shell_cmd[end])) || shell_cmd[end] == '_' ||
+              shell_cmd[end] == '-' || shell_cmd[end] == '.' || shell_cmd[end] == '@' ||
+              shell_cmd[end] == '+');
+        out += shell_cmd.substr(pos, hit - pos);
+        out += whole ? to : from;
+        pos = end;
+    }
+    out += shell_cmd.substr(pos);
+    return out;
+}
+
+std::vector<std::string> staged_strays(const fs::path& stage, const fs::path& opt_prefix,
+                                       const fs::path& prefix) {
+    std::vector<std::string> stray;
     std::error_code ec;
     if (!fs::exists(fs::symlink_status(stage, ec)))
-        return;
-
+        return stray;
     const auto staged_keg = stage / opt_prefix.relative_path();
     const auto staged_etc = stage / (prefix / "etc").relative_path();
     const auto staged_var = stage / (prefix / "var").relative_path();
-
-    // Anything staged outside the keg, etc and var is a stray write.
-    std::vector<std::string> stray;
     fs::recursive_directory_iterator it(stage, ec), end;
     for (; !ec && it != end; it.increment(ec)) {
         const auto& p = it->path();
@@ -248,6 +271,75 @@ void merge_destdir_stage(const fs::path& stage, const fs::path& opt_prefix, cons
         if (!fs::is_directory(it->symlink_status(sec)))
             stray.push_back("/" + p.lexically_relative(stage).string());
     }
+    return stray;
+}
+
+void relocate_staged_keg(const fs::path& staged_keg, const fs::path& opt_prefix) {
+    const auto from = staged_keg.string();
+    const auto to = opt_prefix.string();
+    std::vector<std::string> binary;
+    std::error_code ec;
+    fs::recursive_directory_iterator it(staged_keg, ec), end;
+    for (; !ec && it != end; it.increment(ec)) {
+        const auto& p = it->path();
+        std::error_code sec;
+        const auto st = it->symlink_status(sec);
+        if (fs::is_symlink(st)) {
+            auto target = fs::read_symlink(p, sec).string();
+            if (target.find(from) == std::string::npos)
+                continue;
+            for (std::size_t at; (at = target.find(from)) != std::string::npos;)
+                target.replace(at, from.size(), to);
+            fs::remove(p, sec);
+            fs::create_symlink(target, p, sec);
+            continue;
+        }
+        if (!fs::is_regular_file(st))
+            continue;
+        std::string data;
+        {
+            std::ifstream in(p, std::ios::binary);
+            std::ostringstream ss;
+            ss << in.rdbuf();
+            data = ss.str();
+        }
+        if (data.find(from) == std::string::npos)
+            continue;
+        if (data.find('\0') != std::string::npos) {
+            binary.push_back(p.lexically_relative(staged_keg).string());
+            continue;
+        }
+        for (std::size_t at = 0; (at = data.find(from, at)) != std::string::npos; at += to.size())
+            data.replace(at, from.size(), to);
+        const auto perms = fs::status(p, sec).permissions();
+        {
+            std::ofstream out(p, std::ios::binary | std::ios::trunc);
+            out << data;
+        }
+        fs::permissions(p, perms, sec);
+    }
+    if (!binary.empty()) {
+        std::string list;
+        for (const auto& b : binary)
+            list += "\n  " + b;
+        throw UserError("source build baked its staging path into binary files, which den can't "
+                        "relocate (see docs/source-builds.md):" +
+                        list);
+    }
+}
+
+void merge_destdir_stage(const fs::path& stage, const fs::path& opt_prefix, const fs::path& keg,
+                         const fs::path& prefix) {
+    std::error_code ec;
+    if (!fs::exists(fs::symlink_status(stage, ec)))
+        return;
+
+    const auto staged_keg = stage / opt_prefix.relative_path();
+    const auto staged_etc = stage / (prefix / "etc").relative_path();
+    const auto staged_var = stage / (prefix / "var").relative_path();
+
+    // Anything staged outside the keg, etc and var is a stray write.
+    const auto stray = staged_strays(stage, opt_prefix, prefix);
     if (!stray.empty()) {
         fs::remove_all(stage, ec);
         std::string list;
@@ -276,6 +368,28 @@ OptPathGuard::OptPathGuard(fs::path opt_path) : opt_path_(std::move(opt_path)) {
     if (was_symlink_)
         link_target_ = fs::read_symlink(opt_path_, ec);
     listing_ = list_tree(opt_path_);
+}
+
+bool OptPathGuard::unchanged() const {
+    std::error_code ec;
+    auto st = fs::symlink_status(opt_path_, ec);
+    const bool exists = !ec && fs::exists(st);
+    if (!existed_ || !exists)
+        return existed_ == exists;
+    if (fs::is_symlink(st) != was_symlink_ ||
+        (was_symlink_ && fs::read_symlink(opt_path_, ec) != link_target_))
+        return false;
+    return list_tree(opt_path_) == listing_;
+}
+
+bool OptPathGuard::settle() const {
+    if (unchanged())
+        return true;
+    if (existed_)
+        return false;
+    std::error_code ec;
+    fs::remove_all(opt_path_, ec);
+    return !ec;
 }
 
 void OptPathGuard::check() const {
