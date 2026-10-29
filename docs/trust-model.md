@@ -140,7 +140,12 @@ held back. `den daemon status` prints the same degraded-install count
 ## The replica snapshot (`data/known_hashes.json`)
 
 A flat JSON document. Keys are `"<formula>--<version>--<platform_tag>"`; values
-are the verified SHA256 of that bottle.
+are the verified SHA256 of that bottle. A `source` tag
+(`"<formula>--<version>--source"`, version without Homebrew's `_<revision>`)
+is the verified SHA256 of the formula's stable source archive; unattended
+allowlisted source builds cross-check against it (see
+[source-builds.md](source-builds.md#unattended-source-builds)). The snapshot
+carries one for each formula in the default `trust.source_build_allowlist`.
 
 ```json
 {
@@ -169,12 +174,27 @@ The replica is **diff-based** — only changed hashes are re-verified.
    issue**; the snapshot is not updated.
 5. Verified changes are committed back to `data/known_hashes.json`.
 
+Source entries work the same way. For a formula with a `--source` key, the
+script reads the stable source URL and checksum from `formulae.brew.sh`; when
+that hash is new, it downloads the archive from its upstream URL (the
+project's own server, not Homebrew's) and runs `den replica-verify --tag
+source` on it. Only a match is committed.
+
+The snapshot reaches users with den itself: it is compiled into the binary
+and shipped as `share/den/known_hashes.json` in the release tarball, so a new
+entry takes effect from the next release (or a copy placed at
+`~/.den/trust/known_hashes.json`).
+
 GHCR access and the live Homebrew API are only reachable from CI, so this
 pipeline runs in CI. The verification primitive it calls (`verify_diff_entry` /
-`den replica-verify`) is covered by `den_tests`.
+`den replica-verify`) is covered by `den_tests`, and the source tracking by
+`tests/scripts/test_replica_verify.sh` (offline, with `file://` fixtures).
 
 ### Adding a formula to the replica
 
 Add its `"<formula>--<version>--<tag>"` entries (with current SHA256s from
 `formulae.brew.sh`) to `data/known_hashes.json`. The next workflow run
-GHCR-verifies them; thereafter they are tracked automatically.
+GHCR-verifies them; thereafter they are tracked automatically. To track a
+formula's source archive, add `"<formula>--<version>--source"` with the
+`urls.stable.checksum` from `formulae.brew.sh`, after checking it against the
+archive downloaded from `urls.stable.url`.
