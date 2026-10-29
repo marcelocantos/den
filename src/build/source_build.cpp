@@ -156,6 +156,9 @@ void apply_shim_free_toolchain(std::map<std::string, std::string>& env) {
         // covers build systems (autotools, plain make) that read CFLAGS but
         // ignore SDKROOT.
         env["SDKROOT"] = *sdk_path;
+        // Homebrew's superenv reads HOMEBREW_SDKROOT; setting it keeps the Ruby
+        // side from shelling out to xcrun to find the SDK.
+        env["HOMEBREW_SDKROOT"] = *sdk_path;
         const std::string isysroot = "-isysroot " + *sdk_path;
         for (const char* var : {"CFLAGS", "CXXFLAGS", "OBJCFLAGS"}) {
             if (env.count(var))
