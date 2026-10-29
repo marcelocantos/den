@@ -1,0 +1,3 @@
+#!/bin/sh
+# Payload of the verify-release fixture tap formula (den-vr-hello 1.0.0).
+echo "den-vr-hello 1.0.0"

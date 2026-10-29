@@ -1,0 +1,16 @@
+# Fixture formula for verify-release's tap step (scripts/verify-release.sh).
+# A template: the step tars payload/den-vr-hello into its scratch root and
+# fills in the tarball's file:// URL and sha256, so the tap needs no network
+# and no other repository.
+class DenVrHello < Formula
+  desc "den verify-release fixture tap formula"
+  homepage "https://github.com/marcelocantos/den"
+  url "@URL@"
+  sha256 "@SHA256@"
+  version "1.0.0"
+  license "Apache-2.0"
+
+  def install
+    bin.install "den-vr-hello"
+  end
+end

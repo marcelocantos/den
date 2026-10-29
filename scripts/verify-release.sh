@@ -33,7 +33,6 @@
 #   VR_BOTTLE          plain bottle formula           (default: tree)
 #   VR_DEP_PARENT      formula with a dependency      (default: jq)
 #   VR_DEP_CHILD       its dependency                 (default: oniguruma)
-#   VR_TAP / VR_TAP_FORMULA  tap and formula from it  (default: marcelocantos/tap, cv)
 #   VR_FONT_CASK       font cask                      (default: font-hack)
 #   VR_APP_CASK        app cask                       (default: macdown)
 #   VR_APP_BUNDLE      bundle the app cask installs   (default: MacDown.app)
@@ -52,6 +51,9 @@
 #        app-cask uninstall doctor cleanup launchd
 # install and isolation can never be skipped; the run aborts before den
 # writes anything if install, version or isolation fails.
+# The tap step taps, installs from and untaps a fixture tap built from
+# tests/fixtures/den-fixture-tap in this checkout (no other repository, no
+# network for the tap itself); it is not configurable.
 set -uo pipefail
 
 die() { echo "verify-release: $*" >&2; exit 2; }
@@ -166,8 +168,12 @@ DEN_BIN=$VR_INSTALL_DIR/bin/den
 VR_BOTTLE=${VR_BOTTLE:-tree}
 VR_DEP_PARENT=${VR_DEP_PARENT:-jq}
 VR_DEP_CHILD=${VR_DEP_CHILD:-oniguruma}
-VR_TAP=${VR_TAP:-marcelocantos/tap}
-VR_TAP_FORMULA=${VR_TAP_FORMULA:-cv}
+# The tap step uses a fixture tap from this checkout (not a knob): it must
+# not depend on any other repository's contents. See s_tap.
+VR_TAP_FIXTURE=$REPO_DIR/tests/fixtures/den-fixture-tap
+VR_TAP=den-fixture/verify-release
+VR_TAP_FORMULA=den-vr-hello
+VR_TAP_VERSION=1.0.0
 VR_FONT_CASK=${VR_FONT_CASK:-font-hack}
 VR_APP_CASK=${VR_APP_CASK:-macdown}
 VR_APP_BUNDLE=${VR_APP_BUNDLE:-MacDown.app}
@@ -421,13 +427,48 @@ s_dependents() {
     den uninstall "$VR_DEP_CHILD"
     if listed "$VR_DEP_PARENT"; then echo "$VR_DEP_PARENT still listed"; return 1; fi
 }
+# render_fixture_tap DIR: build the tap the tap step adds, under DIR, from the
+# committed fixture (tests/fixtures/den-fixture-tap): tar the payload into
+# DIR/dist, then render the formula template with that tarball's file:// URL
+# and sha256 into DIR/tap/Formula. Prints the tap directory.
+render_fixture_tap() {
+    local dir=$1 tpl=$VR_TAP_FIXTURE/Formula/$VR_TAP_FORMULA.rb.in
+    local tarball=$dir/dist/$VR_TAP_FORMULA-$VR_TAP_VERSION.tar.gz sha
+    [ -f "$tpl" ] && [ -f "$VR_TAP_FIXTURE/payload/$VR_TAP_FORMULA" ] \
+        || { echo "fixture tap missing under $VR_TAP_FIXTURE" >&2; return 1; }
+    rm -rf "$dir"
+    mkdir -p "$dir/dist" "$dir/tap/Formula" || return 1
+    tar -C "$VR_TAP_FIXTURE/payload" -czf "$tarball" "$VR_TAP_FORMULA" || return 1
+    sha=$(sha256_ "$tarball") && [ -n "$sha" ] || return 1
+    sed -e "s|@URL@|file://$tarball|" -e "s|@SHA256@|$sha|" "$tpl" \
+        >"$dir/tap/Formula/$VR_TAP_FORMULA.rb" || return 1
+    echo "$dir/tap"
+}
+# den's own tap path end to end, against a fixture tap from this checkout:
+# tap add (a local directory source is copied into DEN_HOME/taps), tap
+# --list, the tap formula merged into the index (info), native install of a
+# prebuilt-download tap formula (sha256-checked file:// download,
+# bin.install), uninstall, tap --remove, and the formula no longer resolving.
 s_tap() {
-    den tap add "$VR_TAP"
+    local src tapdir=$VR_DEN_HOME/taps/$VR_TAP out
+    src=$(render_fixture_tap "$VR_ROOT/tap-fixture")
+    den tap add "$VR_TAP" "$src"
+    den tap --list | grep -Fx "$VR_TAP" >/dev/null || { echo "$VR_TAP not in den tap --list"; return 1; }
+    [ -f "$tapdir/Formula/$VR_TAP_FORMULA.rb" ] || { echo "tap not copied into $tapdir"; return 1; }
+    den info "$VR_TAP/$VR_TAP_FORMULA" | grep -E "^Version:[[:space:]]+$VR_TAP_VERSION\$" >/dev/null \
+        || { echo "den info does not resolve $VR_TAP/$VR_TAP_FORMULA $VR_TAP_VERSION"; return 1; }
     den install "$VR_TAP/$VR_TAP_FORMULA"
-    listed "$VR_TAP_FORMULA"
-    "$VR_PREFIX/bin/$VR_TAP_FORMULA" --version
+    listed "$VR_TAP_FORMULA" || { echo "$VR_TAP_FORMULA not in den list"; return 1; }
+    out=$("$VR_PREFIX/bin/$VR_TAP_FORMULA" --version); echo "$out"
+    [ "$out" = "$VR_TAP_FORMULA $VR_TAP_VERSION" ]
     den uninstall "$VR_TAP/$VR_TAP_FORMULA"
-    [ ! -e "$VR_PREFIX/bin/$VR_TAP_FORMULA" ]
+    [ ! -e "$VR_PREFIX/bin/$VR_TAP_FORMULA" ] || { echo "$VR_PREFIX/bin/$VR_TAP_FORMULA survives uninstall"; return 1; }
+    den tap --remove "$VR_TAP"
+    if den tap --list | grep -Fx "$VR_TAP" >/dev/null; then echo "$VR_TAP still tapped"; return 1; fi
+    [ ! -e "$tapdir" ] || { echo "$tapdir survives tap --remove"; return 1; }
+    if den info "$VR_TAP/$VR_TAP_FORMULA" 2>/dev/null | grep -E '^Version:' >/dev/null; then
+        echo "$VR_TAP/$VR_TAP_FORMULA still resolves after untap"; return 1
+    fi
 }
 s_font_cask() {
     den install "$VR_FONT_CASK"
