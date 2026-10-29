@@ -5,6 +5,8 @@
 
 #include "../core/error.h"
 
+#include <cstdlib>
+#include <pwd.h>
 #include <system_error>
 #include <unistd.h>
 
@@ -46,7 +48,37 @@ std::string subpaths(const std::vector<fs::path>& paths) {
     return out;
 }
 
+fs::path home_dir() {
+    if (const char* h = std::getenv("HOME"); h && *h)
+        return h;
+    if (const passwd* pw = ::getpwuid(::getuid()); pw && pw->pw_dir)
+        return pw->pw_dir;
+    return {};
+}
+
+// A fixed system root, rebased under DEN_BUILD_SANDBOX_SYSTEM_ROOT when set.
+fs::path system_root(const fs::path& p) {
+    const char* base = std::getenv("DEN_BUILD_SANDBOX_SYSTEM_ROOT");
+    if (!base || !*base)
+        return p;
+    return fs::path(base) / p.relative_path();
+}
+
 } // namespace
+
+std::vector<fs::path> system_deny_roots(const Config& config) {
+    std::vector<fs::path> roots;
+    add_unique(roots, real_path(system_root("/opt/homebrew")));
+    add_unique(roots, real_path(system_root("/opt/homebrew/Cellar")));
+    add_unique(roots, real_path(system_root("/usr/local")));
+    if (!config.homebrew_prefix.empty())
+        add_unique(roots, real_path(config.homebrew_prefix));
+    if (!config.homebrew_cellar.empty())
+        add_unique(roots, real_path(config.homebrew_cellar));
+    if (const auto home = home_dir(); !home.empty())
+        add_unique(roots, real_path(system_root(home / "Library")));
+    return roots;
+}
 
 BuildSandbox build_sandbox_for(const Config& config, const std::string& name,
                                const std::string& version) {
@@ -54,6 +86,8 @@ BuildSandbox build_sandbox_for(const Config& config, const std::string& name,
     add_unique(sb.deny_write, real_path(config.prefix));
     add_unique(sb.deny_write, real_path(config.store));
     add_unique(sb.deny_write, real_path(config.den_home));
+    for (const auto& r : system_deny_roots(config))
+        add_unique(sb.deny_write, r);
 
     const std::string id = name + "-" + version;
     const auto build = config.cache / "build";
@@ -61,6 +95,10 @@ BuildSandbox build_sandbox_for(const Config& config, const std::string& name,
     add_unique(sb.allow_write, real_path(build / id));
     add_unique(sb.allow_write, real_path(build / (id + ".destdir")));
     add_unique(sb.allow_write, sb.temp_dir);
+    // Xcode tools keep caches under ~/Library/Developer; Homebrew's sandbox
+    // allows it for every build (allow_write_xcode).
+    if (const auto home = home_dir(); !home.empty())
+        add_unique(sb.allow_write, real_path(system_root(home / "Library" / "Developer")));
     return sb;
 }
 

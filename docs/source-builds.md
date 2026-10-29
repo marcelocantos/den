@@ -50,9 +50,16 @@ generic cmake, autotools and make recipes are configured with the opt path.
 ## Build sandbox (macOS)
 
 On macOS every configure, build and install command runs under
-`/usr/bin/sandbox-exec` with a Seatbelt profile that denies writes to den's
-prefix (and its Cellar, if that resolves elsewhere) and to `$DEN_HOME`,
-except for three directories:
+`/usr/bin/sandbox-exec` with a Seatbelt profile that denies writes to:
+
+* den's prefix (and its Cellar, if that resolves elsewhere) and `$DEN_HOME`;
+* Homebrew's default prefixes, `/opt/homebrew` (its Cellar included) and
+  `/usr/local`, and the detected Homebrew prefix and Cellar
+  (`HOMEBREW_PREFIX` / `HOMEBREW_CELLAR`) where they differ;
+* `$HOME/Library`, except `$HOME/Library/Developer`, where Xcode tools keep
+  their caches (Homebrew's sandbox allows it too).
+
+Within den's trees, three directories stay writable:
 
 * the build directory, `<den_home>/cache/build/<name>-<version>`;
 * the staging DESTDIR, `<den_home>/cache/build/<name>-<version>.destdir`;
@@ -63,15 +70,15 @@ except for three directories:
 Denied writes include creating, overwriting, removing, renaming, chmod and
 extended attributes. Seatbelt matches real paths, so a write through a
 symlink (such as the opt link to an older keg) is denied when its target is.
-Setuid and setgid bits are refused everywhere. Everything outside den's trees
-stays as writable as it is for den itself. A build that writes into the prefix
-directly, ignores DESTDIR, or writes elsewhere under `$DEN_HOME` fails, and
-nothing it tried to write remains.
+Setuid and setgid bits are refused everywhere. Everything outside the denied
+trees stays as writable as it is for den itself. A build that writes into the
+prefix directly, ignores DESTDIR, or writes elsewhere under `$DEN_HOME` or a
+denied system root fails, and nothing it tried to write remains.
 
 The profile follows Homebrew's (`Library/Homebrew/sandbox.rb`): a
 `(debug deny)` header, paths resolved through symlinks, the same string
 quoting, and `sandbox-exec -p <profile>`. Homebrew's is an allow list for its
-whole build process. Den's is a deny list scoped to den's own trees, and it
+whole build process. Den's is a deny list of the trees above, and it
 does not limit network or Mach lookups. Like Homebrew, den will not nest
 sandboxes: run inside a sandbox, it refuses to build from source.
 
@@ -83,6 +90,16 @@ What runs inside the sandbox:
   process itself is not sandboxed. The formula's Ruby file operations on the
   keg (`bin.install`, `rm`, `inreplace`), source download and extraction, and
   den's stage merge run outside it, as they must write the keg.
+
+Tests rebase the fixed system roots (`/opt/homebrew`, `/usr/local`,
+`$HOME/Library`) under `DEN_BUILD_SANDBOX_SYSTEM_ROOT`, so they exercise the
+denials without touching the real paths.
+
+**Future work.** A full allow list, as Homebrew uses (writes only to the
+build, staging and temp directories plus a short list of tool caches), and
+network restriction for the build steps (sources and resources are already
+fetched and checksummed before the build starts). Both need a survey of
+which formulae write elsewhere or fetch during the build.
 
 **Linux gap.** Linux has no sandbox yet. Landlock is allow-list only, so it
 cannot express "everything except den's trees" without listing the rest of
