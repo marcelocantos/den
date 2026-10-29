@@ -9,7 +9,9 @@
 #include <array>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string_view>
@@ -146,6 +148,28 @@ std::vector<std::pair<std::string, std::string>> parse_brew_config(const std::st
 
 } // namespace
 
+std::optional<std::string> macos_sdk_path() {
+#ifdef __APPLE__
+    std::error_code ec;
+    if (const char* root = std::getenv("SDKROOT");
+        root && root[0] == '/' && std::filesystem::is_directory(root, ec)) {
+        return std::string(root);
+    }
+    std::vector<std::filesystem::path> candidates;
+    if (auto dev = capture_command("/usr/bin/xcode-select -p")) {
+        const std::filesystem::path d(*dev);
+        candidates.push_back(d / "Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk");
+        candidates.push_back(d / "SDKs/MacOSX.sdk");
+    }
+    candidates.emplace_back("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk");
+    for (const auto& c : candidates) {
+        if (std::filesystem::is_directory(c, ec))
+            return c.string();
+    }
+#endif
+    return std::nullopt;
+}
+
 HostFacts detect_host_facts() {
     HostFacts facts;
 
@@ -156,7 +180,7 @@ HostFacts detect_host_facts() {
     if (auto info = capture_command("pkgutil --pkg-info=com.apple.pkg.CLTools_Executables")) {
         facts.clt_version = parse_pkgutil_version(*info);
     }
-    facts.sdk_path = capture_command("xcrun --show-sdk-path");
+    facts.sdk_path = macos_sdk_path();
 #else
     read_os_release(facts.os_name, facts.os_version);
     struct utsname uts{};

@@ -48,6 +48,17 @@ unless defined?(Formula)
   require "global"
   require "formula"
   require "formulary"
+
+  # 🎯T45: no xcrun during a source build. A failed Formula#system dumps
+  # Homebrew's system config into the build log, and on arm64 that runs
+  # `xcrun --find metal`. A failed install step can be retried (an install
+  # step that ignores DESTDIR), so leave the Metal toolchain out of the dump.
+  require "system_config"
+  if SystemConfig.respond_to?(:metal_toolchain)
+    SystemConfig.singleton_class.prepend(Module.new do
+      def metal_toolchain = nil
+    end)
+  end
 end
 
 formula_file = ARGV[0] or abort "usage: den_build.rb <formula_file> <store_path> <den_home> [<version> [<name>]]"

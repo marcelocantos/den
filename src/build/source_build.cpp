@@ -144,19 +144,19 @@ BuildRecipe parse_formula_source(const std::string& formula_output) {
 //
 // Homebrew historically routes the compiler through an `xcrun` shim, which nags
 // the user to update the Command Line Tools and breaks reproducibility. den
-// instead resolves the SDK path directly via host facts (🎯T66) and points the
+// instead resolves the SDK path without xcrun (macos_sdk_path) and points the
 // linker at /usr/bin/ld, so no xcrun invocation is ever constructed.
 //
 // On Linux this is a no-op: the system toolchain needs no SDK steering.
 void apply_shim_free_toolchain(std::map<std::string, std::string>& env) {
 #ifdef __APPLE__
-    auto facts = detect_host_facts();
-    if (facts.sdk_path && fs::is_directory(*facts.sdk_path)) {
+    const auto sdk_path = macos_sdk_path();
+    if (sdk_path) {
         // SDKROOT is honoured by clang/ld directly without xcrun. -isysroot
         // covers build systems (autotools, plain make) that read CFLAGS but
         // ignore SDKROOT.
-        env["SDKROOT"] = *facts.sdk_path;
-        const std::string isysroot = "-isysroot " + *facts.sdk_path;
+        env["SDKROOT"] = *sdk_path;
+        const std::string isysroot = "-isysroot " + *sdk_path;
         for (const char* var : {"CFLAGS", "CXXFLAGS", "OBJCFLAGS"}) {
             if (env.count(var))
                 env[var] += " " + isysroot;
@@ -180,7 +180,7 @@ void apply_shim_free_toolchain(std::map<std::string, std::string>& env) {
 // The receipt's toolchain: the SDK den steers builds to and the compiler.
 void record_toolchain(SourceBuildReceipt& receipt) {
 #ifdef __APPLE__
-    if (auto sdk = detect_host_facts().sdk_path)
+    if (auto sdk = macos_sdk_path())
         receipt.toolchain_sdk = *sdk;
     const std::vector<std::string> cc = {"/usr/bin/clang", "--version"};
 #else
