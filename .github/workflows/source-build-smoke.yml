@@ -144,19 +144,23 @@ jobs:
       - name: Check ${{ env.DEFAULT_FORMULA }} binary works after source build
         if: steps.source_build.outputs.exit_code == '0'
         run: |
-          # 'tree' installs its binary at <store>/<name>/<version>/bin/tree.
-          # Locate it relative to DEN_HOME.
-          TREE_BIN=$(find "$DEN_HOME/store" -name "tree" -type f 2>/dev/null | head -1)
-          if [ -n "$TREE_BIN" ]; then
-            echo "Found binary: $TREE_BIN"
-            "$TREE_BIN" --version
-          else
-            echo "Binary not found in store — source build may have used Homebrew Cellar."
-            which tree && tree --version || true
+          # Source builds land in <prefix>/Cellar/<name>/<version> with an
+          # <prefix>/opt/<name> link; the default prefix is $DEN_HOME/prefix.
+          # A missing binary fails the step.
+          PREFIX="$DEN_HOME/prefix"
+          TREE_BIN="$PREFIX/opt/$DEFAULT_FORMULA/bin/$DEFAULT_FORMULA"
+          if [ ! -x "$TREE_BIN" ]; then
+            TREE_BIN=$(find "$PREFIX/Cellar/$DEFAULT_FORMULA" -path "*/bin/$DEFAULT_FORMULA" -type f 2>/dev/null | head -1)
           fi
+          if [ -z "$TREE_BIN" ] || [ ! -x "$TREE_BIN" ]; then
+            echo "::error::$DEFAULT_FORMULA binary not found under $PREFIX/opt or $PREFIX/Cellar"
+            ls -laR "$PREFIX/opt" "$PREFIX/Cellar" 2>/dev/null | head -50 || true
+            exit 1
+          fi
+          echo "Found binary: $TREE_BIN"
+          "$TREE_BIN" --version
         env:
           DEN_HOME: ${{ env.DEN_HOME }}
-        continue-on-error: true
 
       - name: Check xcrun was NOT invoked (🎯T45)
         run: |
@@ -232,16 +236,20 @@ jobs:
       - name: Verify ${{ env.DEFAULT_FORMULA }} binary (post-build)
         if: steps.source_build_linux.outputs.exit_code == '0'
         run: |
-          TREE_BIN=$(find "$DEN_HOME/store" -name "tree" -type f 2>/dev/null | head -1)
-          if [ -n "$TREE_BIN" ]; then
-            echo "Found binary: $TREE_BIN"
-            "$TREE_BIN" --version
-          else
-            echo "Binary not found in store."
+          PREFIX="$DEN_HOME/prefix"
+          TREE_BIN="$PREFIX/opt/$DEFAULT_FORMULA/bin/$DEFAULT_FORMULA"
+          if [ ! -x "$TREE_BIN" ]; then
+            TREE_BIN=$(find "$PREFIX/Cellar/$DEFAULT_FORMULA" -path "*/bin/$DEFAULT_FORMULA" -type f 2>/dev/null | head -1)
           fi
+          if [ -z "$TREE_BIN" ] || [ ! -x "$TREE_BIN" ]; then
+            echo "::error::$DEFAULT_FORMULA binary not found under $PREFIX/opt or $PREFIX/Cellar"
+            ls -laR "$PREFIX/opt" "$PREFIX/Cellar" 2>/dev/null | head -50 || true
+            exit 1
+          fi
+          echo "Found binary: $TREE_BIN"
+          "$TREE_BIN" --version
         env:
           DEN_HOME: ${{ env.DEN_HOME }}
-        continue-on-error: true
 
       - name: Upload build log
         if: always()

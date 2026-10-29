@@ -68,6 +68,11 @@ std::string bundled_ruby_command(const Config& config, const fs::path& ruby_dir,
                                  const fs::path& formula_file, const std::string& name,
                                  const std::string& version);
 
+/// True when any of `requested`'s bottles is fixed-cellar (its prefix is
+/// baked into binaries), so a source build must not fall back to installing
+/// into a staging keg when an install step ignores DESTDIR.
+bool bakes_fixed_prefix(const PackageIndex& idx, const std::string& requested);
+
 /// Called when a Ruby build of `name` `version` failed (`why`) and den is
 /// about to build it with its native recipe parser instead. With
 /// build.strict set in `den_home`'s config this throws UserError. Otherwise
