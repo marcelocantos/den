@@ -8,6 +8,7 @@
 #include "../core/error.h"
 #include "../env/environment.h"
 #include "../env/manifest.h"
+#include "../env/post_install.h"
 #include "../index/bottle_cellar.h"
 #include "../index/index.h"
 #include "../platform/platform.h"
@@ -417,7 +418,8 @@ void check_host_toolchain(const Config& config, std::vector<Finding>& findings) 
                        "(run `xcode-select --install` to enable source builds)");
     }
     if (!facts.sdk_path) {
-        warn(findings, "macOS SDK path not detected (xcrun --show-sdk-path failed)");
+        warn(findings, "macOS SDK path not detected (no SDKROOT, xcode-select -p SDK, or Command "
+                       "Line Tools SDK)");
     }
 #else
     if (!facts.glibc) {
@@ -683,6 +685,19 @@ bool lexically_within(const fs::path& p, const fs::path& root) {
     return !rel.empty() && rel.native().rfind("..", 0) != 0;
 }
 
+// ---------------------------------------------------------------------------
+// openssl cert.pem links whose CA bundle is missing
+// ---------------------------------------------------------------------------
+void check_cert_pem_links(const Config& config, std::vector<Finding>& findings) {
+    SPDLOG_DEBUG("check: cert.pem links");
+    for (const auto& link : dangling_cert_pem_links(config.store.parent_path())) {
+        warn(findings, "dangling CA bundle link " + link +
+                           ": TLS through that keg has no trust store. Install ca-certificates "
+                           "(`den install ca-certificates`), which writes the bundle; if it is "
+                           "installed, the next `den install` or `den upgrade` restores it");
+    }
+}
+
 } // namespace
 
 std::vector<BrewDependency> remaining_brew_dependencies(const Config& config) {
@@ -837,6 +852,7 @@ std::vector<Finding> doctor(const Config& config) {
     check_env_materialisation(config, findings);
     check_root_prefix_layout(config, findings);
     check_broken_symlinks(config, findings);
+    check_cert_pem_links(config, findings);
     check_missing_packages(config, findings);
     check_brew_dependencies(config, findings, notes);
     check_keg_linkage(config, findings, notes);

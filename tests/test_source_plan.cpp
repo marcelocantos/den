@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <sstream>
 #include <string>
 #include <unistd.h>
@@ -373,5 +374,137 @@ TEST_SUITE("build::source_plan") {
         CHECK(m.auto_deps["homebrew"].count("openssl@4") == 1);
         CHECK(m.auto_deps["homebrew"].count("curl") == 1);
         fs::remove_all(tmp);
+    }
+
+    TEST_CASE("each keg in a plan is reachable through opt/ before the next build starts") {
+        // Kegs load their dependencies through <prefix>/opt, and later builds
+        // in the plan run them, so the links can't wait for the final
+        // materialise. json-c is already installed but has lost its link.
+        auto tmp = fresh_tmp("source-plan-opt");
+        auto cfg = tmp_config(tmp);
+        auto idx = git_chain();
+        fs::create_directories(cfg.store / "json-c" / "0.18");
+        mark_keg_owned(cfg.store / "json-c" / "0.18", "json-c", "0.18");
+        auto plan = plan_source_build(cfg, idx, {"git"});
+        Recorder rec;
+        auto runner = rec.runner();
+        std::vector<std::string> missing_at_git;
+        auto build = runner.build;
+        runner.build = [&](const Config& c, const PackageIndex& i, const std::string& n,
+                           const std::string& v) {
+            if (n == "git") {
+                for (const char* dep :
+                     {"json-c", "pcre2", "gettext", "openssl@4", "curl", "pkgconf"}) {
+                    if (!fs::is_directory(c.prefix / "opt" / dep))
+                        missing_at_git.push_back(dep);
+                }
+            }
+            return build(c, i, n, v);
+        };
+        auto res = run_source_plan(cfg, idx, plan, TrustPolicy{}, runner);
+        CHECK(res.deferred.empty());
+        CHECK(missing_at_git.empty());
+        for (const char* keg : {"json-c", "openssl@4", "git"}) {
+            INFO(keg);
+            auto link = cfg.prefix / "opt" / keg;
+            REQUIRE(fs::is_symlink(fs::symlink_status(link)));
+            CHECK(fs::canonical(link) ==
+                  fs::canonical(cfg.store / keg / idx.packages[keg].version));
+        }
+        fs::remove_all(tmp);
+    }
+
+    TEST_CASE("den install routing a fixed-Cellar keg records the same chain as install -s") {
+        // `den install git` (no -s) reaches the source build through the
+        // provider's G9 routing; it must leave the prefix, the manifest and
+        // the post_install links exactly as `den install -s git` does.
+        const std::string cert_step = R"([{"type":"symlink","force":true,)"
+                                      R"("source":{"path":"{{etc}}/ca-certificates/cert.pem"},)"
+                                      R"("target":{"path":"{{pkgetc}}/cert.pem"}}])";
+        auto chain = [&] {
+            auto idx = git_chain();
+            idx.packages["openssl@4"].keg_only = true;
+            idx.packages["openssl@4"].post_install_steps = cert_step;
+            idx.packages["curl"].post_install_steps = cert_step;
+            return idx;
+        };
+        // The :any bottles are already poured in both prefixes, so neither
+        // run downloads anything.
+        auto seed = [](const Config& cfg, const PackageIndex& idx) {
+            for (const char* name :
+                 {"ca-certificates", "libunistring", "json-c", "pcre2", "curl"}) {
+                const auto& v = idx.packages.at(name).version;
+                fs::create_directories(cfg.store / name / v);
+                mark_keg_owned(cfg.store / name / v, name, v);
+            }
+        };
+        struct Outcome {
+            std::vector<std::string> built;
+            std::set<std::string> packages, auto_deps, opt, etc_links;
+        };
+        auto observe = [](const Config& cfg, const Recorder& rec) {
+            Outcome o;
+            for (const auto& l : rec.log)
+                if (l.rfind("build ", 0) == 0)
+                    o.built.push_back(l.substr(6));
+            std::sort(o.built.begin(), o.built.end());
+            auto m = read_manifest(cfg.den_home, "/");
+            for (const auto& [n, _] : m.packages["homebrew"])
+                o.packages.insert(n);
+            for (const auto& n : m.auto_deps["homebrew"])
+                o.auto_deps.insert(n);
+            for (const auto& e : fs::directory_iterator(cfg.prefix / "opt"))
+                o.opt.insert(e.path().filename().string() + " -> " +
+                             fs::read_symlink(e.path()).string());
+            for (const auto& e : fs::recursive_directory_iterator(cfg.prefix / "etc"))
+                if (fs::is_symlink(e.symlink_status()))
+                    o.etc_links.insert(
+                        fs::relative(e.path(), cfg.prefix).string() + " -> " +
+                        fs::relative(fs::read_symlink(e.path()), cfg.prefix).string());
+            return o;
+        };
+
+        auto tmp_s = fresh_tmp("source-plan-same-s");
+        auto cfg_s = tmp_config(tmp_s);
+        auto idx_s = chain();
+        seed(cfg_s, idx_s);
+        Recorder rec_s;
+        install_from_source(cfg_s, idx_s, {"git"}, {}, rec_s.runner());
+        auto via_s = observe(cfg_s, rec_s);
+
+        auto tmp_r = fresh_tmp("source-plan-same-route");
+        auto cfg_r = tmp_config(tmp_r);
+        auto idx_r = chain();
+        seed(cfg_r, idx_r);
+        Recorder rec_r;
+        auto runner = rec_r.runner();
+        set_source_plan_runner_for_testing(&runner);
+        HomebrewProvider provider(&idx_r);
+        std::string err;
+        try {
+            install_packages(cfg_r, provider, idx_r, {"git"});
+        } catch (const std::exception& e) {
+            err = e.what();
+        }
+        set_source_plan_runner_for_testing(nullptr);
+        REQUIRE(err.empty());
+        auto routed = observe(cfg_r, rec_r);
+
+        CHECK(via_s.built == std::vector<std::string>{"gettext", "git", "openssl@4", "pkgconf"});
+        CHECK(routed.built == via_s.built);
+        CHECK(routed.packages.count("git") == 1);
+        CHECK(routed.packages.count("pkgconf") == 0); // build-only
+        CHECK(routed.packages == via_s.packages);
+        CHECK(routed.auto_deps == via_s.auto_deps);
+        CHECK(routed.auto_deps.count("openssl@4") == 1);
+        CHECK(routed.auto_deps.count("pkgconf") == 0); // build-only
+        CHECK(routed.opt == via_s.opt);
+        CHECK(routed.opt.count("openssl@4 -> ../Cellar/openssl@4/4.0.0") == 1);
+        CHECK(routed.etc_links == via_s.etc_links);
+        CHECK(routed.etc_links.count("etc/openssl@4/cert.pem -> etc/ca-certificates/cert.pem") ==
+              1);
+        CHECK(routed.etc_links.count("etc/curl/cert.pem -> etc/ca-certificates/cert.pem") == 1);
+        fs::remove_all(tmp_s);
+        fs::remove_all(tmp_r);
     }
 }

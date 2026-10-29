@@ -237,7 +237,8 @@ uint32_t root_opt_link(const PrefixLinkContext& ctx, const fs::path& pkg_path,
 }
 
 /// Run a formula's declarative post_install symlink steps (see
-/// post_install.h) once its keg is in the prefix. `fresh` means this version
+/// post_install.h), or den's native ca-certificates step, once its keg is in
+/// the prefix. `fresh` means this version
 /// was just linked (install, upgrade, switch), so a `force` step may replace
 /// what is there, as `brew postinstall` does; otherwise only missing links
 /// are recreated, so a re-materialise heals a deleted link without ever
@@ -245,6 +246,19 @@ uint32_t root_opt_link(const PrefixLinkContext& ctx, const fs::path& pkg_path,
 uint32_t run_post_install_steps(const PrefixLinkContext& ctx, const Package* info,
                                 const std::string& name, const std::string& version,
                                 const fs::path& pkg_path, bool fresh) {
+    // ca-certificates' own post_install is a script den does not run; den
+    // writes the bundle it would produce natively instead (post_install.h).
+    if (name == "ca-certificates") {
+        auto result = write_ca_certificates_bundle(ctx.prefix, pkg_path, /*replace=*/fresh);
+        if (!result.skipped.empty()) {
+            if (fresh) {
+                SPDLOG_WARN("{}@{}: CA bundle not written: {}", name, version, result.skipped);
+            } else {
+                SPDLOG_DEBUG("{}@{}: CA bundle not written: {}", name, version, result.skipped);
+            }
+        }
+        return result.written ? 1 : 0;
+    }
     if (!info || info->post_install_steps.empty()) {
         return 0;
     }

@@ -174,7 +174,7 @@ TEST_SUITE("build::bundled_ruby_env") {
         CHECK(env.at("HOMEBREW_PREFIX") == (den_home / "prefix").string());
         CHECK(env.at("HOMEBREW_CELLAR") == (den_home / "prefix" / "Cellar").string());
         CHECK(env.at("HOMEBREW_REPOSITORY") == (den_home / "prefix").string());
-        CHECK(env.at("HOMEBREW_LIBRARY") == (ruby / "homebrew").string());
+        CHECK(env.at("HOMEBREW_LIBRARY") == (ruby / "Library").string());
         CHECK(env.at("HOMEBREW_CACHE") == (den_home / "cache" / "homebrew").string());
         CHECK(env.at("HOMEBREW_BREW_FILE") == "/dev/null");
         CHECK(env.at("HOMEBREW_PATH") == "/usr/bin:/bin");
@@ -216,7 +216,7 @@ TEST_SUITE("build::bundled_ruby_env") {
         CHECK(env.at("HOMEBREW_CELLAR") == "/opt/homebrew/Cellar");
         CHECK(has_entry(env.at("PATH"), "/opt/homebrew/bin"));
         // Still den's bundled library and caches, not brew's.
-        CHECK(env.at("HOMEBREW_LIBRARY") == "/tmp/u/.den/ruby/homebrew");
+        CHECK(env.at("HOMEBREW_LIBRARY") == "/tmp/u/.den/ruby/Library");
         CHECK(env.count("HOMEBREW_BOOTSNAP_GEM_PATH") == 0);
     }
 
@@ -280,6 +280,28 @@ TEST_SUITE("build::bundled_ruby_env") {
         ensure_ruby_bundle(t.path / "den"); // fast path (already unpacked)
         CHECK(slurp(ruby / "den_build.rb") == std::string(embedded_den_build_rb()));
         CHECK_FALSE(refresh_den_build_script(ruby));
+        // Homebrew's own layout, so HOMEBREW_SHIMS_PATH and the macOS .pc
+        // directory resolve.
+        CHECK(fs::is_directory(ruby / "Library/Homebrew/shims"));
+        CHECK(fs::is_directory(ruby / "Library/Homebrew/os/mac/pkgconfig"));
+    }
+
+    TEST_CASE("bundle gets Homebrew's Library/Homebrew layout") {
+        TempDir t;
+        auto ruby = t.path / "ruby";
+        CHECK_FALSE(ensure_bundle_library_link(ruby)); // no library yet
+        write(ruby / "homebrew/os/mac/pkgconfig/26/zlib.pc", "Name: zlib\n");
+        CHECK(ensure_bundle_library_link(ruby));
+        auto link = ruby / "Library/Homebrew";
+        CHECK(fs::is_symlink(link));
+        CHECK(fs::read_symlink(link) == fs::path("../homebrew"));
+        CHECK(fs::exists(ruby / "Library/Homebrew/os/mac/pkgconfig/26/zlib.pc"));
+        CHECK_FALSE(ensure_bundle_library_link(ruby)); // idempotent
+        // A wrong link is replaced.
+        fs::remove(link);
+        fs::create_directory_symlink("/nonexistent", link);
+        CHECK(ensure_bundle_library_link(ruby));
+        CHECK(fs::read_symlink(link) == fs::path("../homebrew"));
     }
 
     // ── -s builds through the bundled Ruby, offline (file:// sources) ───────
@@ -312,6 +334,9 @@ TEST_SUITE("build::bundled_ruby_env") {
                "    (share/\"fixture\").mkpath\n"
                "    (share/\"fixture/env\").write ENV.fetch(\"HOMEBREW_PREFIX\") + \"\\n\" "
                "+ ENV.fetch(\"HOMEBREW_CELLAR\") + \"\\n\" + ENV.fetch(\"HOMEBREW_LIBRARY\")\n"
+               "    (share/\"fixture/library\").write "
+               "[(HOMEBREW_LIBRARY/\"Homebrew/os\").directory?, "
+               "HOMEBREW_SHIMS_PATH.directory?, HOMEBREW_DATA_PATH.directory?].join(\" \")\n"
                "  end\nend\n";
     }
 
@@ -366,7 +391,9 @@ TEST_SUITE("build::bundled_ruby_env") {
             // The formula saw den's prefix, Cellar and bundled library.
             CHECK(slurp(keg / "share/fixture/env") == s.prefix().string() + "\n" +
                                                           (s.prefix() / "Cellar").string() + "\n" +
-                                                          (s.home / "ruby" / "homebrew").string());
+                                                          (s.home / "ruby" / "Library").string());
+            // HOMEBREW_LIBRARY/"Homebrew/..." names the bundled library.
+            CHECK(slurp(keg / "share/fixture/library") == "true true true");
             CHECK(fs::is_regular_file(keg / "DEN_RECEIPT.json"));
             // The receipt records the verified tarball and the tap the
             // formula came from (docs/source-builds.md, "Receipt").
@@ -381,6 +408,106 @@ TEST_SUITE("build::bundled_ruby_env") {
             CHECK(receipt->opt_prefix_baked == (s.prefix() / "opt/rbtool").string());
             CHECK_FALSE(receipt->toolchain_clang.empty());
         }
+    }
+
+    TEST_CASE("e2e: -s points Makefiles that assume /opt/homebrew at den's prefix") {
+        Scratch s(false);
+        // git's config.mak.uname: HOMEBREW_PREFIX = /opt/homebrew, then
+        // -L$(HOMEBREW_PREFIX)/opt/gettext/lib. The sub-make must agree.
+        auto src = s.tmp.path / "src" / "hbtool-1.0";
+        const std::string share = "$(DESTDIR)$(PREFIX)/share/fixture";
+        write(src / "Makefile", "HOMEBREW_PREFIX = /opt/homebrew\ninstall:\n\tmkdir -p " + share +
+                                    "\n\techo '$(HOMEBREW_PREFIX)' > " + share +
+                                    "/hp\n\t$(MAKE) sub\nsub:\n\techo '$(HOMEBREW_PREFIX)' > " +
+                                    share + "/hp-sub\n");
+        auto tarball = s.tmp.path / "hbtool-1.0.tar.gz";
+        run("tar -czf " + tarball.string() + " -C " + (s.tmp.path / "src").string() +
+            " hbtool-1.0");
+        write(s.tmp.path / "tap/Formula/hbtool.rb",
+              "class Hbtool < Formula\n  desc \"fixture\"\n  url \"file://" + tarball.string() +
+                  "\"\n  version \"1.0\"\n  sha256 \"" + hash_file(tarball) +
+                  "\"\n\n  def install\n"
+                  "    system \"make\", \"install\", \"PREFIX=#{prefix}\"\n"
+                  "  end\nend\n");
+        auto tap = s.den("tap add test/hbtap --url " + (s.tmp.path / "tap").string());
+        INFO(tap);
+        auto out = s.den("install -s test/hbtap/hbtool");
+        INFO(out);
+        CHECK(out.find("bundled ruby build failed") == std::string::npos);
+        auto keg = s.prefix() / "Cellar/hbtool/1.0/share/fixture";
+        CHECK(slurp(keg / "hp") == s.prefix().string() + "\n");
+        CHECK(slurp(keg / "hp-sub") == s.prefix().string() + "\n");
+    }
+
+    TEST_CASE("e2e: -s gives formulae Homebrew's ENV and opt-path helpers") {
+        Scratch s(false);
+        auto tarball = make_source(s.tmp.path, "envtool", "1.0");
+        write(s.tmp.path / "tap/Formula/envtool.rb",
+              "class Envtool < Formula\n  desc \"fixture\"\n  url \"file://" + tarball.string() +
+                  "\"\n  version \"1.0\"\n  sha256 \"" + hash_file(tarball) +
+                  "\"\n\n  def install\n"
+                  "    ENV.append_to_cflags \"-DDEN_ENV_PROBE\"\n"
+                  "    ENV.append \"LDFLAGS\", \"-L/den/probe\"\n"
+                  "    ENV[\"MAKEFLAGS\"] = \"-j8\"\n"
+                  "    ENV.deparallelize\n"
+                  "    system ENV.cc, \"--version\"\n"
+                  "    system ENV.cxx, \"--version\"\n"
+                  "    system \"make\", \"install\", \"PREFIX=#{prefix}\"\n"
+                  "    (share/\"fixture\").mkpath\n"
+                  "    (share/\"fixture/env\").write [ENV[\"CFLAGS\"], ENV[\"CXXFLAGS\"], "
+                  "ENV[\"LDFLAGS\"], ENV[\"MAKEFLAGS\"], formula_opt_prefix(\"some/tap/zlib\"), "
+                  "formula_opt_lib(\"zlib\"), \"cc=#{ENV.cc}\", \"cxx=#{ENV.cxx}\"].join(\"\\n\")\n"
+                  "  end\nend\n");
+        auto tap = s.den("tap add test/envtap --url " + (s.tmp.path / "tap").string());
+        INFO(tap);
+        auto out = s.den("install -s test/envtap/envtool");
+        INFO(out);
+        CHECK(out.find("bundled ruby build failed") == std::string::npos);
+        CHECK(out.find("==> Built envtool 1.0") != std::string::npos);
+        auto env = slurp(s.prefix() / "Cellar/envtool/1.0/share/fixture/env");
+        // CFLAGS and CXXFLAGS both got the flag, LDFLAGS its own, and
+        // deparallelize took -j8 out of MAKEFLAGS.
+        auto first = env.find("-DDEN_ENV_PROBE");
+        REQUIRE(first != std::string::npos);
+        CHECK(env.find("-DDEN_ENV_PROBE", first + 1) != std::string::npos);
+        CHECK(env.find("-L/den/probe") != std::string::npos);
+        CHECK(env.find("-j8") == std::string::npos);
+        // Newer Homebrew path helpers resolve under den's prefix.
+        CHECK(env.find("\n" + (s.prefix() / "opt/zlib").string() + "\n") != std::string::npos);
+        CHECK(env.find("\n" + (s.prefix() / "opt/zlib/lib").string()) != std::string::npos);
+        // ENV.cc and ENV.cxx name a compiler (git passes "CC=#{ENV.cc}" to
+        // make; an empty CC= breaks every compile).
+        auto cc = env.find("\ncc=");
+        auto cxx = env.find("\ncxx=");
+        REQUIRE(cc != std::string::npos);
+        REQUIRE(cxx != std::string::npos);
+        CHECK(env.compare(cc, 5, "\ncc=\n") != 0);
+        CHECK(cxx + 5 < env.size());
+    }
+
+    TEST_CASE("e2e: -s accepts a formula that declares post_install_steps") {
+        // openssl@3 and openssl@4 declare post_install_steps, which the
+        // bundled Homebrew library predates. Without the shim the class body
+        // raises NoMethodError and den falls back to its native parser.
+        Scratch s(false);
+        auto tarball = make_source(s.tmp.path, "pistool", "1.0");
+        auto text = formula("Pistool", "1.0", tarball);
+        auto at = text.find("\n  def install");
+        REQUIRE(at != std::string::npos);
+        text.insert(at,
+                    "\n  post_install_steps do\n    symlink \"{{etc}}/ca-certificates/cert.pem\", "
+                    "\"{{pkgetc}}/cert.pem\", overwrite: true\n  end\n");
+        write(s.tmp.path / "tap/Formula/pistool.rb", text);
+        auto tap = s.den("tap add test/pitap --url " + (s.tmp.path / "tap").string());
+        INFO(tap);
+        auto out = s.den("install -s test/pitap/pistool");
+        INFO(out);
+        CHECK(out.find("post_install_steps") == std::string::npos);
+        CHECK(out.find("bundled ruby build failed") == std::string::npos);
+        CHECK(out.find("==> Built pistool 1.0") != std::string::npos);
+        auto receipt = read_source_build_receipt(s.prefix() / "Cellar/pistool/1.0");
+        REQUIRE(receipt);
+        CHECK(receipt->fallback.empty());
     }
 
     // Same fixture, but with the formula's sha256 replaced.
@@ -481,7 +608,8 @@ TEST_SUITE("build::bundled_ruby_env") {
         CHECK(slurp(keg / "bin/rbcore") == "#!/bin/sh\necho rbcore 3.4.5\n");
         CHECK(slurp(keg / "share/fixture/env") == (den_home / "prefix").string() + "\n" +
                                                       (den_home / "prefix/Cellar").string() + "\n" +
-                                                      (den_home / "ruby/homebrew").string());
+                                                      (den_home / "ruby/Library").string());
+        CHECK(slurp(keg / "share/fixture/library") == "true true true");
         CHECK_FALSE(fs::exists(t.path / "hb"));
     }
 #endif

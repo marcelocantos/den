@@ -28,11 +28,17 @@
 
 #include "build/formula_parser.h"
 #include "build/source_build.h"
+#include "platform/platform.h"
 
 #include <algorithm>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <optional>
 #include <string>
 #include <vector>
+
+#include <unistd.h>
 
 namespace den {
 
@@ -176,6 +182,48 @@ TEST_SUITE("shim_free_build") {
         // prepends a fake xcrun to PATH before invoking `den install -s`.
         MESSAGE("DEN_LIVE_XCRUN_CHECK: xcrun spy must be set up by the CI workflow.");
         CHECK(true);
+    }
+#endif
+
+#ifdef __APPLE__
+    TEST_CASE("the SDK path source builds use is resolved without running xcrun") {
+        // A PATH spy, as in source-build-smoke.yml: a source build's receipt
+        // (record_toolchain) and env (apply_shim_free_toolchain) both
+        // resolve the SDK, and neither may run xcrun.
+        namespace fs = std::filesystem;
+        const auto dir = fs::temp_directory_path() / ("den-xcrun-spy-" + std::to_string(getpid()));
+        fs::remove_all(dir);
+        fs::create_directories(dir);
+        const auto log = dir / "invocations.log";
+        {
+            std::ofstream spy(dir / "xcrun");
+            spy << "#!/bin/sh\necho \"$*\" >> '" << log.string()
+                << "'\nexec /usr/bin/xcrun \"$@\"\n";
+        }
+        fs::permissions(dir / "xcrun", fs::perms::owner_all);
+
+        const auto saved = [](const char* k) -> std::optional<std::string> {
+            const char* v = std::getenv(k);
+            return v ? std::optional<std::string>(v) : std::nullopt;
+        };
+        const auto old_path = saved("PATH");
+        const auto old_sdkroot = saved("SDKROOT");
+        setenv("PATH", (dir.string() + ":" + old_path.value_or("/usr/bin:/bin")).c_str(), 1);
+        unsetenv("SDKROOT");
+
+        const auto sdk = macos_sdk_path();
+        const auto facts = detect_host_facts();
+
+        if (old_path)
+            setenv("PATH", old_path->c_str(), 1);
+        if (old_sdkroot)
+            setenv("SDKROOT", old_sdkroot->c_str(), 1);
+
+        CHECK_FALSE(fs::exists(log));
+        REQUIRE(sdk.has_value());
+        CHECK(fs::is_directory(*sdk));
+        CHECK(facts.sdk_path == sdk);
+        fs::remove_all(dir);
     }
 #endif
 

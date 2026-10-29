@@ -47,6 +47,24 @@ bool is_install_step(const std::string& shell_cmd);
 /// unchanged.
 std::string with_destdir(const std::string& shell_cmd, const fs::path& stage);
 
+/// `shell_cmd` with every mention of `opt_prefix` (as a whole path or a path
+/// prefix) replaced by `staged_keg`: the install step of a keg-staged retry
+/// (docs/source-builds.md), which installs straight into the staging keg
+/// rather than through DESTDIR.
+std::string with_staged_keg(const std::string& shell_cmd, const fs::path& opt_prefix,
+                            const fs::path& staged_keg);
+
+/// Files an install step staged under `stage` outside `<stage><opt_prefix>`,
+/// `<stage><prefix>/etc` and `<stage><prefix>/var` (paths shown relative to
+/// the stage, with a leading '/'). Empty when the stage is missing.
+std::vector<std::string> staged_strays(const fs::path& stage, const fs::path& opt_prefix,
+                                       const fs::path& prefix);
+
+/// After a keg-staged retry, rewrite mentions of `staged_keg` to `opt_prefix`
+/// in the text files and symlinks under `staged_keg`. A binary file that
+/// mentions it can't be relocated safely: UserError names it.
+void relocate_staged_keg(const fs::path& staged_keg, const fs::path& opt_prefix);
+
 /// Move what an install step staged under `stage` into place:
 ///   * `<stage><opt_prefix>/...` merges into `keg` (a staged file replaces an
 ///     existing one -- the install step is the newer writer);
@@ -73,6 +91,15 @@ class OptPathGuard {
     /// directory the build created at the opt path is removed first, so a
     /// failed build never leaves one in place of the link.
     void check() const;
+
+    /// True when the opt path is exactly as it was before the build.
+    bool unchanged() const;
+
+    /// For a keg-staged retry: true when the opt path is as it was before the
+    /// build, after removing a real directory the build created there (the
+    /// state check() would accept or clean up). False when the build changed
+    /// a pre-existing opt path, which check() then reports.
+    bool settle() const;
 
     const fs::path& path() const { return opt_path_; }
 

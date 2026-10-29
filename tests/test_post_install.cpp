@@ -9,6 +9,8 @@
 
 #include <doctest.h>
 
+#include "core/config.h"
+#include "doctor/doctor.h"
 #include "env/environment.h"
 #include "env/manifest.h"
 #include "env/post_install.h"
@@ -19,9 +21,13 @@
 #include <nlohmann/json.hpp>
 
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <sys/wait.h>
+#include <unistd.h>
 
 namespace den {
 namespace test {
@@ -97,6 +103,28 @@ std::string one_step(const json& step) {
 
 json symlink_step(const std::string& source, const std::string& target) {
     return {{"type", "symlink"}, {"source", {{"path", source}}}, {"target", {{"path", target}}}};
+}
+
+std::string slurp(const fs::path& p) {
+    std::ifstream in(p);
+    return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+std::string sh(const std::string& cmd, int* rc = nullptr) {
+    std::string out;
+    FILE* pipe = popen(("(" + cmd + ") 2>&1").c_str(), "r");
+    if (!pipe) {
+        return out;
+    }
+    char buf[4096];
+    while (fgets(buf, sizeof buf, pipe)) {
+        out += buf;
+    }
+    int status = pclose(pipe);
+    if (rc) {
+        *rc = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    }
+    return out;
 }
 
 } // namespace
@@ -345,6 +373,224 @@ TEST_SUITE("post_install steps") {
         idx.packages[p.name] = p;
         materialise(fx.home, fx.store, "/", &idx);
         CHECK_FALSE(fs::exists(fs::symlink_status(fx.cert_link())));
+    }
+
+    // A ca-certificates keg carrying `bundle` as its Mozilla bundle, and the
+    // keg-only openssl@3 whose cert.pem step points at the prefix copy.
+    struct CaFx : PostInstallFx {
+        PackageIndex idx;
+        CaFx() {
+            Package p;
+            p.name = "openssl@3";
+            p.version = "3.6.0";
+            p.keg_only = true;
+            p.post_install_steps = kOpensslSteps;
+            idx.packages[p.name] = p;
+            keg("openssl@3", "3.6.0");
+            want("openssl@3", "3.6.0");
+        }
+        void ca(const std::string& version, const std::string& bundle) {
+            auto k = keg("ca-certificates", version);
+            write(k / "share/ca-certificates/cacert.pem", bundle);
+            Package c;
+            c.name = "ca-certificates";
+            c.version = version;
+            idx.packages[c.name] = c;
+            want("ca-certificates", version);
+        }
+        void run() { materialise(home, store, "/", &idx); }
+        bool bundle_is_file() const {
+            return fs::is_regular_file(fs::symlink_status(cert_bundle()));
+        }
+        size_t entries_in_bundle_dir() const {
+            size_t n = 0;
+            for ([[maybe_unused]] const auto& e :
+                 fs::directory_iterator(cert_bundle().parent_path()))
+                ++n;
+            return n;
+        }
+    };
+
+    TEST_CASE("a fresh prefix gets ca-certificates' bundle as a real file openssl's link reaches") {
+        CaFx fx;
+        fx.run();
+        // Without ca-certificates the link dangles, and doctor's scan says so.
+        CHECK(is_link_to(fx.cert_link(), fx.cert_bundle()));
+        CHECK_FALSE(fs::exists(fx.cert_link()));
+        auto dangling = dangling_cert_pem_links(fx.prefix);
+        REQUIRE(dangling.size() == 1);
+        CHECK(dangling[0] == fx.cert_link().string() + " -> " + fx.cert_bundle().string());
+
+        fx.ca("2026-10-20", "BUNDLE v1\n");
+        fx.run();
+        CHECK(fx.bundle_is_file());
+        CHECK(slurp(fx.cert_bundle()) == "BUNDLE v1\n");
+        CHECK(slurp(fx.cert_link()) == "BUNDLE v1\n"); // through openssl's link
+        CHECK(fx.entries_in_bundle_dir() == 1);        // no temp file left behind
+        CHECK(dangling_cert_pem_links(fx.prefix).empty());
+    }
+
+    TEST_CASE("doctor warns while openssl's cert.pem link dangles, and not once it resolves") {
+        CaFx fx;
+        fx.run();
+        Config cfg;
+        cfg.den_home = fx.home;
+        cfg.store = fx.store;
+        cfg.prefix = fx.prefix;
+        cfg.cache = fx.home / "cache";
+        cfg.homebrew_prefix = fx.root / "brew";
+        cfg.homebrew_cellar = fx.root / "brew" / "Cellar";
+        auto cert_warnings = [&] {
+            std::vector<std::string> out;
+            for (const auto& f : doctor(cfg)) {
+                if (f.message.find("dangling CA bundle link") != std::string::npos) {
+                    CHECK(f.severity == Severity::Warning);
+                    out.push_back(f.message);
+                }
+            }
+            return out;
+        };
+        auto w = cert_warnings();
+        REQUIRE(w.size() == 1);
+        CHECK(w[0].find(fx.cert_link().string()) != std::string::npos);
+        CHECK(w[0].find("den install ca-certificates") != std::string::npos);
+
+        fx.ca("2026-10-20", "BUNDLE\n");
+        fx.run();
+        CHECK(cert_warnings().empty());
+    }
+
+    TEST_CASE(
+        "the bundle is rewritten on every ca-certificates install or upgrade, healed otherwise") {
+        CaFx fx;
+        fx.ca("2026-10-20", "BUNDLE v1\n");
+        fx.run();
+        REQUIRE(slurp(fx.cert_bundle()) == "BUNDLE v1\n");
+
+        // A re-materialise with no version change leaves an existing file...
+        PostInstallFx::write(fx.cert_bundle(), "edited\n");
+        fx.run();
+        CHECK(slurp(fx.cert_bundle()) == "edited\n");
+        // ...heals a deleted one...
+        fs::remove(fx.cert_bundle());
+        fx.run();
+        CHECK(slurp(fx.cert_bundle()) == "BUNDLE v1\n");
+        // ...and never keeps a symlink in its place.
+        fs::remove(fx.cert_bundle());
+        PostInstallFx::write(fx.root / "elsewhere.pem", "elsewhere\n");
+        fs::create_symlink(fx.root / "elsewhere.pem", fx.cert_bundle());
+        fx.run();
+        CHECK(fx.bundle_is_file());
+        CHECK(slurp(fx.cert_bundle()) == "BUNDLE v1\n");
+        CHECK(slurp(fx.root / "elsewhere.pem") == "elsewhere\n");
+
+        // An upgrade rewrites it, replacing the old file atomically.
+        fx.ca("2026-12-01", "BUNDLE v2\n");
+        fx.run();
+        CHECK(fx.bundle_is_file());
+        CHECK(slurp(fx.cert_bundle()) == "BUNDLE v2\n");
+        CHECK(fx.entries_in_bundle_dir() == 1);
+    }
+
+    TEST_CASE("the bundle is never written through a symlinked etc/ca-certificates") {
+        PostInstallFx fx;
+        auto k = fx.keg("ca-certificates", "2026-10-20");
+        PostInstallFx::write(k / "share/ca-certificates/cacert.pem", "BUNDLE\n");
+        fs::create_directories(fx.root / "outside");
+        fs::create_directories(fx.prefix / "etc");
+        fs::create_directory_symlink(fx.root / "outside", fx.prefix / "etc/ca-certificates");
+        auto r = write_ca_certificates_bundle(fx.prefix, k, true);
+        CHECK_FALSE(r.written);
+        CHECK_FALSE(r.skipped.empty());
+        CHECK_FALSE(fs::exists(fx.root / "outside/cert.pem"));
+        // A keg without the bundle writes nothing either.
+        auto bare = fx.keg("ca-certificates", "2026-01-01");
+        CHECK_FALSE(write_ca_certificates_bundle(fx.prefix, bare, true).written);
+    }
+
+    TEST_CASE("TLS verifies against a local host through openssl's cert.pem link") {
+        // The server's CA is the only certificate in ca-certificates' bundle,
+        // so a verified handshake proves the trust store den wrote is the one
+        // used. Needs an openssl CLI (LibreSSL on macOS is fine).
+        int rc = 0;
+        sh("command -v openssl", &rc);
+        if (rc != 0) {
+            MESSAGE("no openssl CLI; skipping");
+            return;
+        }
+        CaFx fx;
+        auto pki = fx.root / "pki";
+        fs::create_directories(pki);
+        const std::string d = pki.string();
+        auto made = sh("cd '" + d +
+                           "' && openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key "
+                           "-out ca.pem -days 2 -subj /CN=den-test-ca"
+                           " && openssl req -newkey rsa:2048 -nodes -keyout srv.key -out srv.csr "
+                           "-subj /CN=localhost"
+                           " && openssl x509 -req -in srv.csr -CA ca.pem -CAkey ca.key "
+                           "-CAcreateserial -out srv.pem -days 2",
+                       &rc);
+        INFO(made);
+        REQUIRE(rc == 0);
+        fx.ca("2026-10-20", slurp(pki / "ca.pem"));
+        fx.run();
+        REQUIRE(fx.bundle_is_file());
+
+        const int port = 20000 + static_cast<int>(::getpid() % 20000);
+        const std::string connect =
+            "echo | openssl s_client -connect 127.0.0.1:" + std::to_string(port) +
+            " -verify_return_error -CAfile '";
+        auto script = "cd '" + d + "' && (openssl s_server -accept " + std::to_string(port) +
+                      " -cert srv.pem -key srv.key -quiet >/dev/null 2>&1 & echo $! > srv.pid)"
+                      " && for i in $(seq 1 50); do " +
+                      connect + fx.cert_link().string() +
+                      "' > ok.txt 2>&1 && break; sleep 0.2; done;"
+                      " kill $(cat srv.pid) 2>/dev/null; cat ok.txt";
+        auto ok = sh(script, &rc);
+        INFO(ok);
+        CHECK(ok.find("Verify return code: 0 (ok)") != std::string::npos);
+
+        // The same handshake against a bundle without that CA fails.
+        fx.ca("2026-12-01", "-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n");
+        fx.run();
+        REQUIRE(slurp(fx.cert_bundle()).find("BEGIN CERTIFICATE") != std::string::npos);
+        script = "cd '" + d + "' && (openssl s_server -accept " + std::to_string(port + 1) +
+                 " -cert srv.pem -key srv.key -quiet >/dev/null 2>&1 & echo $! > srv.pid)"
+                 " && sleep 1; echo | openssl s_client -connect 127.0.0.1:" +
+                 std::to_string(port + 1) + " -verify_return_error -CAfile '" +
+                 fx.cert_link().string() + "' 2>&1; kill $(cat srv.pid) 2>/dev/null";
+        auto bad = sh(script, &rc);
+        INFO(bad);
+        CHECK(bad.find("Verify return code: 0 (ok)") == std::string::npos);
+    }
+
+    TEST_CASE("den's own openssl verifies a public TLS host with no -CAfile (opt-in)") {
+        // DEN_TEST_TLS_PREFIX names a prefix where den built openssl@3 or
+        // openssl@4 and installed ca-certificates. Needs network.
+        const char* env = std::getenv("DEN_TEST_TLS_PREFIX");
+        if (!env || !*env) {
+            MESSAGE("DEN_TEST_TLS_PREFIX not set; skipping");
+            return;
+        }
+        fs::path prefix = env;
+        bool any = false;
+        for (const char* keg : {"openssl@4", "openssl@3"}) {
+            auto bin = prefix / "opt" / keg / "bin/openssl";
+            if (!fs::exists(bin)) {
+                continue;
+            }
+            any = true;
+            INFO(keg);
+            CHECK(fs::is_regular_file(prefix / "etc/ca-certificates/cert.pem"));
+            int rc = 0;
+            auto out = sh("echo | env -u SSL_CERT_FILE -u SSL_CERT_DIR '" + bin.string() +
+                              "' s_client -connect github.com:443 -servername github.com "
+                              "-verify_return_error",
+                          &rc);
+            INFO(out);
+            CHECK(out.find("Verify return code: 0 (ok)") != std::string::npos);
+        }
+        CHECK(any);
     }
 }
 
