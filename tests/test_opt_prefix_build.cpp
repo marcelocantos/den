@@ -14,9 +14,11 @@
 #include "download/archive.h"
 #include "download/sha256.h"
 #include "index/package.h"
+#include "store/store.h"
 
 #include <cstdlib>
 #include <fstream>
+#include <map>
 #include <random>
 #include <sstream>
 #include <string>
@@ -206,6 +208,76 @@ void build_and_check(const Config& cfg, const fs::path& work, const std::string&
     CHECK(fs::is_regular_file(keg / "etc" / "den-fixture.conf"));
 #endif
 }
+
+#ifdef __APPLE__
+// git's macOS resources in miniature: two Perl modules (tar.gz with a
+// top-level directory, staged with a block) and the html and man pages
+// (flat tar.xz, installed straight into a directory).
+struct ResourceFixture {
+    fs::path sasl, smtp, html, man;
+};
+
+ResourceFixture pack_resources(const fs::path& work) {
+    const auto src = work / "res-src";
+    write(src / "Authen-SASL-2.1700" / "lib" / "Authen" / "SASL.pm", "package Authen::SASL;\n1;\n");
+    write(src / "Net-SMTP-SSL-1.04" / "lib" / "Net" / "SMTP" / "SSL.pm",
+          "package Net::SMTP::SSL;\n1;\n");
+    write(src / "html" / "git.html", "<html>git</html>\n");
+    write(src / "html" / "RelNotes" / "1.0.txt", "notes\n");
+    write(src / "man" / "man1" / "git.1", ".TH GIT 1\n");
+    write(src / "man" / "man5" / "gitattributes.5", ".TH GITATTRIBUTES 5\n");
+    ResourceFixture r{work / "Authen-SASL-2.1700.tar.gz", work / "Net-SMTP-SSL-1.04.tar.gz",
+                      work / "git-htmldocs-1.0.tar.xz", work / "git-manpages-1.0.tar.xz"};
+    REQUIRE(sh("tar -czf " + sh_quote(r.sasl.string()) + " -C " + sh_quote(src.string()) +
+               " Authen-SASL-2.1700") == 0);
+    REQUIRE(sh("tar -czf " + sh_quote(r.smtp.string()) + " -C " + sh_quote(src.string()) +
+               " Net-SMTP-SSL-1.04") == 0);
+    REQUIRE(sh("tar -cJf " + sh_quote(r.html.string()) + " -C " +
+               sh_quote((src / "html").string()) + " .") == 0);
+    REQUIRE(sh("tar -cJf " + sh_quote(r.man.string()) + " -C " + sh_quote((src / "man").string()) +
+               " .") == 0);
+    return r;
+}
+
+std::string resource_block(const std::string& name, const fs::path& archive, const std::string& sha,
+                           const std::string& version = "") {
+    return "  resource \"" + name + "\" do\n    url \"file://" + archive.string() + "\"\n" +
+           (version.empty() ? "" : "    version \"" + version + "\"\n") + "    sha256 \"" + sha +
+           "\"\n  end\n\n";
+}
+
+// The resource half of git's install method, unchanged in shape.
+std::string resource_formula(const std::string& klass, const fs::path& archive,
+                             const ResourceFixture& r, const std::string& smtp_sha) {
+    return "class " + klass +
+           " < Formula\n"
+           "  desc \"den resource staging fixture\"\n"
+           "  homepage \"https://example.invalid/den-fixture\"\n"
+           "  url \"file://" +
+           archive.string() + "\"\n  version \"1.0\"\n  sha256 \"" + hash_file(archive) + "\"\n\n" +
+           resource_block("Authen::SASL", r.sasl, hash_file(r.sasl)) +
+           resource_block("html", r.html, hash_file(r.html), "1.0") +
+           resource_block("man", r.man, hash_file(r.man), "1.0") +
+           resource_block("Net::SMTP::SSL", r.smtp, smtp_sha) +
+           "  def install\n"
+           "    odie \"html resource needs to be updated\" if build.stable? && version != "
+           "resource(\"html\").version\n"
+           "    odie \"man resource needs to be updated\" if build.stable? && version != "
+           "resource(\"man\").version\n"
+           "    system \"./configure\", \"--prefix=#{prefix}\", \"--sysconfdir=#{etc}\"\n"
+           "    system \"make\", \"install\"\n"
+           "    man.install resource(\"man\")\n"
+           "    (share/\"doc/git-doc\").install resource(\"html\")\n"
+           "    resource(\"Net::SMTP::SSL\").stage do\n"
+           "      (share/\"perl5\").install \"lib/Net\"\n"
+           "    end\n"
+           "    resource(\"Authen::SASL\").stage do\n"
+           "      (share/\"perl5\").install \"lib/Authen\"\n"
+           "    end\n"
+           "  end\n"
+           "end\n";
+}
+#endif
 
 } // namespace
 
@@ -425,6 +497,88 @@ TEST_SUITE("opt_prefix_build") {
             CHECK_FALSE(fs::exists(old_keg / "share"));
         }
     }
+
+#ifdef __APPLE__
+    TEST_CASE("formula resources stage from den's cache, as git's macOS resources do") {
+        TempTree t;
+        const auto cfg = make_config(t.root);
+        fs::create_directories(cfg.store);
+        const std::string name = "den-fixture-res";
+        const auto archive = pack_fixture(t.root, "J", "den-fixture-1.0.tar.xz");
+        const auto res = pack_resources(t.root);
+        const auto formula = t.root / (name + ".rb");
+        write(formula, resource_formula("DenFixtureRes", archive, res, hash_file(res.smtp)));
+
+        PackageIndex idx;
+        Package pkg;
+        pkg.name = name;
+        pkg.version = "1.0";
+        pkg.ruby_source_path = formula.string();
+        idx.packages[name] = pkg;
+
+        const auto keg = cfg.store / name / "1.0";
+        REQUIRE(build_from_source(cfg, idx, name, "1.0") == keg);
+
+        // Block staging runs inside the module's top-level directory.
+        CHECK(slurp(keg / "share" / "perl5" / "Authen" / "SASL.pm") ==
+              "package Authen::SASL;\n1;\n");
+        CHECK(slurp(keg / "share" / "perl5" / "Net" / "SMTP" / "SSL.pm") ==
+              "package Net::SMTP::SSL;\n1;\n");
+        // Target staging moves a flat archive's contents into the directory.
+        CHECK(slurp(keg / "share" / "man" / "man1" / "git.1") == ".TH GIT 1\n");
+        CHECK(slurp(keg / "share" / "man" / "man5" / "gitattributes.5") == ".TH GITATTRIBUTES 5\n");
+        CHECK(slurp(keg / "share" / "doc" / "git-doc" / "git.html") == "<html>git</html>\n");
+        CHECK(slurp(keg / "share" / "doc" / "git-doc" / "RelNotes" / "1.0.txt") == "notes\n");
+        // The main build still ran.
+        CHECK(fs::is_regular_file(keg / "bin" / "den-fixture"));
+
+        // Each resource was cached under den's source cache, with its archive
+        // suffix, and its staging directory is gone.
+        const auto sources = cfg.cache / "sources";
+        CHECK(hash_file(sources / (name + "-1.0--Authen-SASL.tar.gz")) == hash_file(res.sasl));
+        CHECK(hash_file(sources / (name + "-1.0--Net-SMTP-SSL.tar.gz")) == hash_file(res.smtp));
+        CHECK(hash_file(sources / (name + "-1.0--html.tar.xz")) == hash_file(res.html));
+        CHECK(hash_file(sources / (name + "-1.0--man.tar.xz")) == hash_file(res.man));
+        CHECK_FALSE(fs::exists(cfg.cache / "build" / (name + "-1.0.resources")));
+
+        // The receipt lists all four, verified.
+        const auto receipt = read_source_build_receipt(keg);
+        REQUIRE(receipt.has_value());
+        REQUIRE(receipt->resources.size() == 4);
+        std::map<std::string, std::string> got;
+        for (const auto& in : receipt->resources)
+            got[in.name] = in.sha256;
+        CHECK(got["Authen::SASL"] == hash_file(res.sasl));
+        CHECK(got["Net::SMTP::SSL"] == hash_file(res.smtp));
+        CHECK(got["html"] == hash_file(res.html));
+        CHECK(got["man"] == hash_file(res.man));
+    }
+
+    TEST_CASE("a resource that does not match its sha256 fails the build before it starts") {
+        TempTree t;
+        const auto cfg = make_config(t.root);
+        fs::create_directories(cfg.store);
+        const std::string name = "den-fixture-badres";
+        const auto archive = pack_fixture(t.root, "J", "den-fixture-1.0.tar.xz");
+        const auto res = pack_resources(t.root);
+        const auto formula = t.root / (name + ".rb");
+        write(formula, resource_formula("DenFixtureBadres", archive, res, std::string(64, 'a')));
+
+        PackageIndex idx;
+        Package pkg;
+        pkg.name = name;
+        pkg.version = "1.0";
+        pkg.ruby_source_path = formula.string();
+        idx.packages[name] = pkg;
+
+        CHECK_THROWS_WITH_AS(
+            build_from_source(cfg, idx, name, "1.0"),
+            doctest::Contains("SHA256 mismatch for " + name + " resource Net::SMTP::SSL"),
+            UserError);
+        CHECK_FALSE(fs::exists(cfg.store / name / "1.0"));
+        CHECK_FALSE(fs::exists(cfg.cache / "sources" / (name + "-1.0--Net-SMTP-SSL.tar.gz")));
+    }
+#endif
 }
 
 } // namespace den

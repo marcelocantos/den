@@ -163,6 +163,19 @@ The source tarball must have a sha256, and so must every `resource` and
 external patch: the bundled Ruby build refuses one without, and does not fall
 back to the parser.
 
+**Resources.** The bundled Ruby build fetches every `resource` into den's
+source cache before the build starts, as
+`<cache>/sources/<name>-<version>--<resource><suffix>` (the resource name with
+anything but letters, digits and `._+@-` turned into `-`), and checks each
+against its sha256; a mismatch fails the build before any step runs.
+`resource("x").stage { … }` then unpacks that file into a scratch directory
+under `<cache>/build` and runs the block inside the archive's single top-level
+directory, if it has one; `dir.install resource("x")` moves the unpacked
+contents into `dir`. Homebrew's downloader and cache are not used. This is
+what git's macOS resources need: the `Authen::SASL` and `Net::SMTP::SSL` Perl
+modules (staged with a block) and the `html` and `man` pages (installed into
+a directory). A resource with its own patches is refused for now.
+
 ## Receipt
 
 A source-built keg's `DEN_RECEIPT.json` records, beside the fields every den

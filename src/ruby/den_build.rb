@@ -160,7 +160,9 @@ f.define_singleton_method(:elisp) { dest / "share" / "emacs" / "site-lisp" / nam
 f.define_singleton_method(:frameworks) { dest / "Frameworks" }
 f.define_singleton_method(:kext_prefix) { dest / "Library" / "Extensions" }
 f.define_singleton_method(:name) { name }
-f.define_singleton_method(:version) { PkgVersion.parse(version) rescue version }
+# As in Homebrew, version is the Version without the revision (formulas
+# compare it with a resource's version), and pkg_version carries the revision.
+f.define_singleton_method(:version) { PkgVersion.parse(version).version rescue version }
 f.define_singleton_method(:pkg_version) { PkgVersion.parse(version) rescue version }
 
 # rpath for macOS dylibs.
@@ -363,8 +365,9 @@ require "digest"
 sha256_of = ->(path) { Digest::SHA256.file(path.to_s).hexdigest }
 
 # Every resource and external patch must carry a sha256 as well (Homebrew
-# only warns when one has none). Homebrew's downloader verifies each against
-# it when the formula stages it. den records them all in the keg's receipt.
+# only warns when one has none). den fetches and verifies each resource
+# itself before the build (below); patches still go through Homebrew's
+# downloader, which verifies them. den records them all in the keg's receipt.
 den_hex_of = lambda do |checksum|
   (checksum.respond_to?(:hexdigest) ? checksum.hexdigest : checksum).to_s.downcase
 end
@@ -389,33 +392,117 @@ end
 
 # The cache name keeps the URL's archive suffix (see source_archive_suffix in
 # src/build/opt_prefix_build.cpp); tar detects the format from content.
-archive_suffix = begin
-  base = url.to_s.sub(/[?#].*\z/m, "").split("/").last.to_s.downcase
+den_archive_suffix = lambda do |u|
+  base = u.to_s.sub(/[?#].*\z/m, "").split("/").last.to_s.downcase
   %w[.tar.gz .tar.xz .tar.bz2 .tar.zst .tar.lz .tar.lzma .tar.z .tgz .txz .tbz2 .tbz .tar .zip .7z]
     .find { |sfx| base.length > sfx.length && base.end_with?(sfx) } || ".src"
 end
-tarball = den_home / "cache" / "sources" / "#{name}-#{version}#{archive_suffix}"
-tarball.dirname.mkpath
 
-# A cached tarball is only reused if it still matches; otherwise fetch again.
-if tarball.exist? && sha256_of.call(tarball) != expected_sha256
-  $stderr.puts "==> Cached source for #{name} does not match its sha256; downloading again"
-  tarball.delete
-end
-
-unless tarball.exist?
-  $stderr.puts "==> Downloading #{url}"
-  partial = Pathname.new("#{tarball}.download")
-  partial.delete if partial.exist?
-  system("curl", "-fsSL", "-o", partial.to_s, url) or abort "download failed"
-  actual = sha256_of.call(partial)
-  if actual != expected_sha256
-    partial.delete
-    abort "error: SHA256 mismatch for #{name} source tarball\n" \
-          "  expected: #{expected_sha256}\n  actual:   #{actual}\n  url:      #{url}"
+# Fetch `u` into `path` unless a cached copy still matches `sha`; a download
+# that does not match is discarded.
+den_fetch_verified = lambda do |u, sha, path, what|
+  path.dirname.mkpath
+  # A cached file is only reused if it still matches; otherwise fetch again.
+  if path.exist? && sha256_of.call(path) != sha
+    $stderr.puts "==> Cached #{what} does not match its sha256; downloading again"
+    path.delete
   end
-  partial.rename(tarball)
+  next if path.exist?
+
+  $stderr.puts "==> Downloading #{u}"
+  partial = Pathname.new("#{path}.download")
+  partial.delete if partial.exist?
+  Kernel.system("curl", "-fsSL", "-o", partial.to_s, u.to_s) or abort "download failed: #{u}"
+  actual = sha256_of.call(partial)
+  if actual != sha
+    partial.delete
+    abort "error: SHA256 mismatch for #{what}\n" \
+          "  expected: #{sha}\n  actual:   #{actual}\n  url:      #{u}"
+  end
+  partial.rename(path)
 end
+
+# Unpack `archive` into the empty directory `into` (or copy a plain file in,
+# named after its URL) and return the directory a build step works in: the
+# archive's single top-level directory if it has one, as Homebrew does.
+den_unpack = lambda do |archive, into, u|
+  into.mkpath
+  case den_archive_suffix.call(u)
+  when ".zip"
+    Kernel.system("unzip", "-q", archive.to_s, "-d", into.to_s) or abort "extraction failed: #{archive}"
+  when ".src"
+    plain = File.basename(u.to_s.sub(/[?#].*\z/m, ""))
+    plain = archive.basename.to_s if plain.empty?
+    FileUtils.cp(archive, into / plain)
+  else
+    Kernel.system("tar", "xf", archive.to_s, "-C", into.to_s) or abort "extraction failed: #{archive}"
+  end
+  entries = into.children
+  entries.length == 1 && entries.first.directory? && !entries.first.symlink? ? entries.first : into
+end
+
+archive_suffix = den_archive_suffix.call(url)
+tarball = den_home / "cache" / "sources" / "#{name}-#{version}#{archive_suffix}"
+den_fetch_verified.call(url, expected_sha256, tarball, "#{name} source tarball")
+
+# --- Resources ---
+#
+# Every resource is fetched and checksummed into den's source cache before
+# the build starts (cache/sources/<name>-<version>--<resource><suffix>), and
+# its stage reads that file, so Homebrew's downloader and cache are never
+# used. Staging follows Resource#stage: with a block, the block runs inside
+# the unpacked resource; with a target (`man.install resource("man")`), its
+# contents move into the target.
+den_safe_name = ->(s) { s.to_s.gsub(/[^A-Za-z0-9._+@-]+/, "-") }
+den_resource_stage_root = den_home / "cache" / "build" / "#{name}-#{version}.resources"
+den_stage_context = Struct.new(:resource, :staging)
+(stable.resources.values rescue []).each do |r|
+  unless (r.patches rescue []).empty?
+    abort "error: #{name} resource #{r.name} carries patches, which den source builds do not apply yet"
+  end
+  r_url = r.url.to_s
+  r_sha = den_hex_of.call(r.checksum)
+  r_file = den_home / "cache" / "sources" /
+           "#{name}-#{version}--#{den_safe_name.call(r.name)}#{den_archive_suffix.call(r_url)}"
+  den_fetch_verified.call(r_url, r_sha, r_file, "#{name} resource #{r.name}")
+
+  r.define_singleton_method(:cached_download) { r_file }
+  r.define_singleton_method(:downloaded?) { true }
+  r.define_singleton_method(:fetch) { |**_opts| r_file }
+  r.define_singleton_method(:stage) do |target = nil, **_opts, &block|
+    raise ArgumentError, "Target directory or block is required" if !target && !block
+
+    dir = den_resource_stage_root / den_safe_name.call(r.name)
+    dir.rmtree if dir.exist?
+    begin
+      root = den_unpack.call(r_file, dir, r_url)
+      Dir.chdir(root) do
+        if block
+          block.call(den_stage_context.new(r, root))
+        else
+          Pathname(target).install root.children
+        end
+      end
+    ensure
+      dir.rmtree if dir.exist?
+      den_resource_stage_root.rmdir if den_resource_stage_root.exist? && den_resource_stage_root.empty?
+    end
+  end
+end
+at_exit { den_resource_stage_root.rmtree if den_resource_stage_root.exist? }
+
+# The formula sees the same spec, so resource("x") and resources are the
+# instances staged from den's cache, and `build.stable?` answers as it does
+# in Homebrew.
+f.instance_variable_set(:@active_spec, stable)
+f.instance_variable_set(:@active_spec_sym, :stable)
+f.instance_variable_set(:@build, (stable.build rescue nil))
+f.define_singleton_method(:resource) do |res_name = nil, *rest, &blk|
+  next super(res_name, *rest, &blk) if res_name.nil? || blk
+
+  stable.resources.fetch(res_name.to_s) { raise "#{name} has no resource #{res_name}" }
+end
+f.define_singleton_method(:resources) { stable.resources.values }
 
 build_dir = den_home / "cache" / "build" / "#{name}-#{version}"
 build_dir.rmtree if build_dir.exist?
