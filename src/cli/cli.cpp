@@ -843,8 +843,10 @@ void Cli::M::setup() {
     // carrying an ownership receipt) are eligible, and only when no
     // environment still references that version.
     auto* cleanup = app.add_subcommand(
-        "cleanup", "Remove unused versions den installed, and clear the archive cache. Kegs den "
-                   "did not install (including Homebrew's) are kept");
+        "cleanup",
+        "Remove unused versions den installed, and clear the archive cache. Kegs den "
+        "did not install (including Homebrew's), and versions another keg still loads by "
+        "versioned path, are kept");
     cleanup->add_flag("-n,--dry-run", cleanup_dry_run,
                       "Show what would be removed without deleting anything");
     cleanup->callback([this] {
@@ -857,6 +859,12 @@ void Cli::M::setup() {
             } else {
                 std::cout << "Removing " << pkg.name << " " << pkg.version << "\n";
             }
+        }
+        for (const auto& k : report.kept_referenced) {
+            std::cout << (cleanup_dry_run ? "Would keep " : "Keeping ") << k.keg.name << " "
+                      << k.keg.version << ": " << k.by.name << " " << k.by.version
+                      << " still loads it (" << k.file.lexically_relative(k.by.path).string()
+                      << " -> " << k.load_path << ")\n";
         }
         if (report.kept_unowned > 0) {
             std::cout << (cleanup_dry_run ? "Would leave " : "Left ") << report.kept_unowned
