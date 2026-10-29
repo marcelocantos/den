@@ -31,7 +31,9 @@ everything — not just Python, but every package on your system.
   ones; nothing changes until you switch, and rollback is instant. The
   daemon refreshes the index, detects outdated formulae and pre-downloads
   their bottles; with `daemon.auto_upgrade` on it applies them inside
-  `daemon.upgrade_window`, deferring kegs that are in use. Cask upgrades
+  `daemon.upgrade_window`, deferring kegs that are in use (an in-use
+  dependent that would move in the same batch defers the whole batch, so a
+  dependency chain always moves together). Cask upgrades
   stay a manual `den upgrade`.
 - **Source-first architecture** — embedded Ruby VM for evaluating
   Homebrew formula build recipes. Pre-built archives as an optimisation,

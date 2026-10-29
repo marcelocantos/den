@@ -111,6 +111,14 @@ UpgradePassResult run_upgrade_pass(const fs::path& cellar, const fs::path& den_h
         if (apply) {
             try {
                 apply(pu);
+            } catch (const UpgradeDeferred& e) {
+                DeferredUpgrade du{pu.name, pu.installed, pu.available, e.what()};
+                SPDLOG_INFO("upgrade_pass: deferring {} {} -> {} ({})", pu.name, pu.installed,
+                            pu.available, e.what());
+                record_deferral(state, du);
+                result.deferred.push_back(du);
+                still_pending.push_back(pu);
+                continue;
             } catch (const std::exception& e) {
                 SPDLOG_WARN("upgrade_pass: {} {} -> {} failed: {}", pu.name, pu.installed,
                             pu.available, e.what());

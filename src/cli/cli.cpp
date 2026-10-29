@@ -9,6 +9,7 @@
 #include "uninstall_deps.h"
 
 #include "../activity/activity.h"
+#include "../build/relink_pins.h"
 #include "../build/source_build.h"
 #include "../core/config.h"
 #include "../core/error.h"
@@ -560,6 +561,29 @@ void Cli::M::setup() {
             if (!report.conflicts.empty()) {
                 std::cerr << "warning: " << report.conflicts << "\n";
             }
+        }
+
+        // Kegs poured before bottles bound their dependencies through
+        // <prefix>/opt keep loading the versioned keg they were poured
+        // against; relink them (see relink_pinned_kegs). No-op once done.
+        auto relink = relink_pinned_kegs(cfg);
+        if (!relink.relinked.empty()) {
+            std::cout << "==> Relinked " << relink.relinked.size()
+                      << " keg(s) to load their dependencies through "
+                      << (cfg.store.parent_path() / "opt").string() << " (" << relink.files
+                      << " files).\n";
+            for (const auto& r : relink.relinked) {
+                std::cout << "    " << r << "\n";
+            }
+        }
+        if (!relink.left_pinned.empty()) {
+            std::cout << "    " << relink.left_pinned.size()
+                      << " pin(s) left in place (opt link not den's or another version); see "
+                         "`den doctor`.\n";
+        }
+        for (const auto& f : relink.failed) {
+            std::cerr << "warning: could not relink " << f
+                      << " (file unchanged; `den reinstall` rebinds it)\n";
         }
     });
 

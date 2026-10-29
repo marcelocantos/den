@@ -13,6 +13,8 @@
 #include "cli/install.h"
 #include "core/error.h"
 #include "daemon/daemon.h"
+#include "daemon/inuse.h"
+#include "daemon/upgrade_pass.h"
 #include "env/environment.h"
 #include "env/manifest.h"
 #include "env/version_change.h"
@@ -22,7 +24,9 @@
 #include "store/pins.h"
 #include "store/store.h"
 
+#include <fcntl.h>
 #include <sys/wait.h>
+#include <unistd.h>
 
 #include <array>
 #include <cstdio>
@@ -333,6 +337,140 @@ TEST_SUITE("upgrade_dependents") {
         apply_daemon_upgrade(f.cfg, f.prov, f.idx, {"depa", "1.0", "2.0"});
         CHECK(f.manifest("app") == "1.0_1");
         CHECK(f.app_says() == "depa 2.0");
+    }
+
+    // Den's (b): a dependent pulled into the batch honours the daemon's in-use
+    // deferral. Moving depa without its in-use dependent would split the
+    // chain, so nothing is poured until the dependent is free.
+    TEST_CASE("a dependent in use defers the whole batch") {
+        Fixture f;
+        f.kegs.depa("2.0", 2);
+        f.kegs.app("1.0_1", "2.0", 2);
+        f.set_index({pkg("depa", "2.0", 0), pkg("app", "1.0_1", 1, {"depa"})});
+        const auto app_keg = f.cfg.store / "app" / "1.0";
+        std::vector<fs::path> probed;
+        VersionChangeOptions opts;
+        opts.upgrade_dependents = true;
+
+        SUBCASE("in use: nothing moves") {
+            opts.keg_in_use = [&](const fs::path& keg) {
+                probed.push_back(keg);
+                return keg == app_keg;
+            };
+            auto res = apply_version_changes(f.cfg, f.prov, &f.idx, {{"depa", "1.0", "2.0"}}, opts);
+            CHECK(probed ==
+                  std::vector<fs::path>{app_keg}); // only the dependent; the pass probes depa
+            REQUIRE(res.deferred_in_use.size() == 1);
+            CHECK(res.deferred_in_use[0].name == "app");
+            CHECK(res.deferred_in_use[0].from == "1.0");
+            CHECK(res.deferred_in_use[0].to == "1.0_1");
+            CHECK(res.applied.empty());
+            CHECK(res.rolled_back.empty());
+            CHECK(f.prov.installed_log.empty());
+            CHECK(f.manifest("depa") == "1.0");
+            CHECK(f.manifest("app") == "1.0");
+            CHECK(f.opt("depa") == "../Cellar/depa/1.0");
+            CHECK(f.app_says() == "depa 1.0");
+        }
+        SUBCASE("free: the batch moves together") {
+            opts.keg_in_use = [&](const fs::path& keg) {
+                probed.push_back(keg);
+                return false;
+            };
+            auto res = apply_version_changes(f.cfg, f.prov, &f.idx, {{"depa", "1.0", "2.0"}}, opts);
+            CHECK(probed == std::vector<fs::path>{app_keg});
+            CHECK(res.deferred_in_use.empty());
+            CHECK(f.manifest("depa") == "2.0");
+            CHECK(f.manifest("app") == "1.0_1");
+            CHECK(f.app_says() == "depa 2.0");
+        }
+    }
+
+    TEST_CASE("the daemon defers depa while its dependent app is running") {
+        Fixture f;
+        f.kegs.depa("2.0", 2);
+        f.kegs.app("1.0_1", "2.0", 2);
+        f.set_index({pkg("depa", "2.0", 0), pkg("app", "1.0_1", 1, {"depa"})});
+        const auto app_bin = f.cfg.store / "app" / "1.0" / "bin" / "app";
+        REQUIRE(fs::exists(app_bin));
+        const auto& cfg = f.cfg;
+        auto& prov = f.prov;
+        auto& idx = f.idx;
+        auto apply = [&](const PendingUpgrade& pu) { apply_daemon_upgrade(cfg, prov, idx, pu); };
+
+        DaemonState state;
+        state.pending.push_back({"depa", "1.0", "2.0"});
+
+        SUBCASE("app held open by another process") {
+            int sync[2];
+            REQUIRE(::pipe(sync) == 0);
+            pid_t child = ::fork();
+            REQUIRE(child >= 0);
+            if (child == 0) {
+                ::close(sync[1]);
+                int fd = ::open(app_bin.c_str(), O_RDONLY);
+                char b;
+                (void)::read(sync[0], &b, 1);
+                if (fd >= 0)
+                    ::close(fd);
+                ::_exit(0);
+            }
+            ::close(sync[0]);
+            ::usleep(100'000);
+            // Some CI hosts lack a working detector (no lsof); the
+            // version_change-level test above covers the logic there.
+            const bool detected = !files_in_use_under(app_bin.parent_path().parent_path()).empty();
+            auto res = run_upgrade_pass(cfg.store, cfg.den_home, state, apply);
+            ::close(sync[1]);
+            int status = 0;
+            ::waitpid(child, &status, 0);
+
+            if (!detected) {
+                MESSAGE("in-use detector unavailable here — skipping the live check");
+            } else {
+                CHECK(res.applied.empty());
+                REQUIRE(res.deferred.size() == 1);
+                CHECK(res.deferred[0].name == "depa");
+                CHECK(res.deferred[0].reason == "dependent in use: app 1.0");
+                REQUIRE(state.deferred.size() == 1);
+                CHECK(state.deferred[0].reason == "dependent in use: app 1.0");
+                CHECK(state.errors.empty());
+                REQUIRE(state.pending.size() == 1);
+                CHECK(state.pending[0].name == "depa");
+                CHECK(f.prov.installed_log.empty());
+                CHECK(f.manifest("depa") == "1.0");
+                CHECK(f.manifest("app") == "1.0");
+                CHECK(f.app_says() == "depa 1.0");
+                CHECK(read_activity(f.cfg.den_home).empty());
+
+                // Once app is free, the next pass moves the chain together.
+                auto again = run_upgrade_pass(cfg.store, cfg.den_home, state, apply);
+                CHECK(again.applied.size() == 1);
+                CHECK(state.deferred.empty());
+                CHECK(state.pending.empty());
+                CHECK(f.manifest("depa") == "2.0");
+                CHECK(f.manifest("app") == "1.0_1");
+                CHECK(f.app_says() == "depa 2.0");
+            }
+        }
+    }
+
+    TEST_CASE("an UpgradeDeferred apply is a deferral, not an error") {
+        DepTmp t;
+        DaemonState state;
+        state.pending.push_back({"depa", "1.0", "2.0"});
+        fs::create_directories(t.path / "Cellar" / "depa" / "1.0");
+        auto res =
+            run_upgrade_pass(t.path / "Cellar", t.path / "home", state, [](const PendingUpgrade&) {
+                throw UpgradeDeferred("dependent in use: app 1.0");
+            });
+        CHECK(res.applied.empty());
+        REQUIRE(res.deferred.size() == 1);
+        CHECK(res.deferred[0].reason == "dependent in use: app 1.0");
+        CHECK(state.errors.empty());
+        CHECK(state.pending.size() == 1);
+        REQUIRE(state.deferred.size() == 1);
+        CHECK(state.deferred[0].available == "2.0");
     }
 
     TEST_CASE("only revision bumps of runtime dependents join the batch") {
