@@ -3,11 +3,15 @@
 
 #include "version_change.h"
 
+#include "../core/version.h"
+#include "../store/pins.h"
 #include "../store/store.h"
 #include "manifest.h"
 
 #include <spdlog/spdlog.h>
 
+#include <deque>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -53,6 +57,154 @@ bool resolves_under(const fs::path& link, const fs::path& dir) {
     return !rel.empty() && *rel.begin() != "..";
 }
 
+/// Point `link` at `target`, swapping atomically so the link never
+/// disappears. Logs and returns false on failure.
+bool swap_link(const fs::path& link, const fs::path& target) {
+    std::error_code ec;
+    auto tmp = link;
+    tmp += ".den-rollback";
+    fs::remove(tmp, ec);
+    fs::create_symlink(target, tmp, ec);
+    if (!ec) {
+        fs::rename(tmp, link, ec);
+    }
+    if (ec) {
+        SPDLOG_WARN("rollback: could not restore {} -> {}: {}", link.string(), target.string(),
+                    ec.message());
+        fs::remove(tmp, ec);
+        return false;
+    }
+    return true;
+}
+
+/// Every `<prefix>/opt/<name>` symlink's text, by name.
+using OptLinks = std::map<std::string, fs::path>;
+
+OptLinks read_opt_links(const fs::path& opt_dir) {
+    OptLinks out;
+    std::error_code ec;
+    for (fs::directory_iterator it(opt_dir, ec), end; !ec && it != end; it.increment(ec)) {
+        if (auto t = read_link(it->path())) {
+            out[it->path().filename().string()] = *t;
+        }
+    }
+    return out;
+}
+
+/// Point every opt link the batch moved (it existed before and now names
+/// something else) back where it was, unless `keep` says a change that
+/// stays applied still needs it. Links the batch created are left: nothing
+/// that was installed before the batch loads through them.
+void restore_opt_links(const fs::path& opt_dir, const OptLinks& before,
+                       const std::function<bool(const std::string&)>& keep) {
+    for (const auto& [name, now] : read_opt_links(opt_dir)) {
+        auto was = before.find(name);
+        if (was == before.end() || was->second == now || keep(name)) {
+            continue;
+        }
+        const auto link = opt_dir / name;
+        const auto target = was->second.is_relative() ? opt_dir / was->second : was->second;
+        std::error_code ec;
+        if (!fs::exists(target, ec)) {
+            continue; // the keg it named is gone; leave the link to cleanup
+        }
+        if (swap_link(link, was->second)) {
+            SPDLOG_INFO("rollback: pointed {} back at {}", link.string(), was->second.string());
+        }
+    }
+}
+
+/// Homebrew formula revision bump: the index has the installed upstream
+/// version with a higher `_<revision>`.
+bool is_revision_bump(const std::string& installed, const Package& pkg) {
+    if (pkg.version.empty() || pkg.version == installed || pkg.revision <= 0) {
+        return false;
+    }
+    auto upstream = installed;
+    if (auto us = installed.rfind('_');
+        us != std::string::npos && us + 1 < installed.size() &&
+        installed.find_first_not_of("0123456789", us + 1) == std::string::npos) {
+        upstream = installed.substr(0, us);
+    }
+    return upstream == pkg.upstream_version() && compare_pkg_versions(installed, pkg.version) < 0;
+}
+
+/// Append to `changes` every installed package of the active env whose index
+/// entry is a revision bump and which depends at runtime on something in the
+/// batch (repeated until nothing more joins). `brought_by[i]` lists the batch
+/// members a joined change depends on.
+void add_revision_bumped_dependents(const Config& config, const PackageIndex& idx,
+                                    const std::string& pname, std::vector<VersionChange>& changes,
+                                    std::vector<std::vector<size_t>>& brought_by,
+                                    VersionChangeResult& result) {
+    const auto per = resolve_per_provider(config.den_home, active_env_path(config.den_home));
+    auto installed = per.find(pname);
+    if (installed == per.end()) {
+        return;
+    }
+    const auto pins = read_pins(config.den_home);
+    std::map<std::string, size_t> in_batch;
+    for (size_t i = 0; i < changes.size(); ++i) {
+        in_batch[keg_name(changes[i].name)] = i;
+    }
+    std::set<std::string> pinned;
+    for (bool grew = true; grew;) {
+        grew = false;
+        for (const auto& [name, version] : installed->second) {
+            if (in_batch.count(keg_name(name)) || pinned.count(name)) {
+                continue;
+            }
+            const auto* pkg = idx.find(name);
+            if (!pkg || !is_revision_bump(version, *pkg)) {
+                continue;
+            }
+            std::vector<size_t> by;
+            for (const auto& dep : pkg->dependencies) {
+                if (auto b = in_batch.find(keg_name(dep)); b != in_batch.end()) {
+                    by.push_back(b->second);
+                }
+            }
+            if (by.empty()) {
+                continue;
+            }
+            if (pins.count(name)) {
+                SPDLOG_WARN("{} {} is pinned; not moving it to {} with {}", name, version,
+                            pkg->version, changes[by.front()].name);
+                pinned.insert(name);
+                result.pinned_dependents.push_back({name, version, pkg->version});
+                continue;
+            }
+            SPDLOG_INFO("{} {} -> {}: revision bump for {}", name, version, pkg->version,
+                        changes[by.front()].name);
+            in_batch[keg_name(name)] = changes.size();
+            changes.push_back({name, version, pkg->version});
+            brought_by.resize(changes.size());
+            brought_by.back() = std::move(by);
+            result.dependents.push_back(changes.back());
+            grew = true;
+        }
+    }
+}
+
+/// Keg names of `roots` and everything they depend on at runtime (per the
+/// index; just the roots without one).
+std::set<std::string> runtime_closure(const PackageIndex* idx,
+                                      const std::vector<std::string>& roots) {
+    std::set<std::string> seen;
+    std::deque<std::string> todo(roots.begin(), roots.end());
+    while (!todo.empty()) {
+        auto name = std::move(todo.front());
+        todo.pop_front();
+        if (!seen.insert(keg_name(name)).second || !idx) {
+            continue;
+        }
+        if (const auto* pkg = idx->find(name)) {
+            todo.insert(todo.end(), pkg->dependencies.begin(), pkg->dependencies.end());
+        }
+    }
+    return seen;
+}
+
 Snapshot take_snapshot(const Config& config, PackageProvider& provider, const VersionChange& c) {
     Snapshot s;
     const auto name = keg_name(c.name);
@@ -96,19 +248,7 @@ bool undo_pour(const Config& config, const Snapshot& s) {
 
     if (resolves_under(s.opt_link, s.new_keg)) {
         if (s.opt_target) {
-            // Swap back atomically so the link never disappears.
-            auto tmp = s.opt_link;
-            tmp += ".den-rollback";
-            fs::remove(tmp, ec);
-            fs::create_symlink(*s.opt_target, tmp, ec);
-            if (!ec) {
-                fs::rename(tmp, s.opt_link, ec);
-            }
-            if (ec) {
-                SPDLOG_WARN("rollback: could not restore {} -> {}: {}", s.opt_link.string(),
-                            s.opt_target->string(), ec.message());
-                fs::remove(tmp, ec);
-            }
+            swap_link(s.opt_link, *s.opt_target);
         } else if (!s.opt_existed) {
             fs::remove(s.opt_link, ec);
         }
@@ -138,6 +278,18 @@ VersionChangeResult apply_version_changes(const Config& config, PackageProvider&
     const auto active = active_env_path(config.den_home);
     const auto pname = std::string(provider.provider_name());
 
+    // Dependents that have to move with the batch join it before anything
+    // is written, so the whole set is one transaction.
+    std::vector<std::vector<size_t>> brought_by(changes.size());
+    if (opts.upgrade_dependents && idx) {
+        add_revision_bumped_dependents(config, *idx, pname, changes, brought_by, result);
+    }
+
+    // Every opt link as the batch found it (installs and materialise both
+    // move them forward), so a rollback can put back what it moved.
+    const auto opt_dir = config.store.parent_path() / "opt";
+    const auto opt_before = read_opt_links(opt_dir);
+
     std::vector<Snapshot> snaps;
     std::vector<InstallResult> installs(changes.size());
     snaps.reserve(changes.size());
@@ -150,7 +302,9 @@ VersionChangeResult apply_version_changes(const Config& config, PackageProvider&
             try {
                 installs[i] = provider.install(config, changes[i].name, changes[i].to);
             } catch (...) {
-                // Nothing has reached the manifest yet; undo every pour.
+                // Nothing has reached the manifest yet; undo every pour and
+                // every opt link the batch moved.
+                restore_opt_links(opt_dir, opt_before, [](const std::string&) { return false; });
                 for (size_t j = 0; j <= i; ++j) {
                     undo_pour(config, snaps[j]);
                 }
@@ -200,18 +354,50 @@ VersionChangeResult apply_version_changes(const Config& config, PackageProvider&
         by_pkg[c.package].push_back(c.path);
     }
 
-    std::vector<size_t> undo;
+    // A change already in the manifest that cannot be linked is undone, and
+    // so is every dependent that joined the batch only because of it.
+    std::map<size_t, std::vector<fs::path>> conflicted;
     for (size_t i = 0; i < changes.size(); ++i) {
         const auto& c = changes[i];
         auto it = by_pkg.find(keg_name(c.name));
         if (it == by_pkg.end() || c.from.empty() || c.from == c.to) {
-            result.applied.push_back(c);
+            continue;
+        }
+        conflicted[i] = std::move(it->second);
+        by_pkg.erase(it);
+    }
+    std::map<size_t, std::string> undone_with;
+    for (bool grew = true; grew;) {
+        grew = false;
+        for (size_t i = 0; i < changes.size(); ++i) {
+            const auto& c = changes[i];
+            if (conflicted.count(i) || undone_with.count(i) || c.from.empty() || c.from == c.to) {
+                continue;
+            }
+            for (auto b : brought_by[i]) {
+                if (conflicted.count(b) || undone_with.count(b)) {
+                    undone_with[i] = changes[b].name;
+                    grew = true;
+                    break;
+                }
+            }
+        }
+    }
+    std::vector<size_t> undo;
+    for (size_t i = 0; i < changes.size(); ++i) {
+        auto conf = conflicted.find(i);
+        auto with = undone_with.find(i);
+        if (conf == conflicted.end() && with == undone_with.end()) {
+            result.applied.push_back(changes[i]);
             continue;
         }
         RolledBackChange rb;
-        rb.change = c;
-        rb.conflicts = std::move(it->second);
-        by_pkg.erase(it);
+        rb.change = changes[i];
+        if (conf != conflicted.end()) {
+            rb.conflicts = std::move(conf->second);
+        } else {
+            rb.with = with->second;
+        }
         result.rolled_back.push_back(std::move(rb));
         undo.push_back(i);
     }
@@ -245,6 +431,21 @@ VersionChangeResult apply_version_changes(const Config& config, PackageProvider&
                 result.conflicts.push_back(std::move(c));
             }
         }
+        // Opt links the batch moved go back too, except where a change that
+        // stays applied (or something it depends on) still needs them. A
+        // rolled-back package's own link always goes back.
+        std::vector<std::string> kept;
+        std::set<std::string> rolled;
+        for (const auto& c : result.applied) {
+            kept.push_back(c.name);
+        }
+        for (auto i : undo) {
+            rolled.insert(keg_name(changes[i].name));
+        }
+        const auto needed = runtime_closure(idx, kept);
+        restore_opt_links(opt_dir, opt_before, [&](const std::string& name) {
+            return !rolled.count(name) && needed.count(name);
+        });
         for (size_t k = 0; k < undo.size(); ++k) {
             if (opts.install) {
                 result.rolled_back[k].keg_removed = undo_pour(config, snaps[undo[k]]);
@@ -258,6 +459,17 @@ std::string describe_rollback(const fs::path& prefix, const RolledBackChange& rb
                               const std::string& verb, size_t max_paths) {
     std::ostringstream out;
     const auto& c = rb.change;
+    if (rb.conflicts.empty() && !rb.with.empty()) {
+        out << verb << " of " << c.name << " " << c.from << " -> " << c.to
+            << " was rolled back with " << rb.with << ": " << c.to
+            << " is the revision built for the new " << rb.with << ".\n"
+            << c.name << " stays at " << c.from << " (still linked)";
+        if (rb.keg_removed) {
+            out << "; the " << c.to << " keg den poured was removed";
+        }
+        out << ".";
+        return out.str();
+    }
     out << verb << " of " << c.name << " " << c.from << " -> " << c.to
         << " was rolled back: linking " << c.to << " would clobber " << rb.conflicts.size()
         << " path(s) in " << prefix.string() << " that den does not manage:\n";

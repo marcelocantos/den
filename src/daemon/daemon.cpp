@@ -555,8 +555,13 @@ void apply_daemon_upgrade(const Config& config, PackageProvider& provider, const
     // Install, record and link as one unit: a version that cannot be linked
     // is rolled back (manifest, links, opt link, poured keg) and reported as
     // a failure, so the pass keeps it pending and logs no activity.
-    auto res =
-        apply_version_changes(config, provider, &idx, {{pu.name, pu.installed, pu.available}});
+    // Revision-bumped dependents move in the same batch (and are rolled back
+    // with it). Their own pending entries, if any, then find them current;
+    // the pass logs activity for those as usual.
+    VersionChangeOptions opts;
+    opts.upgrade_dependents = true;
+    auto res = apply_version_changes(config, provider, &idx,
+                                     {{pu.name, pu.installed, pu.available}}, opts);
     if (!res.rolled_back.empty()) {
         throw UserError(
             describe_rollback(config.store.parent_path(), res.rolled_back.front(), "auto-upgrade"));
@@ -624,7 +629,7 @@ void run_daemon(const Config& config, bool once) {
     // Keep pid_fd open (holds the lock) until we exit.
 
     // ---- SIGTERM handler ---------------------------------------------------
-    struct sigaction sa {};
+    struct sigaction sa{};
     sa.sa_handler = sigterm_handler;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
