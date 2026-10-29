@@ -62,10 +62,12 @@ void merge_destdir_stage(const fs::path& stage, const fs::path& opt_prefix, cons
 /// Snapshot of the live `<prefix>/opt/<name>` before a build, so the build
 /// can be checked for having written there directly (an install step that
 /// ignores DESTDIR). Records whether the path existed, its link target, and
-/// the files reachable through it.
+/// the files reachable through it. A link that already names `own_keg` (the
+/// keg this build produces, e.g. left behind when that keg was removed) is
+/// checked by target only: den itself fills that keg during the build.
 class OptPathGuard {
   public:
-    explicit OptPathGuard(fs::path opt_path);
+    explicit OptPathGuard(fs::path opt_path, const fs::path& own_keg = {});
 
     /// Throws UserError if the opt path changed during the build. A real
     /// directory the build created at the opt path is removed first, so a
@@ -78,6 +80,7 @@ class OptPathGuard {
     fs::path opt_path_;
     bool existed_ = false;
     bool was_symlink_ = false;
+    bool own_keg_link_ = false;
     fs::path link_target_;
     std::vector<std::string> listing_;
 };
