@@ -110,6 +110,16 @@ Formula.define_singleton_method(:[]) do |name|
   f
 end
 
+# --- Formula DSL newer than the bundled Homebrew library ---
+#
+# post_install_steps declares the steps brew applies after pouring (openssl's
+# cert.pem symlink). den reads them from the formula API and applies them
+# itself when the keg is linked (src/env/post_install.cpp), so the build only
+# needs the class body to accept the block.
+unless Formula.respond_to?(:post_install_steps)
+  Formula.define_singleton_method(:post_install_steps) { |*_args, **_opts, &_block| nil }
+end
+
 # --- Load and evaluate the formula source ---
 
 source = File.read(formula_file)
@@ -171,6 +181,19 @@ f.define_singleton_method(:rpath) { |**opts|
   target = opts[:target] || "lib"
   "@loader_path/#{Pathname.new(origin).relative_path_from(Pathname.new(target))}/../lib" rescue "@loader_path/../lib"
 }
+
+# Path helpers newer than the bundled Homebrew (Utils::Path::FormulaHelpers:
+# formula_opt_prefix and friends). Current homebrew-core formulae call them
+# (gettext passes formula_opt_prefix("libunistring") to configure), so give
+# the formula the same definitions when its Homebrew lacks them.
+unless f.respond_to?(:formula_opt_prefix, true)
+  den_opt = ->(n) { prefix_root / "opt" / n.to_s.split("/").last }
+  f.define_singleton_method(:formula_opt_prefix) { |n| den_opt.call(n) }
+  f.define_singleton_method(:formula_opt_bin) { |n| den_opt.call(n) / "bin" }
+  f.define_singleton_method(:formula_opt_lib) { |n| den_opt.call(n) / "lib" }
+  f.define_singleton_method(:formula_opt_libexec) { |n| den_opt.call(n) / "libexec" }
+  f.define_singleton_method(:formula_opt_include) { |n| den_opt.call(n) / "include" }
+end
 
 # --- Opt-prefix build mode (G1/G2) ---
 #
@@ -336,6 +359,39 @@ opt_before = den_opt_state.call
 at_exit { stage.rmtree if stage.exist? }
 
 # --- Set up build environment ---
+
+# Formulae call Homebrew's ENV helpers (ENV.append_to_cflags, ENV.append,
+# ENV.deparallelize, ENV.cxx11, ...). Give ENV the methods of Homebrew's
+# standard build environment, as `brew install --env=std` does. den sets the
+# build's paths and flags itself, so setup_build_environment is not run.
+require "extend/ENV"
+unless ENV.respond_to?(:append_to_cflags)
+  ENV.extend(Stdenv)
+  # Stdenv's sig rejects the plain `ENV.deparallelize` (no block) that
+  # formulae use; Superenv's accepts it. Same behaviour, no sig.
+  module DenStdenvFixes
+    def deparallelize
+      old = self["MAKEFLAGS"]
+      remove "MAKEFLAGS", /-j\d+/
+      if block_given?
+        begin
+          yield
+        ensure
+          self["MAKEFLAGS"] = old
+        end
+      end
+      old
+    end
+  end
+  ENV.extend(DenStdenvFixes)
+end
+
+# Formulae hand the compiler to make themselves (git: "CC=#{ENV.cc}").
+# Homebrew's build environment always names one; without it ENV.cc is nil
+# and the command line gets an empty CC=, which overrides make's default
+# and breaks every compile. Name the platform compiler unless the caller did.
+ENV["CC"] = (RUBY_PLATFORM.include?("darwin") ? "clang" : "cc") if ENV["CC"].to_s.empty?
+ENV["CXX"] = (RUBY_PLATFORM.include?("darwin") ? "clang++" : "c++") if ENV["CXX"].to_s.empty?
 
 lib_paths = installed.values.map { |p| (p / "lib").to_s }.select { |p| File.directory?(p) }
 inc_paths = installed.values.map { |p| (p / "include").to_s }.select { |p| File.directory?(p) }

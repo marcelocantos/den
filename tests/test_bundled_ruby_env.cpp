@@ -394,6 +394,77 @@ TEST_SUITE("build::bundled_ruby_env") {
         CHECK(slurp(keg / "hp-sub") == s.prefix().string() + "\n");
     }
 
+    TEST_CASE("e2e: -s gives formulae Homebrew's ENV and opt-path helpers") {
+        Scratch s(false);
+        auto tarball = make_source(s.tmp.path, "envtool", "1.0");
+        write(s.tmp.path / "tap/Formula/envtool.rb",
+              "class Envtool < Formula\n  desc \"fixture\"\n  url \"file://" + tarball.string() +
+                  "\"\n  version \"1.0\"\n  sha256 \"" + hash_file(tarball) +
+                  "\"\n\n  def install\n"
+                  "    ENV.append_to_cflags \"-DDEN_ENV_PROBE\"\n"
+                  "    ENV.append \"LDFLAGS\", \"-L/den/probe\"\n"
+                  "    ENV[\"MAKEFLAGS\"] = \"-j8\"\n"
+                  "    ENV.deparallelize\n"
+                  "    system ENV.cc, \"--version\"\n"
+                  "    system ENV.cxx, \"--version\"\n"
+                  "    system \"make\", \"install\", \"PREFIX=#{prefix}\"\n"
+                  "    (share/\"fixture\").mkpath\n"
+                  "    (share/\"fixture/env\").write [ENV[\"CFLAGS\"], ENV[\"CXXFLAGS\"], "
+                  "ENV[\"LDFLAGS\"], ENV[\"MAKEFLAGS\"], formula_opt_prefix(\"some/tap/zlib\"), "
+                  "formula_opt_lib(\"zlib\"), \"cc=#{ENV.cc}\", \"cxx=#{ENV.cxx}\"].join(\"\\n\")\n"
+                  "  end\nend\n");
+        auto tap = s.den("tap add test/envtap --url " + (s.tmp.path / "tap").string());
+        INFO(tap);
+        auto out = s.den("install -s test/envtap/envtool");
+        INFO(out);
+        CHECK(out.find("bundled ruby build failed") == std::string::npos);
+        CHECK(out.find("==> Built envtool 1.0") != std::string::npos);
+        auto env = slurp(s.prefix() / "Cellar/envtool/1.0/share/fixture/env");
+        // CFLAGS and CXXFLAGS both got the flag, LDFLAGS its own, and
+        // deparallelize took -j8 out of MAKEFLAGS.
+        auto first = env.find("-DDEN_ENV_PROBE");
+        REQUIRE(first != std::string::npos);
+        CHECK(env.find("-DDEN_ENV_PROBE", first + 1) != std::string::npos);
+        CHECK(env.find("-L/den/probe") != std::string::npos);
+        CHECK(env.find("-j8") == std::string::npos);
+        // Newer Homebrew path helpers resolve under den's prefix.
+        CHECK(env.find("\n" + (s.prefix() / "opt/zlib").string() + "\n") != std::string::npos);
+        CHECK(env.find("\n" + (s.prefix() / "opt/zlib/lib").string()) != std::string::npos);
+        // ENV.cc and ENV.cxx name a compiler (git passes "CC=#{ENV.cc}" to
+        // make; an empty CC= breaks every compile).
+        auto cc = env.find("\ncc=");
+        auto cxx = env.find("\ncxx=");
+        REQUIRE(cc != std::string::npos);
+        REQUIRE(cxx != std::string::npos);
+        CHECK(env.compare(cc, 5, "\ncc=\n") != 0);
+        CHECK(cxx + 5 < env.size());
+    }
+
+    TEST_CASE("e2e: -s accepts a formula that declares post_install_steps") {
+        // openssl@3 and openssl@4 declare post_install_steps, which the
+        // bundled Homebrew library predates. Without the shim the class body
+        // raises NoMethodError and den falls back to its native parser.
+        Scratch s(false);
+        auto tarball = make_source(s.tmp.path, "pistool", "1.0");
+        auto text = formula("Pistool", "1.0", tarball);
+        auto at = text.find("\n  def install");
+        REQUIRE(at != std::string::npos);
+        text.insert(at,
+                    "\n  post_install_steps do\n    symlink \"{{etc}}/ca-certificates/cert.pem\", "
+                    "\"{{pkgetc}}/cert.pem\", overwrite: true\n  end\n");
+        write(s.tmp.path / "tap/Formula/pistool.rb", text);
+        auto tap = s.den("tap add test/pitap --url " + (s.tmp.path / "tap").string());
+        INFO(tap);
+        auto out = s.den("install -s test/pitap/pistool");
+        INFO(out);
+        CHECK(out.find("post_install_steps") == std::string::npos);
+        CHECK(out.find("bundled ruby build failed") == std::string::npos);
+        CHECK(out.find("==> Built pistool 1.0") != std::string::npos);
+        auto receipt = read_source_build_receipt(s.prefix() / "Cellar/pistool/1.0");
+        REQUIRE(receipt);
+        CHECK(receipt->fallback.empty());
+    }
+
     // Same fixture, but with the formula's sha256 replaced.
     std::string formula_with_sha(const std::string& klass, const std::string& version,
                                  const fs::path& tarball, const std::string& sha) {
