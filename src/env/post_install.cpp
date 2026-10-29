@@ -6,6 +6,9 @@
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
+#include <unistd.h>
+
+#include <algorithm>
 #include <map>
 #include <set>
 #include <system_error>
@@ -222,6 +225,109 @@ PostInstallResult apply_post_install(const PostInstallPlan& plan, const fs::path
         ++result.created;
     }
     return result;
+}
+
+namespace {
+
+/// True when every directory between `prefix` and `dir` (inclusive) is a
+/// real directory or does not exist yet.
+bool real_dirs_below(const fs::path& prefix, const fs::path& dir) {
+    std::error_code ec;
+    auto base = prefix.lexically_normal();
+    auto rel = dir.lexically_normal().lexically_relative(base);
+    if (rel.empty() || *rel.begin() == "..") {
+        return false;
+    }
+    fs::path walk = base;
+    for (const auto& part : rel) {
+        walk /= part;
+        const auto st = fs::symlink_status(walk, ec);
+        if (st.type() == fs::file_type::not_found) {
+            return true;
+        }
+        if (st.type() != fs::file_type::directory) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+CaBundleResult write_ca_certificates_bundle(const fs::path& prefix, const fs::path& keg,
+                                            bool replace) {
+    CaBundleResult result;
+    std::error_code ec;
+    const auto source = keg / "share" / "ca-certificates" / "cacert.pem";
+    const auto dir = prefix / "etc" / "ca-certificates";
+    const auto bundle = dir / "cert.pem";
+    if (!fs::is_regular_file(source, ec)) {
+        result.skipped = source.string() + ": not in the keg";
+        return result;
+    }
+    if (!real_dirs_below(prefix, dir)) {
+        result.skipped = bundle.string() + ": a parent directory is not a real directory";
+        return result;
+    }
+    const auto st = fs::symlink_status(bundle, ec);
+    if (st.type() == fs::file_type::directory) {
+        result.skipped = bundle.string() + ": a directory is in the way";
+        return result;
+    }
+    // A symlink is never the bundle (brew writes a file), so one is replaced
+    // even on a plain re-materialise.
+    if (st.type() == fs::file_type::regular && !replace) {
+        return result;
+    }
+    fs::create_directories(dir, ec);
+    if (ec) {
+        result.skipped = bundle.string() + ": " + ec.message();
+        return result;
+    }
+    const auto tmp = dir / (".cert.pem.den-" + std::to_string(::getpid()));
+    fs::remove(tmp, ec);
+    fs::copy_file(source, tmp, fs::copy_options::overwrite_existing, ec);
+    if (!ec) {
+        fs::permissions(tmp,
+                        fs::perms::owner_read | fs::perms::owner_write | fs::perms::group_read |
+                            fs::perms::others_read,
+                        ec);
+    }
+    if (!ec) {
+        fs::rename(tmp, bundle, ec);
+    }
+    if (ec) {
+        std::error_code ignore;
+        fs::remove(tmp, ignore);
+        result.skipped = bundle.string() + ": " + ec.message();
+        return result;
+    }
+    SPDLOG_INFO("post_install: wrote {} from {}", bundle.string(), source.string());
+    result.written = true;
+    return result;
+}
+
+std::vector<std::string> dangling_cert_pem_links(const fs::path& prefix) {
+    std::vector<std::string> out;
+    std::error_code ec;
+    const auto etc = prefix / "etc";
+    if (!fs::is_directory(fs::symlink_status(etc, ec))) {
+        return out;
+    }
+    for (const auto& entry : fs::directory_iterator(etc, ec)) {
+        if (!entry.is_directory(ec) || entry.is_symlink(ec)) {
+            continue;
+        }
+        const auto link = entry.path() / "cert.pem";
+        if (!fs::is_symlink(fs::symlink_status(link, ec))) {
+            continue;
+        }
+        if (!fs::exists(link, ec)) {
+            out.push_back(link.string() + " -> " + fs::read_symlink(link, ec).string());
+        }
+    }
+    std::sort(out.begin(), out.end());
+    return out;
 }
 
 } // namespace den

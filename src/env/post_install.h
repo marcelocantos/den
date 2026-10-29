@@ -84,4 +84,37 @@ struct PostInstallResult {
 PostInstallResult apply_post_install(const PostInstallPlan& plan, const fs::path& prefix,
                                      bool replace);
 
+// ---------------------------------------------------------------------------
+// ca-certificates
+//
+// ca-certificates publishes no symlink steps: its post_install runs a script
+// that writes <prefix>/etc/ca-certificates/cert.pem, the bundle every
+// openssl cert.pem link above points at. den does the portable part natively:
+// it copies the keg's share/ca-certificates/cacert.pem (Mozilla's bundle) to
+// that path. brew on macOS also merges certificates from the system keychains;
+// den does not yet (docs/den-vs-brew.md).
+// ---------------------------------------------------------------------------
+
+/// What writing the ca-certificates bundle did.
+struct CaBundleResult {
+    bool written = false;
+    /// Non-empty: nothing was written, and why.
+    std::string skipped;
+};
+
+/// Write <prefix>/etc/ca-certificates/cert.pem from `keg`'s
+/// share/ca-certificates/cacert.pem. The bundle is always a real file, copied
+/// to a temporary file in the same directory and renamed into place, so a
+/// reader never sees a partial bundle; a symlink at the path is replaced by
+/// the file. With `replace` false (a re-materialise with no version change)
+/// only a missing bundle is written; with `replace` true (install, upgrade,
+/// switch) it is always rewritten. Never writes through a symlinked parent
+/// directory or over a directory. Errors are reported, not thrown.
+CaBundleResult write_ca_certificates_bundle(const fs::path& prefix, const fs::path& keg,
+                                            bool replace);
+
+/// `<prefix>/etc/<name>/cert.pem` symlinks (openssl's post_install links)
+/// whose target does not exist, as "<link> -> <target>", sorted.
+std::vector<std::string> dangling_cert_pem_links(const fs::path& prefix);
+
 } // namespace den
