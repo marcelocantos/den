@@ -608,6 +608,70 @@ TEST_SUITE("cli::integration") {
         CHECK(out.find("unknown option") == std::string::npos);
     }
 
+    // -----------------------------------------------------------------------
+    // 18. A version_scheme bump to a lower version (openssl@3 3.6.3 installed,
+    //     index pins 3.5.9 with version_scheme 1) is held end to end:
+    //     `outdated`, `upgrade --dry-run` and `upgrade` all report the hold
+    //     and change nothing; `den use openssl@3 3.5.9` still switches down.
+    // -----------------------------------------------------------------------
+    TEST_CASE("openssl@3 scheme bump to 3.5.9 is held by upgrade; den use still downgrades") {
+        TempDir home;
+        const fs::path cellar = home.path / "pfx" / "Cellar";
+        const auto k363 = cellar / "openssl@3" / "3.6.3";
+        const auto k359 = cellar / "openssl@3" / "3.5.9";
+        for (const auto& k : {k363, k359}) {
+            fs::create_directories(k / "bin");
+            std::ofstream(k / "bin" / "openssl") << "#!/bin/sh\n";
+        }
+        std::ofstream(k363 / "INSTALL_RECEIPT.json")
+            << R"({"source":{"versions":{"stable":"3.6.3","version_scheme":0}}})";
+        std::ofstream(k359 / "INSTALL_RECEIPT.json")
+            << R"({"source":{"versions":{"stable":"3.5.9","version_scheme":1}}})";
+        fs::create_directories(home.path / "manifests" / "ROOT");
+        std::ofstream(home.path / "manifests" / "ROOT" / "manifest.json")
+            << R"({"packages":{"homebrew":{"openssl@3":"3.6.3"}}})";
+        fs::create_directories(home.path / "cache");
+        std::ofstream(home.path / "cache" / "index.json") << R"({
+  "packages": [{
+    "name": "openssl@3", "version": "3.5.9", "version_scheme": 1,
+    "description": "TLS", "homepage": "", "license": "", "artifact_type": "binary",
+    "deprecated": false, "disabled": false,
+    "dependencies": [], "build_dependencies": [], "archives": {}
+  }]
+})";
+        const std::string reason =
+            "held: index pins 3.5.9 (version_scheme 1), below installed 3.6.3";
+        auto manifest = [&] {
+            std::ifstream f(home.path / "manifests" / "ROOT" / "manifest.json");
+            return std::string(std::istreambuf_iterator<char>(f), {});
+        };
+        const auto before = manifest();
+
+        auto outdated = run_den_with_cellar("outdated", home.path.string(), cellar.string());
+        CHECK(outdated.output.find("[" + reason) != std::string::npos);
+
+        auto dry = run_den_with_cellar("upgrade --dry-run", home.path.string(), cellar.string());
+        CHECK(dry.exit_code == 0);
+        CHECK(dry.output.find("openssl@3 3.6.3 (" + reason +
+                              "; to downgrade: den use openssl@3 3.5.9)") != std::string::npos);
+        CHECK(dry.output.find("Nothing to upgrade.") != std::string::npos);
+        CHECK(dry.output.find("Dry run: nothing changed.") != std::string::npos);
+        CHECK(manifest() == before);
+
+        auto up = run_den_with_cellar("upgrade", home.path.string(), cellar.string());
+        CHECK(up.exit_code == 0);
+        CHECK(up.output.find(reason) != std::string::npos);
+        CHECK(up.output.find("to upgrade:") == std::string::npos);
+        CHECK(manifest() == before);
+
+        auto use = run_den_with_cellar("use openssl@3 3.5.9", home.path.string(), cellar.string());
+        CHECK(use.exit_code == 0);
+        CHECK(use.output.find("Switched openssl@3 to 3.5.9") != std::string::npos);
+        const auto after = manifest();
+        CHECK(after.find("\"3.5.9\"") != std::string::npos);
+        CHECK(after.find("\"3.6.3\"") == std::string::npos);
+    }
+
 } // TEST_SUITE cli::integration
 
 } // namespace cli_test

@@ -28,6 +28,13 @@ void format_daemon_status(std::ostream& out, const DaemonState& state) {
                 << "; to downgrade: den use " << p.name << " " << p.available << ")\n";
     }
 
+    if (!state.version_held.empty()) {
+        out << "Held (index version below installed):\n";
+        for (const auto& h : state.version_held)
+            out << "  " << h.name << " " << h.installed << " (" << h.reason
+                << "; to downgrade: den use " << h.name << " " << h.available << ")\n";
+    }
+
     // Only surface a deferral section when there is something to report, so
     // the common case stays quiet.
     if (!state.deferred.empty()) {

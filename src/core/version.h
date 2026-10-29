@@ -24,6 +24,11 @@ enum class VersionDelta {
     Newer, // index is newer: an upgrade
     Same,  // equal (or equivalent, e.g. "1.0" vs "1.0.0")
     Older, // index is older: never applied by an upgrade
+    // index has a higher version_scheme but a lower version (openssl@3
+    // 3.6.3 -> 3.5.9 LTS, scheme 0 -> 1): brew would call it an upgrade,
+    // den holds it. Never applied by an upgrade; only an explicit
+    // `den use <name> <version>` moves the keg down.
+    Held,
 };
 
 VersionDelta version_delta(const std::string& installed, const std::string& available);
@@ -37,10 +42,17 @@ VersionDelta version_delta(const std::string& installed, const std::string& avai
 int compare_versioned(int scheme_a, const std::string& a, int scheme_b, const std::string& b);
 
 /// Scheme-aware version_delta. Equal pkg_versions are Same whatever the
-/// schemes (same keg; brew does not reinstall it either). Otherwise the
-/// (version_scheme, version, revision) tuple decides: a scheme bump is Newer
-/// even when the version is lower; a lower tuple is Older (never applied).
+/// schemes (same keg; brew does not reinstall it either). An upgrade never
+/// moves to a lower pkg_version: a lower version with a higher scheme is
+/// Held, and a lower (version_scheme, version, revision) tuple is Older.
+/// Otherwise a higher tuple is Newer (a scheme bump to a higher version, or
+/// a higher version within one scheme).
 VersionDelta version_delta(const std::string& installed, int installed_scheme,
                            const std::string& available, int available_scheme);
+
+/// Why a VersionDelta::Held package is not upgraded, e.g. "held: index pins
+/// 3.5.9 (version_scheme 1), below installed 3.6.3".
+std::string version_hold_reason(const std::string& installed, const std::string& available,
+                                int available_scheme);
 
 } // namespace den

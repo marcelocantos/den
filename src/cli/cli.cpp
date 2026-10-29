@@ -234,6 +234,7 @@ struct Cli::M {
     // upgrade
     std::vector<std::string> upgrade_names;
     std::string upgrade_provider;
+    bool upgrade_dry_run = false;
 
     // list
     bool list_cellar = false;
@@ -448,6 +449,8 @@ void Cli::M::setup() {
     upgrade->add_option("names", upgrade_names, "Package names to upgrade (all if empty)");
     upgrade->add_option("--provider", upgrade_provider,
                         "Provider whose packages to upgrade (default: auto-resolve)");
+    upgrade->add_flag("-n,--dry-run", upgrade_dry_run,
+                      "Show what would be upgraded or held, without changing anything");
     upgrade->callback([this] {
         auto cfg = Config::detect();
         auto idx = load_index(cfg.cache / "index.json");
@@ -473,7 +476,7 @@ void Cli::M::setup() {
                                 provider_name);
                     continue;
                 }
-                upgrade_packages(cfg, *provider, idx, {});
+                upgrade_packages(cfg, *provider, idx, {}, upgrade_dry_run);
             }
             return;
         }
@@ -484,7 +487,7 @@ void Cli::M::setup() {
             by_provider[&provider].push_back(name);
         }
         for (auto& [provider, names] : by_provider) {
-            upgrade_packages(cfg, *provider, idx, names);
+            upgrade_packages(cfg, *provider, idx, names, upgrade_dry_run);
         }
     });
 
@@ -1298,6 +1301,12 @@ void Cli::M::setup() {
                           << ")\n";
             }
         }
+        if (!state.version_held.empty()) {
+            std::cout << "Held (index version below installed): " << state.version_held.size()
+                      << "\n";
+            for (const auto& h : state.version_held)
+                std::cout << "  " << h.name << " " << h.installed << " (" << h.reason << ")\n";
+        }
 
         if (is_daemon_running(cfg)) {
             std::cout << "Daemon: running\n";
@@ -1596,6 +1605,14 @@ void Cli::M::setup() {
                 if (delta == VersionDelta::Older) {
                     // Never offered as an upgrade; listed so it is not a surprise.
                     std::cout << "  [index older than installed; not upgrading]\n";
+                    continue;
+                }
+                if (delta == VersionDelta::Held) {
+                    std::cout << "  ["
+                              << version_hold_reason(pkg.version, index_pkg->version,
+                                                     index_pkg->version_scheme)
+                              << "; to downgrade: den use " << pkg.name << " " << index_pkg->version
+                              << "]\n";
                     continue;
                 }
                 if (pins.count(pkg.name)) {

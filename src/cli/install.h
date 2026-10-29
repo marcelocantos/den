@@ -60,7 +60,12 @@ void uninstall_packages(const Config& config, PackageProvider& provider,
 /// upgraded in the same batch; pinned ones are reported and left. An upgrade whose new version
 /// cannot be linked is rolled back (see apply_version_changes) and the call
 /// throws a UserError naming it, after the other upgrades are applied.
+/// An index version below the installed one is never applied: a lower
+/// version in the same scheme is reported as "index older than installed",
+/// and a lower version with a higher version_scheme as held (with its
+/// reason); `den use <name> <version>` is the only way down. With `dry_run`
+/// the same plan is printed and nothing is installed, linked or recorded.
 void upgrade_packages(const Config& config, PackageProvider& provider, const PackageIndex& idx,
-                      const std::vector<std::string>& names);
+                      const std::vector<std::string>& names, bool dry_run = false);
 
 } // namespace den

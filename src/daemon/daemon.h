@@ -51,6 +51,9 @@ struct DeferredUpgrade {
 // Signals to tests/consumers that DaemonState carries an `index_older` array.
 #define DAEMON_STATE_HAS_INDEX_OLDER 1
 
+// Signals to tests/consumers that DaemonState carries a `version_held` array.
+#define DAEMON_STATE_HAS_VERSION_HELD 1
+
 struct DaemonState {
     std::optional<uint64_t> last_check;
     std::vector<PendingUpgrade> pending;
@@ -58,6 +61,11 @@ struct DaemonState {
     // never upgraded (an upgrade never downgrades); reported so the user can
     // downgrade explicitly with `den use <name> <version>` if they want to.
     std::vector<PendingUpgrade> index_older;
+    // Packages whose index version is lower than the installed one but whose
+    // version_scheme is higher (openssl@3 3.6.3 -> 3.5.9, scheme 0 -> 1).
+    // Held, never pending; reason from version_hold_reason. Only an explicit
+    // `den use <name> <version>` moves them down.
+    std::vector<DeferredUpgrade> version_held;
     std::vector<DeferredUpgrade> deferred;
     std::optional<uint64_t> last_upgrade;
     std::vector<std::string> errors;
@@ -99,20 +107,27 @@ bool is_daemon_running(const Config& config);
 /// (version_scheme, version, revision) tuple is newer, produce a
 /// PendingUpgrade. An index version older than the installed one is never
 /// pending (an upgrade never downgrades); it goes to `index_older` when
-/// given. Casks/apps, disabled formulae and names missing from the index are
-/// skipped: cask upgrades swap live .app bundles and stay a manual `den
+/// given, or to `version_held` (with its reason) when the index's
+/// version_scheme is higher but its version is lower. Casks/apps, disabled formulae and names
+/// missing from the index are skipped: cask upgrades swap live .app bundles and stay a manual `den
 /// upgrade`. Sorted by name. `installed_scheme` gives each installed keg's
 /// version_scheme (from its receipt); when empty every keg counts as 0. The
 /// index side's scheme is Package::version_scheme.
 std::vector<PendingUpgrade> compute_pending(const std::map<std::string, std::string>& installed,
                                             const PackageIndex& idx,
                                             std::vector<PendingUpgrade>* index_older = nullptr,
-                                            const InstalledSchemeFn& installed_scheme = {});
+                                            const InstalledSchemeFn& installed_scheme = {},
+                                            std::vector<DeferredUpgrade>* version_held = nullptr);
 
 /// The one-line report for a package whose index is older than what is
 /// installed, e.g. "openssl@3 3.6.3: index older than installed (index has
 /// 3.5.9); not downgrading. To downgrade explicitly: den use openssl@3 3.5.9".
 std::string index_older_message(const PendingUpgrade& p);
+
+/// The one-line report for a held package, e.g. "openssl@3 3.6.3: held:
+/// index pins 3.5.9 (version_scheme 1), below installed 3.6.3; not
+/// downgrading. To downgrade explicitly: den use openssl@3 3.5.9".
+std::string version_held_message(const DeferredUpgrade& h);
 
 struct MaintenanceSettings {
     bool auto_download = true;
@@ -142,7 +157,8 @@ struct MaintenanceHooks {
 struct MaintenanceReport {
     bool index_refreshed = false;
     std::size_t pending = 0;
-    std::size_t index_older = 0; // index version older than installed: skipped
+    std::size_t index_older = 0;  // index version older than installed: skipped
+    std::size_t version_held = 0; // higher scheme, lower version: held
     std::size_t downloaded = 0;
     std::size_t skipped_pinned = 0; // pending but pinned: not pre-downloaded
     std::size_t applied = 0;
