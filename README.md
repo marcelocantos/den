@@ -11,8 +11,10 @@ everything — not just Python, but every package on your system.
   pins the shared Homebrew Cellar; see
   [Store location](#store-location-and-env-precedence)). Bottles still carry Homebrew
   placeholders, which den rewrites on pour: on macOS it rewrites Mach-O
-  install names with `otool`/`install_name_tool` and pins `opt/<dep>`
-  references to the exact dependency keg; on Linux it patches ELF paths
+  install names with `otool`/`install_name_tool` and leaves `opt/<dep>`
+  references going through `<prefix>/opt/<dep>` where den owns that link
+  (pinning them to the exact dependency keg in a prefix shared with
+  Homebrew, or where the link names a keg den did not pour); on Linux it patches ELF paths
   with patchelf. Den writes `<prefix>/opt/<name>` links only for kegs
   it poured itself, and never repoints one that points at a keg
   Homebrew installed.
@@ -134,8 +136,8 @@ manifest, or environment-composition layers.
   holds den-installed package versions. After `den migrate` the prefix
   is pinned to Homebrew's, so the store *is* the shared Homebrew Cellar
   (🎯T49) and brew/den kegs coexist. Den rewrites bottle
-  placeholders on pour (Mach-O deps pinned to exact kegs on macOS,
-  patchelf on Linux). It writes `<prefix>/opt/<name>` links only for
+  placeholders on pour (Mach-O deps bound through `<prefix>/opt/<dep>`, or pinned to exact
+  kegs in a prefix shared with Homebrew, on macOS; patchelf on Linux). It writes `<prefix>/opt/<name>` links only for
   its own kegs and never repoints Homebrew's. `den uninstall` drops a
   package from the environment but keeps its keg until `den cleanup`;
   if no environment still uses that version, its `opt/` link is handed
@@ -309,6 +311,29 @@ cd build && ctest --output-on-failure
 ```
 
 Requires: cmake, ninja and libcurl (plus zlib and bzip2 headers on Linux). libarchive and its xz/zstd/lz4 codecs are fetched from pinned sources and linked statically (`-DDEN_VENDOR_LIBARCHIVE=OFF` uses a system libarchive instead).
+
+### Sharing the homebrew-core test corpus across worktrees
+
+The oracle tests read formulae from `tests/corpus/homebrew-core`, a submodule pinned to one homebrew-core commit. Each git worktree that runs `git submodule update --init --recursive` clones it again (into `.git/worktrees/<wt>/modules`, about 1.4 GiB each). To share one checkout instead, make a shallow clone of the pinned commit once:
+
+```bash
+pin=$(git ls-files -s tests/corpus/homebrew-core | cut -d' ' -f2)
+git init ~/src/den-corpus/homebrew-core
+git -C ~/src/den-corpus/homebrew-core fetch --depth 1 https://github.com/Homebrew/homebrew-core "$pin"
+git -C ~/src/den-corpus/homebrew-core checkout --detach FETCH_HEAD
+```
+
+Then, in each worktree, initialise only the other submodules and point the build at the shared corpus:
+
+```bash
+git submodule update --init --recursive vendor/github.com/gabime/spdlog
+export DEN_CORPUS_DIR=~/src/den-corpus/homebrew-core   # or pass -DDEN_CORPUS_DIR=... to cmake
+cmake -B build -G Ninja
+```
+
+`-DDEN_CORPUS_DIR` wins over the environment variable, which is read when cmake configures. The configure fails if the override has no `Formula/` or is checked out at a different commit from the one the worktree pins, and prints the `fetch`/`checkout` to fix it. The `corpus_pin` ctest repeats that check, so merging a submodule bump without updating the shared checkout fails the test run rather than the goldens. `scripts/update-oracle-golden.rb` honours `DEN_CORPUS_DIR` too.
+
+CI sets neither, so it keeps using the submodule that `actions/checkout` fetches with `submodules: recursive`, as does any build without the override.
 
 To report a security vulnerability, see [SECURITY.md](SECURITY.md).
 

@@ -6,7 +6,9 @@
 // poured libgit2 1.9.7_2 nested under Cellar/libgit2/1.9.7/1.9.7_2 and
 // repointed /opt/homebrew/opt/libgit2 at it, breaking Homebrew's bat; and
 // `den install pv` left `@@HOMEBREW_PREFIX@@/opt/gettext/…` unrelocated
-// because otool was unusable, so pv failed at load time.
+// because otool was unusable, so pv failed at load time. Bottles now bind
+// through <prefix>/opt/<dep> only where den owns that link (see
+// test_linkage_opt.cpp); the pins below remain for Homebrew-owned links.
 
 #include <doctest.h>
 
