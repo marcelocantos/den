@@ -307,6 +307,87 @@ CaBundleResult write_ca_certificates_bundle(const fs::path& prefix, const fs::pa
     return result;
 }
 
+namespace {
+
+const char* system_pc_os() {
+#ifdef __APPLE__
+    return "mac";
+#else
+    return "linux";
+#endif
+}
+
+} // namespace
+
+fs::path system_pkgconfig_dir(const fs::path& prefix) {
+    return prefix / "Library" / "Homebrew" / "os" / system_pc_os() / "pkgconfig";
+}
+
+SystemPcResult write_system_pkgconfig(const fs::path& prefix, const fs::path& den_home,
+                                      bool replace) {
+    SystemPcResult result;
+    std::error_code ec;
+    const auto dest = system_pkgconfig_dir(prefix);
+    // The bundle's library is ruby/homebrew; newer bundles also expose it as
+    // ruby/Library/Homebrew. Either holds os/<os>/pkgconfig.
+    fs::path source;
+    for (const auto& lib :
+         {den_home / "ruby" / "homebrew", den_home / "ruby" / "Library" / "Homebrew"}) {
+        const auto candidate = lib / "os" / system_pc_os() / "pkgconfig";
+        if (fs::is_directory(candidate, ec)) {
+            source = candidate;
+            break;
+        }
+    }
+    if (source.empty()) {
+        result.skipped = "no os/" + std::string(system_pc_os()) +
+                         "/pkgconfig in the Ruby bundle under " + (den_home / "ruby").string();
+        return result;
+    }
+    if (!real_dirs_below(prefix, dest)) {
+        result.skipped = dest.string() + ": a parent directory is not a real directory";
+        return result;
+    }
+    const auto st = fs::symlink_status(dest, ec);
+    if (st.type() != fs::file_type::not_found && st.type() != fs::file_type::directory) {
+        result.skipped = dest.string() + ": not a directory";
+        return result;
+    }
+    if (st.type() == fs::file_type::directory && !replace) {
+        return result;
+    }
+    fs::create_directories(dest.parent_path(), ec);
+    if (ec) {
+        result.skipped = dest.string() + ": " + ec.message();
+        return result;
+    }
+    const auto tmp = dest.parent_path() / (".pkgconfig.den-" + std::to_string(::getpid()));
+    const auto old = dest.parent_path() / (".pkgconfig.old.den-" + std::to_string(::getpid()));
+    std::error_code ignore;
+    fs::remove_all(tmp, ignore);
+    fs::remove_all(old, ignore);
+    fs::copy(source, tmp, fs::copy_options::recursive | fs::copy_options::copy_symlinks, ec);
+    if (!ec && st.type() == fs::file_type::directory) {
+        fs::rename(dest, old, ec);
+    }
+    if (!ec) {
+        fs::rename(tmp, dest, ec);
+    }
+    if (ec) {
+        fs::remove_all(tmp, ignore);
+        if (fs::exists(old, ignore) && !fs::exists(dest, ignore)) {
+            fs::rename(old, dest, ignore);
+        }
+        result.skipped = dest.string() + ": " + ec.message();
+        return result;
+    }
+    fs::remove_all(old, ignore);
+    SPDLOG_INFO("post_install: copied system .pc files to {} from {}", dest.string(),
+                source.string());
+    result.written = true;
+    return result;
+}
+
 std::vector<std::string> dangling_cert_pem_links(const fs::path& prefix) {
     std::vector<std::string> out;
     std::error_code ec;

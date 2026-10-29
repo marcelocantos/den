@@ -436,6 +436,71 @@ TEST_SUITE("build::bundled_ruby_env") {
         CHECK(receipt->fallback.empty());
     }
 
+    TEST_CASE("e2e: -s points pkgconf's default search path at den's prefix") {
+        // Homebrew's pkgconf formula bakes /usr/local/lib/pkgconfig and its
+        // library's system .pc set (for den, the Ruby bundle under DEN_HOME)
+        // into --with-pkg-config-dir. den drops /usr/local and points the
+        // system set at the copy it owns under the prefix, which it writes
+        // when pkgconf lands there.
+        Scratch s(false);
+        auto src = s.tmp.path / "src/pkgconf-9.9";
+        write(src / "configure", "#!/bin/sh\nprintf '%s\\n' \"$1\" > pcdir\n");
+        fs::permissions(src / "configure", fs::perms::owner_all, fs::perm_options::add);
+        const std::string dir = "$(DESTDIR)$(PREFIX)/share/pcfixture";
+        write(src / "Makefile", "install:\n\tmkdir -p " + dir + "\n\tcp pcdir " + dir + "/pcdir\n");
+        auto tarball = s.tmp.path / "pkgconf-9.9.tar.gz";
+        run("tar -czf " + tarball.string() + " -C " + (s.tmp.path / "src").string() +
+            " pkgconf-9.9");
+        write(s.tmp.path / "tap/Formula/pkgconf.rb",
+              "class Pkgconf < Formula\n  desc \"fixture\"\n  url \"file://" + tarball.string() +
+                  "\"\n  version \"9.9\"\n  sha256 \"" + hash_file(tarball) +
+                  "\"\n\n  def install\n"
+                  "    pc_path = %W[\n      #{HOMEBREW_PREFIX}/lib/pkgconfig\n"
+                  "      #{HOMEBREW_PREFIX}/share/pkgconfig\n    ]\n"
+                  "    pc_path += if OS.mac?\n      %W[\n        /usr/local/lib/pkgconfig\n"
+                  "        /usr/lib/pkgconfig\n"
+                  "        #{HOMEBREW_LIBRARY}/Homebrew/os/mac/pkgconfig/#{MacOS.version}\n"
+                  "      ]\n    else\n"
+                  "      [\"#{HOMEBREW_LIBRARY}/Homebrew/os/linux/pkgconfig\"]\n    end\n"
+                  "    system \"./configure\", "
+                  "\"--with-pkg-config-dir=#{pc_path.uniq.join(File::PATH_SEPARATOR)}\"\n"
+                  "    system \"make\", \"install\", \"PREFIX=#{prefix}\"\n"
+                  "  end\nend\n");
+        auto tap = s.den("tap add test/pctap --url " + (s.tmp.path / "tap").string());
+        INFO(tap);
+        auto out = s.den("install -s test/pctap/pkgconf");
+        INFO(out);
+        CHECK(out.find("bundled ruby build failed") == std::string::npos);
+        REQUIRE(out.find("==> Built pkgconf 9.9") != std::string::npos);
+        auto pcdir = slurp(s.prefix() / "Cellar/pkgconf/9.9/share/pcfixture/pcdir");
+        INFO(pcdir);
+        CHECK(pcdir.find((s.home / "ruby").string()) == std::string::npos);
+        CHECK(pcdir.find("/usr/local") == std::string::npos);
+        const auto p = s.prefix().string();
+#ifdef __APPLE__
+        const std::string os = "mac";
+        CHECK(pcdir.rfind("--with-pkg-config-dir=" + p + "/lib/pkgconfig:" + p +
+                              "/share/pkgconfig:/usr/lib/pkgconfig:" + p +
+                              "/Library/Homebrew/os/mac/pkgconfig/",
+                          0) == 0);
+#else
+        const std::string os = "linux";
+        CHECK(pcdir == "--with-pkg-config-dir=" + p + "/lib/pkgconfig:" + p +
+                           "/share/pkgconfig:" + p + "/Library/Homebrew/os/linux/pkgconfig\n");
+#endif
+        // Installing pkgconf copied the bundle's system .pc set there, as
+        // files; a bundle with none (Linux) leaves nothing to copy.
+        std::error_code ec;
+        auto bundle_pc = s.home / "ruby/homebrew/os" / os / "pkgconfig";
+        auto mine = s.prefix() / "Library/Homebrew/os" / os / "pkgconfig";
+        CHECK(fs::is_directory(mine, ec) == fs::is_directory(bundle_pc, ec));
+#ifdef __APPLE__
+        auto sdk_dir = pcdir.substr(pcdir.rfind(':') + 1);
+        sdk_dir.pop_back(); // newline
+        CHECK(fs::is_regular_file(fs::symlink_status(fs::path(sdk_dir) / "zlib.pc")));
+#endif
+    }
+
     // Same fixture, but with the formula's sha256 replaced.
     std::string formula_with_sha(const std::string& klass, const std::string& version,
                                  const fs::path& tarball, const std::string& sha) {
