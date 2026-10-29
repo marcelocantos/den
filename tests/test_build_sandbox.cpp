@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <fstream>
+#include <optional>
 #include <random>
 #include <sstream>
 #include <string>
@@ -71,6 +72,30 @@ Config make_config(const fs::path& root) {
     c.cache = c.den_home / "cache";
     c.set_prefix(root / "prefix", PrefixSource::EnvDenPrefix);
     return c;
+}
+
+// Sets an environment variable for one scope, restoring it afterwards.
+struct ScopedEnv {
+    std::string name;
+    std::optional<std::string> old;
+    ScopedEnv(std::string n, const std::string& value) : name(std::move(n)) {
+        if (const char* v = std::getenv(name.c_str()))
+            old = v;
+        ::setenv(name.c_str(), value.c_str(), 1);
+    }
+    ~ScopedEnv() {
+        if (old)
+            ::setenv(name.c_str(), old->c_str(), 1);
+        else
+            ::unsetenv(name.c_str());
+    }
+};
+
+// The real $HOME, as build_sandbox.cpp reads it.
+fs::path home() {
+    const char* h = std::getenv("HOME");
+    REQUIRE(h != nullptr);
+    return h;
 }
 
 bool contains(const std::vector<fs::path>& v, const fs::path& p) {
@@ -160,7 +185,7 @@ TEST_SUITE("build_sandbox") {
         CHECK(contains(sb.deny_write, real / "prefix"));
         CHECK(contains(sb.deny_write, real / "prefix" / "Cellar"));
         CHECK(contains(sb.deny_write, real / "home"));
-        CHECK(sb.allow_write.size() == 3);
+        CHECK(sb.allow_write.size() == 4);
         CHECK(contains(sb.allow_write, real / "home" / "cache" / "build" / "foo-1.2"));
         CHECK(contains(sb.allow_write, real / "home" / "cache" / "build" / "foo-1.2.destdir"));
         CHECK(contains(sb.allow_write, real / "home" / "cache" / "tmp" / "foo-1.2"));
@@ -180,6 +205,50 @@ TEST_SUITE("build_sandbox") {
         REQUIRE(allow != std::string::npos);
         CHECK(deny < allow); // later rules win
         CHECK(prof.find("(deny file-write-setugid)") > allow);
+    }
+
+    TEST_CASE("the sandbox also denies Homebrew's prefixes, /usr/local and ~/Library") {
+        TempTree t;
+        auto cfg = make_config(t.root);
+        {
+            // The real roots (only inspected here, never written).
+            const auto sb = build_sandbox_for(cfg, "foo", "1.0");
+            const auto roots = system_deny_roots(cfg);
+            for (const auto* r : {"/opt/homebrew", "/usr/local"}) {
+                CAPTURE(r);
+                const auto real = fs::weakly_canonical(r);
+                CHECK(contains(roots, real));
+                CHECK(contains(sb.deny_write, real));
+            }
+            CHECK(contains(roots, fs::weakly_canonical(home() / "Library")));
+            CHECK(contains(sb.allow_write, fs::weakly_canonical(home() / "Library" / "Developer")));
+        }
+
+        // Test hook: the fixed roots rebased under a scratch root, plus a
+        // detected Homebrew prefix that differs from both defaults.
+        const auto sys = t.root / "sys";
+        ScopedEnv env("DEN_BUILD_SANDBOX_SYSTEM_ROOT", sys.string());
+        cfg.homebrew_prefix = t.root / "brew";
+        cfg.homebrew_cellar = t.root / "brew-cellar";
+        const auto roots = system_deny_roots(cfg);
+        CHECK(contains(roots, sys / "opt" / "homebrew"));
+        CHECK(contains(roots, sys / "opt" / "homebrew" / "Cellar"));
+        CHECK(contains(roots, sys / "usr" / "local"));
+        CHECK(contains(roots, sys / home().relative_path() / "Library"));
+        CHECK(contains(roots, t.root / "brew"));
+        CHECK(contains(roots, t.root / "brew-cellar"));
+        CHECK_FALSE(contains(roots, fs::path("/opt/homebrew")));
+        CHECK_FALSE(contains(roots, fs::path("/usr/local")));
+
+        const auto sb = build_sandbox_for(cfg, "foo", "1.0");
+        for (const auto& r : roots)
+            CHECK(contains(sb.deny_write, r));
+        CHECK(contains(sb.allow_write, sys / home().relative_path() / "Library" / "Developer"));
+
+        // A default detected prefix is not listed twice.
+        cfg.homebrew_prefix = sys / "opt" / "homebrew";
+        cfg.homebrew_cellar = sys / "opt" / "homebrew" / "Cellar";
+        CHECK(system_deny_roots(cfg).size() == 4);
     }
 
     TEST_CASE("sandboxed_shell_command wraps commands only where supported") {
@@ -338,6 +407,80 @@ TEST_SUITE("build_sandbox") {
                              doctest::Contains("outside the build directory"), UserError);
         CHECK_FALSE(fs::exists(stray));
         CHECK_FALSE(fs::exists(cfg.store / name / "1.0"));
+    }
+
+    TEST_CASE("sandbox-exec denies the system roots and allows ~/Library/Developer") {
+        TempTree t;
+        const auto sys = t.root / "sys";
+        ScopedEnv env("DEN_BUILD_SANDBOX_SYSTEM_ROOT", sys.string());
+        auto cfg = make_config(t.root);
+        cfg.homebrew_prefix = t.root / "brew";
+        cfg.homebrew_cellar = t.root / "brew" / "Cellar";
+        const auto roots = system_deny_roots(cfg);
+        for (const auto& r : roots)
+            fs::create_directories(r);
+        const auto sb = build_sandbox_for(cfg, "foo", "1.0");
+        const auto run = [&](const std::string& cmd) {
+            return sh(sandboxed_shell_command(sb, cmd) + " 2>/dev/null");
+        };
+        for (const auto& r : roots) {
+            CAPTURE(r);
+            CHECK(run("echo x > " + sh_quote((r / "stray").string())) != 0);
+            CHECK(run("mkdir -p " + sh_quote((r / "bin").string())) != 0);
+            CHECK_FALSE(fs::exists(r / "stray"));
+            CHECK_FALSE(fs::exists(r / "bin"));
+        }
+        const auto dev = sys / home().relative_path() / "Library" / "Developer";
+        CHECK(run("mkdir -p " + sh_quote((dev / "Xcode").string())) == 0);
+        CHECK(fs::is_directory(dev / "Xcode"));
+    }
+
+    TEST_CASE("a build step writing into any denied system root fails the build") {
+        TempTree t;
+        const auto sys = t.root / "sys";
+        ScopedEnv env("DEN_BUILD_SANDBOX_SYSTEM_ROOT", sys.string());
+        auto cfg = make_config(t.root);
+        cfg.homebrew_prefix = t.root / "brew";
+        cfg.homebrew_cellar = t.root / "brew" / "Cellar";
+        fs::create_directories(cfg.store);
+        const std::vector<fs::path> targets = {
+            sys / "opt" / "homebrew" / "bin" / "stray",
+            sys / "opt" / "homebrew" / "Cellar" / "stray" / "1.0" / "stray",
+            sys / "usr" / "local" / "bin" / "stray",
+            sys / home().relative_path() / "Library" / "stray",
+            t.root / "brew" / "bin" / "stray",
+            t.root / "brew" / "Cellar" / "stray",
+        };
+        for (const auto& r : system_deny_roots(cfg))
+            fs::create_directories(r);
+        int i = 0;
+        for (const auto& target : targets) {
+            CAPTURE(target);
+            const std::string name = "den-sandbox-root" + std::to_string(i);
+            const auto idx =
+                fixture(t.root / std::to_string(i++), name, "DenSandboxRoot",
+                        "all:\n"
+                        "\tmkdir -p " +
+                            target.parent_path().string() + " && echo x > " + target.string() +
+                            "\n"
+                            "install:\n"
+                            "\tmkdir -p $(DESTDIR)$(PREFIX)/share\n"
+                            "\techo ok > $(DESTDIR)$(PREFIX)/share/ok.txt\n");
+            CHECK_THROWS_WITH_AS(build_from_source(cfg, idx, name, "1.0"),
+                                 doctest::Contains("outside the build directory"), UserError);
+            CHECK_FALSE(fs::exists(target));
+            CHECK_FALSE(fs::exists(cfg.store / name / "1.0"));
+        }
+
+        // And a normal build still succeeds with every root denied.
+        const auto idx = fixture(t.root / "ok", "den-sandbox-roots-ok", "DenSandboxRootsOk",
+                                 "all:\n"
+                                 "\techo built > out.txt\n"
+                                 "install:\n"
+                                 "\tmkdir -p $(DESTDIR)$(PREFIX)/share\n"
+                                 "\tcp out.txt $(DESTDIR)$(PREFIX)/share/\n");
+        const auto keg = build_from_source(cfg, idx, "den-sandbox-roots-ok", "1.0");
+        CHECK(slurp(keg / "share" / "out.txt") == "built\n");
     }
 #endif
 }

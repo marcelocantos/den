@@ -16,8 +16,9 @@
 // `(debug deny)` header, paths resolved through symlinks (Seatbelt matches
 // real paths), Homebrew's quoting, `/usr/bin/sandbox-exec -p <profile>`, and
 // a refusal to nest inside another sandbox. Unlike Homebrew's it is a deny
-// list scoped to den's own trees: everything else stays as writable as it is
-// for den itself.
+// list: den's own trees plus the system roots a build must never modify
+// (system_deny_roots). Everything else stays as writable as it is for den
+// itself.
 //
 // Linux has no equivalent yet (Landlock is allow-list only, and bwrap is not
 // generally installed), so there build commands run unsandboxed and
@@ -35,14 +36,27 @@ namespace fs = std::filesystem;
 
 struct BuildSandbox {
     /// Trees build commands may not write: den's prefix (and its store, if
-    /// that resolves elsewhere) and $DEN_HOME.
+    /// that resolves elsewhere), $DEN_HOME and system_deny_roots().
     std::vector<fs::path> deny_write;
-    /// The exceptions: build directory, staging DESTDIR and cache temp.
+    /// The exceptions: build directory, staging DESTDIR and cache temp (in
+    /// that order), then ~/Library/Developer (Xcode's caches, which Homebrew
+    /// also leaves writable).
     std::vector<fs::path> allow_write;
     /// The cache temp directory, `<cache>/tmp/<name>-<version>`: TMPDIR for
     /// build commands.
     fs::path temp_dir;
 };
+
+/// System roots no build command may write, whatever den's own layout:
+/// Homebrew's default prefixes /opt/homebrew and /usr/local (Cellar
+/// included), the detected Homebrew prefix and Cellar
+/// (config.homebrew_prefix / homebrew_cellar) where they differ, and
+/// $HOME/Library. Resolved through symlinks, de-duplicated.
+///
+/// Test hook: when DEN_BUILD_SANDBOX_SYSTEM_ROOT is set, the fixed roots
+/// (/opt/homebrew, /usr/local and $HOME/Library) are rebased under it, so
+/// tests exercise them without touching the real system paths.
+std::vector<fs::path> system_deny_roots(const Config& config);
 
 /// The sandbox for building <name> <version>. Allowed trees are
 /// `<cache>/build/<name>-<version>`, `<cache>/build/<name>-<version>.destdir`
