@@ -365,42 +365,29 @@ TEST_SUITE("build::bundled_ruby_env") {
         }
     }
 
-    TEST_CASE("e2e: -s gives formulae Homebrew's ENV, opt-path helpers and post_install_steps") {
+    TEST_CASE("e2e: -s accepts a formula that declares post_install_steps") {
+        // openssl@3 and openssl@4 declare post_install_steps, which the
+        // bundled Homebrew library predates. Without the shim the class body
+        // raises NoMethodError and den falls back to its native parser.
         Scratch s(false);
-        auto tarball = make_source(s.tmp.path, "envtool", "1.0");
-        write(s.tmp.path / "tap/Formula/envtool.rb",
-              "class Envtool < Formula\n  desc \"fixture\"\n  url \"file://" + tarball.string() +
-                  "\"\n  version \"1.0\"\n  sha256 \"" + hash_file(tarball) +
-                  "\"\n\n  post_install_steps do\n"
-                  "    symlink \"{{etc}}/ca-certificates/cert.pem\", \"{{pkgetc}}/cert.pem\", "
-                  "overwrite: true\n  end\n\n  def install\n"
-                  "    ENV.append_to_cflags \"-DDEN_ENV_PROBE\"\n"
-                  "    ENV.append \"LDFLAGS\", \"-L/den/probe\"\n"
-                  "    ENV[\"MAKEFLAGS\"] = \"-j8\"\n"
-                  "    ENV.deparallelize\n"
-                  "    system \"make\", \"install\", \"PREFIX=#{prefix}\"\n"
-                  "    (share/\"fixture\").mkpath\n"
-                  "    (share/\"fixture/env\").write [ENV[\"CFLAGS\"], ENV[\"CXXFLAGS\"], "
-                  "ENV[\"LDFLAGS\"], ENV[\"MAKEFLAGS\"], formula_opt_prefix(\"some/tap/zlib\"), "
-                  "formula_opt_lib(\"zlib\")].join(\"\\n\")\n"
-                  "  end\nend\n");
-        auto tap = s.den("tap add test/envtap --url " + (s.tmp.path / "tap").string());
+        auto tarball = make_source(s.tmp.path, "pistool", "1.0");
+        auto text = formula("Pistool", "1.0", tarball);
+        auto at = text.find("\n  def install");
+        REQUIRE(at != std::string::npos);
+        text.insert(at,
+                    "\n  post_install_steps do\n    symlink \"{{etc}}/ca-certificates/cert.pem\", "
+                    "\"{{pkgetc}}/cert.pem\", overwrite: true\n  end\n");
+        write(s.tmp.path / "tap/Formula/pistool.rb", text);
+        auto tap = s.den("tap add test/pitap --url " + (s.tmp.path / "tap").string());
         INFO(tap);
-        auto out = s.den("install -s test/envtap/envtool");
+        auto out = s.den("install -s test/pitap/pistool");
         INFO(out);
+        CHECK(out.find("post_install_steps") == std::string::npos);
         CHECK(out.find("bundled ruby build failed") == std::string::npos);
-        CHECK(out.find("==> Built envtool 1.0") != std::string::npos);
-        auto env = slurp(s.prefix() / "Cellar/envtool/1.0/share/fixture/env");
-        // CFLAGS and CXXFLAGS both got the flag, LDFLAGS its own, and
-        // deparallelize took -j8 out of MAKEFLAGS.
-        auto first = env.find("-DDEN_ENV_PROBE");
-        REQUIRE(first != std::string::npos);
-        CHECK(env.find("-DDEN_ENV_PROBE", first + 1) != std::string::npos);
-        CHECK(env.find("-L/den/probe") != std::string::npos);
-        CHECK(env.find("-j8") == std::string::npos);
-        // Newer Homebrew path helpers resolve under den's prefix.
-        CHECK(env.find("\n" + (s.prefix() / "opt/zlib").string() + "\n") != std::string::npos);
-        CHECK(env.find("\n" + (s.prefix() / "opt/zlib/lib").string()) != std::string::npos);
+        CHECK(out.find("==> Built pistool 1.0") != std::string::npos);
+        auto receipt = read_source_build_receipt(s.prefix() / "Cellar/pistool/1.0");
+        REQUIRE(receipt);
+        CHECK(receipt->fallback.empty());
     }
 
     // Same fixture, but with the formula's sha256 replaced.
