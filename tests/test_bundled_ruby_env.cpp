@@ -365,6 +365,31 @@ TEST_SUITE("build::bundled_ruby_env") {
         }
     }
 
+    TEST_CASE("e2e: -s accepts a formula that declares post_install_steps") {
+        // openssl@3 and openssl@4 declare post_install_steps, which the
+        // bundled Homebrew library predates. Without the shim the class body
+        // raises NoMethodError and den falls back to its native parser.
+        Scratch s(false);
+        auto tarball = make_source(s.tmp.path, "pistool", "1.0");
+        auto text = formula("Pistool", "1.0", tarball);
+        auto at = text.find("\n  def install");
+        REQUIRE(at != std::string::npos);
+        text.insert(at,
+                    "\n  post_install_steps do\n    symlink \"{{etc}}/ca-certificates/cert.pem\", "
+                    "\"{{pkgetc}}/cert.pem\", overwrite: true\n  end\n");
+        write(s.tmp.path / "tap/Formula/pistool.rb", text);
+        auto tap = s.den("tap add test/pitap --url " + (s.tmp.path / "tap").string());
+        INFO(tap);
+        auto out = s.den("install -s test/pitap/pistool");
+        INFO(out);
+        CHECK(out.find("post_install_steps") == std::string::npos);
+        CHECK(out.find("bundled ruby build failed") == std::string::npos);
+        CHECK(out.find("==> Built pistool 1.0") != std::string::npos);
+        auto receipt = read_source_build_receipt(s.prefix() / "Cellar/pistool/1.0");
+        REQUIRE(receipt);
+        CHECK(receipt->fallback.empty());
+    }
+
     // Same fixture, but with the formula's sha256 replaced.
     std::string formula_with_sha(const std::string& klass, const std::string& version,
                                  const fs::path& tarball, const std::string& sha) {

@@ -110,6 +110,16 @@ Formula.define_singleton_method(:[]) do |name|
   f
 end
 
+# --- Formula DSL newer than the bundled Homebrew library ---
+#
+# post_install_steps declares the steps brew applies after pouring (openssl's
+# cert.pem symlink). den reads them from the formula API and applies them
+# itself when the keg is linked (src/env/post_install.cpp), so the build only
+# needs the class body to accept the block.
+unless Formula.respond_to?(:post_install_steps)
+  Formula.define_singleton_method(:post_install_steps) { |*_args, **_opts, &_block| nil }
+end
+
 # --- Load and evaluate the formula source ---
 
 source = File.read(formula_file)
