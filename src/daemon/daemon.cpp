@@ -641,8 +641,18 @@ void apply_daemon_upgrade(const Config& config, PackageProvider& provider, const
     // Revision-bumped dependents move in the same batch (and are rolled back
     // with it). Their own pending entries, if any, then find them current;
     // the pass logs activity for those as usual.
+    // A dependent is screened by the unattended trust policy like any
+    // pending upgrade; a held one stays put (and is in the trust ledger).
     VersionChangeOptions opts;
     opts.upgrade_dependents = true;
+    if (const TrustPolicy policy = current_trust_policy(config); policy.unattended) {
+        opts.screen_dependents = [&config, &idx, policy](const std::vector<VersionChange>& cs) {
+            std::vector<PendingUpgrade> pending;
+            for (const auto& c : cs)
+                pending.push_back({c.name, c.from, c.to});
+            return screen_unattended_upgrades(config, idx, pending, policy);
+        };
+    }
     auto res = apply_version_changes(config, provider, &idx,
                                      {{pu.name, pu.installed, pu.available}}, opts);
     if (!res.rolled_back.empty()) {

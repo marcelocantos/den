@@ -230,7 +230,8 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
     // upgrade. The held set is reported once, here, and the run exits
     // non-zero after the rest are applied.
     std::map<std::string, std::string> trust_held;
-    if (TrustPolicy policy = current_trust_policy(config); policy.unattended && !upgrades.empty()) {
+    const TrustPolicy policy = current_trust_policy(config);
+    if (policy.unattended && !upgrades.empty()) {
         std::vector<PendingUpgrade> pending;
         for (const auto& u : upgrades)
             pending.push_back({u.name, u.installed, u.available});
@@ -284,6 +285,15 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
     // rebuilt them for the new dependency) join the batch, as with brew.
     VersionChangeOptions opts;
     opts.upgrade_dependents = true;
+    if (policy.unattended) {
+        // A dependent pulled into the batch is screened like any candidate.
+        opts.screen_dependents = [&](const std::vector<VersionChange>& cs) {
+            std::vector<PendingUpgrade> pending;
+            for (const auto& c : cs)
+                pending.push_back({c.name, c.from, c.to});
+            return screen_unattended_upgrades(config, idx, pending, policy);
+        };
+    }
     auto res = apply_version_changes(config, provider, &idx, changes, opts);
     if (!res.dependents.empty()) {
         std::cout << "Also upgraded " << res.dependents.size()
@@ -297,6 +307,14 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
                   << " pinned dependent(s) (they may need the old version):\n";
         for (const auto& d : res.pinned_dependents) {
             std::cout << "  " << d.name << " " << d.from << " (pinned; " << d.to << " available)\n";
+        }
+    }
+    if (!res.held_dependents.empty()) {
+        std::cout << "Held back " << res.held_dependents.size()
+                  << " dependent(s) (unattended trust policy):\n";
+        for (const auto& [d, why] : res.held_dependents) {
+            std::cout << "  " << d.name << " " << d.from << " -> " << d.to << ": " << why << "\n";
+            trust_held.emplace(d.name, why);
         }
     }
 
