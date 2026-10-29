@@ -249,6 +249,79 @@ specs, daemon plist and shell rc files it would touch. Nothing changes until
   what was poured), `--rollback` restores the old prefix and keeps the new
   one on disk, and `--only a,b` pours a subset first.
 
+#### Moving an existing service onto den's openssl@3 (squid example)
+
+> **Status: planned, not approved.** Nothing here has been run. squid on the
+> test machine is an HMS service: **Marcelo must confirm before anything on
+> that machine changes.**
+
+After `migrate-prefix`, a service den manages (squid here) loads OpenSSL
+from `<prefix>/opt/openssl@3`, which may still be a `brew-link` to
+Homebrew's openssl@3 3.6.3. This runbook moves it onto den's source-built
+openssl@3 3.5.9 (LTS). OpenSSL keeps the 3.x ABI stable, but only forward: a
+binary built against 3.6 headers may import symbols 3.5 lacks, so step 2
+checks that.
+
+1. **Record the current state** (for rollback):
+
+   ```sh
+   P=$(den config | awk '/^prefix:/{print $2}')
+   readlink "$P/opt/openssl@3"      # e.g. /opt/homebrew/opt/openssl@3
+   readlink /opt/homebrew/opt/openssl@3   # brew's 3.6.3 keg
+   pgrep -x squid; otool -L "$P/opt/squid/sbin/squid" | grep openssl
+   ```
+
+   Keep Homebrew's openssl@3 3.6.3 keg in place throughout (no
+   `brew uninstall`, `brew cleanup` or `den cleanup --prefix` until the move
+   has been accepted), so rollback is only a relink.
+
+2. **Build and check den's openssl@3** without switching anything yet:
+   `den install -s openssl@3` (3.5.9; see
+   [docs/source-builds.md](docs/source-builds.md)). Then confirm every
+   OpenSSL symbol squid and its helpers import is exported by 3.5.9:
+
+   ```sh
+   K="$P/Cellar/openssl@3/3.5.9/lib"
+   nm -gU "$K/libssl.3.dylib" "$K/libcrypto.3.dylib" | awk 'NF==3{print $3}' | sort -u > /tmp/ossl-exports
+   for f in "$P/opt/squid/sbin/squid" "$P/opt/squid/libexec/"*; do
+     otool -L "$f" 2>/dev/null | grep -q openssl@3 && nm -u "$f"
+   done | sort -u | grep -E '^_(SSL|TLS|DTLS|EVP|X509|OPENSSL|OSSL|BIO|ERR|PEM|ASN1|CRYPTO|d2i|i2d|RAND|OBJ|BN|EC|RSA|DH|HMAC)' > /tmp/squid-imports
+   comm -23 /tmp/squid-imports /tmp/ossl-exports   # must print nothing
+   ```
+
+   Anything printed means squid needs a 3.6.x openssl@3; stop here.
+
+3. **Switch the opt link** to den's keg: `den use openssl@3 3.5.9`, then
+   check `readlink "$P/opt/openssl@3"` names `Cellar/openssl@3/3.5.9`.
+
+4. **Restart squid through its supervisor only**, never by killing the
+   process: e.g. `launchctl kickstart -k gui/$(id -u)/<squid's launchd
+   label>` for a launchd job, or the restart command of whatever manages it.
+
+5. **Verify** through the proxy (squid's default port 3128):
+
+   ```sh
+   curl -sS -o /dev/null -w '%{http_code}\n' -x http://127.0.0.1:3128 https://github.com/   # CONNECT to github.com:443
+   curl -sS -o /dev/null -w '%{http_code}\n' -x http://127.0.0.1:3128 http://example.com/    # plain HTTP
+   ```
+
+   Both must succeed (200 or a redirect). Then confirm the new pid loads
+   den's 3.5.9:
+
+   ```sh
+   pid=$(pgrep -x squid | head -1)
+   lsof -p "$pid" | grep -E 'lib(ssl|crypto)\.3\.dylib'   # or: vmmap "$pid" | grep -E 'lib(ssl|crypto)'
+   ```
+
+   Both libraries must come from `$P/Cellar/openssl@3/3.5.9/lib`, not
+   `/opt/homebrew`.
+
+6. **Rollback** (any check failing): point the opt link back at what step 1
+   recorded, e.g. `ln -sfn /opt/homebrew/opt/openssl@3 "$P/opt/openssl@3"`,
+   restart squid through its supervisor again, and repeat the step 5 checks,
+   which should now show the 3.6.3 libraries from Homebrew's Cellar. den's
+   3.5.9 keg can stay installed; it is unused once the link points away.
+
 `DEN_HOME` (default `~/.den`) holds manifests, envs, cache, caskroom and
 config. So setting **`DEN_HOME` alone gives a fully isolated den** — its
 own prefix and Cellar — even in a shell where `brew shellenv` has
