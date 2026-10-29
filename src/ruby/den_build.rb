@@ -337,6 +337,32 @@ at_exit { stage.rmtree if stage.exist? }
 
 # --- Set up build environment ---
 
+# Formulae call Homebrew's ENV helpers (ENV.append_to_cflags, ENV.append,
+# ENV.deparallelize, ENV.cxx11, ...). Give ENV the methods of Homebrew's
+# standard build environment, as `brew install --env=std` does. den sets the
+# build's paths and flags itself, so setup_build_environment is not run.
+require "extend/ENV"
+unless ENV.respond_to?(:append_to_cflags)
+  ENV.extend(Stdenv)
+  # Stdenv's sig rejects the plain `ENV.deparallelize` (no block) that
+  # formulae use; Superenv's accepts it. Same behaviour, no sig.
+  module DenStdenvFixes
+    def deparallelize
+      old = self["MAKEFLAGS"]
+      remove "MAKEFLAGS", /-j\d+/
+      if block_given?
+        begin
+          yield
+        ensure
+          self["MAKEFLAGS"] = old
+        end
+      end
+      old
+    end
+  end
+  ENV.extend(DenStdenvFixes)
+end
+
 lib_paths = installed.values.map { |p| (p / "lib").to_s }.select { |p| File.directory?(p) }
 inc_paths = installed.values.map { |p| (p / "include").to_s }.select { |p| File.directory?(p) }
 pc_paths = installed.values.flat_map { |p|
