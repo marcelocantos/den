@@ -365,13 +365,15 @@ TEST_SUITE("build::bundled_ruby_env") {
         }
     }
 
-    TEST_CASE("e2e: -s gives formulae Homebrew's ENV and opt-path helpers") {
+    TEST_CASE("e2e: -s gives formulae Homebrew's ENV, opt-path helpers and post_install_steps") {
         Scratch s(false);
         auto tarball = make_source(s.tmp.path, "envtool", "1.0");
         write(s.tmp.path / "tap/Formula/envtool.rb",
               "class Envtool < Formula\n  desc \"fixture\"\n  url \"file://" + tarball.string() +
                   "\"\n  version \"1.0\"\n  sha256 \"" + hash_file(tarball) +
-                  "\"\n\n  def install\n"
+                  "\"\n\n  post_install_steps do\n"
+                  "    symlink \"{{etc}}/ca-certificates/cert.pem\", \"{{pkgetc}}/cert.pem\", "
+                  "overwrite: true\n  end\n\n  def install\n"
                   "    ENV.append_to_cflags \"-DDEN_ENV_PROBE\"\n"
                   "    ENV.append \"LDFLAGS\", \"-L/den/probe\"\n"
                   "    ENV[\"MAKEFLAGS\"] = \"-j8\"\n"
