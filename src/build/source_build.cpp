@@ -646,7 +646,7 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
     const auto shared_prefix = config.store.parent_path();
     const auto stage = config.cache / "build" / (name + "-" + version + ".destdir");
     fs::remove_all(stage, ec);
-    const OptPathGuard opt_guard(opt);
+    const OptPathGuard opt_guard(opt, dest);
 
     // Build environment: point at den's installed packages.
     std::map<std::string, std::string> env;

@@ -128,8 +128,11 @@ EnvMap bundled_ruby_env(const Config& config, const fs::path& ruby_dir, const En
     // Homebrew's generic (non-machine) defaults, required by global.rb.
     env["HOMEBREW_GENERIC_DEFAULT_PREFIX"] = "/usr/local";
     env["HOMEBREW_GENERIC_DEFAULT_REPOSITORY"] = "/usr/local/Homebrew";
-    // The library is the bundled copy, never a live Homebrew's.
-    env["HOMEBREW_LIBRARY"] = (ruby_dir / "homebrew").string();
+    // The library is the bundled copy, never a live Homebrew's. Homebrew
+    // reaches its own files as HOMEBREW_LIBRARY/"Homebrew/..." (shims, data,
+    // os/mac/pkgconfig), so this names the Library directory whose Homebrew
+    // entry links to the bundle (ensure_bundle_library_link).
+    env["HOMEBREW_LIBRARY"] = (ruby_dir / "Library").string();
     env["HOMEBREW_RUBY_PATH"] = (ruby_dir / "ruby" / "bin" / "ruby").string();
     env["HOMEBREW_BREW_FILE"] = "/dev/null";
     env["HOMEBREW_ORIGINAL_BREW_FILE"] = "/dev/null";
@@ -205,6 +208,35 @@ bool refresh_den_build_script(const fs::path& ruby_dir) {
     if (!fs::exists(cnf, ec))
         std::ofstream(cnf) << "# den: empty OpenSSL config for the bundled Ruby\n";
     SPDLOG_INFO("refreshed {}", script.string());
+    return true;
+}
+
+bool ensure_bundle_library_link(const fs::path& ruby_dir) {
+    std::error_code ec;
+    if (!fs::is_directory(ruby_dir / "homebrew", ec))
+        return false;
+    auto link = ruby_dir / "Library" / "Homebrew";
+    const fs::path want = fs::path("..") / "homebrew";
+    if (fs::is_symlink(fs::symlink_status(link, ec))) {
+        if (fs::read_symlink(link, ec) == want && !ec)
+            return false;
+        fs::remove(link, ec);
+    } else if (fs::exists(fs::symlink_status(link, ec))) {
+        SPDLOG_WARN("{} exists and is not den's link; leaving it", link.string());
+        return false;
+    }
+    fs::create_directories(link.parent_path(), ec);
+    auto tmp = link;
+    tmp += ".tmp";
+    fs::remove(tmp, ec);
+    fs::create_directory_symlink(want, tmp, ec);
+    if (!ec)
+        fs::rename(tmp, link, ec);
+    if (ec) {
+        SPDLOG_WARN("cannot link {}: {}", link.string(), ec.message());
+        fs::remove(tmp, ec);
+        return false;
+    }
     return true;
 }
 

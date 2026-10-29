@@ -32,7 +32,9 @@ unless defined?(Formula)
 
   # Override paths to point at den's locations.
   bundle_dir = File.dirname(__FILE__)
-  ENV["HOMEBREW_LIBRARY"] = File.expand_path("homebrew", bundle_dir)
+  # Homebrew's layout: HOMEBREW_LIBRARY/Homebrew is the library itself (den
+  # links ruby/Library/Homebrew to ruby/homebrew).
+  ENV["HOMEBREW_LIBRARY"] = File.expand_path("Library", bundle_dir)
   ENV["HOMEBREW_BREW_FILE"] ||= "/dev/null"
   ENV["HOMEBREW_ORIGINAL_BREW_FILE"] ||= "/dev/null"
   ENV["HOMEBREW_NO_ANALYTICS"] = "1"
@@ -466,10 +468,14 @@ end
 
 # The live opt path must come through the build untouched: an install step
 # that ignores DESTDIR would otherwise write into the linked (older) keg.
+# A link that already names this build's keg (left behind when that keg was
+# removed) is compared by target only: den fills that keg itself below.
+den_opt_own_keg = opt_path.symlink? &&
+                  (opt_path.dirname / opt_path.readlink).cleanpath == dest.cleanpath
 den_opt_state = lambda do
   next nil unless opt_path.exist? || opt_path.symlink?
   files = []
-  if opt_path.directory?
+  if opt_path.directory? && !den_opt_own_keg
     root = "#{opt_path}/"
     Find.find(root) do |path|
       st = File.lstat(path)
@@ -527,6 +533,15 @@ pc_paths = installed.values.flat_map { |p|
 ENV["PKG_CONFIG_PATH"] = (pc_paths + [ENV["PKG_CONFIG_PATH"]].compact).join(":")
 ENV["CPATH"] = (inc_paths + [ENV["CPATH"]].compact).join(":")
 ENV["LIBRARY_PATH"] = (lib_paths + [ENV["LIBRARY_PATH"]].compact).join(":")
+# Makefiles that look for Homebrew at its default prefix must find den's
+# instead: git's config.mak.uname sets HOMEBREW_PREFIX = /opt/homebrew and its
+# Makefile then adds -L$(HOMEBREW_PREFIX)/opt/gettext/lib, linking a live
+# Homebrew's libintl into den's keg. A variable after "--" in MAKEFLAGS is a
+# command-line definition, which beats the Makefile's own assignment in make
+# and in every sub-make.
+make_flags = ENV["MAKEFLAGS"].to_s.strip
+make_flags += " --" unless make_flags.split.include?("--")
+ENV["MAKEFLAGS"] = "#{make_flags} HOMEBREW_PREFIX=#{prefix_root}".strip
 bin_paths = installed.values.map { |p| (p / "bin").to_s }.select { |p| File.directory?(p) }
 ENV["PATH"] = (bin_paths + [ENV["PATH"]].compact).join(":")
 

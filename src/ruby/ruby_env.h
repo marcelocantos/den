@@ -36,7 +36,7 @@ std::string sanitize_build_path(const Config& config, const std::string& path);
 /// API domains, user agent, ...) are kept; every path the Homebrew library
 /// reads is derived from den's configuration instead: HOMEBREW_PREFIX is
 /// den's prefix, HOMEBREW_CELLAR den's Cellar, caches, logs and config under
-/// den's home, HOMEBREW_LIBRARY the bundled library. This holds for both the
+/// den's home, HOMEBREW_LIBRARY the bundled library (ruby_dir/Library). This holds for both the
 /// default layout (<den_home>/prefix) and the migrate layout (den's prefix is
 /// Homebrew's).
 EnvMap bundled_ruby_env(const Config& config, const fs::path& ruby_dir, const EnvMap& snapshot,
@@ -50,5 +50,13 @@ std::string_view embedded_den_build_rb();
 /// an unpacked bundle never runs a stale build script. Returns true if the
 /// file was (re)written.
 bool refresh_den_build_script(const fs::path& ruby_dir);
+
+/// Give the unpacked bundle Homebrew's own layout: ruby_dir/Library/Homebrew
+/// is a relative link to ruby_dir/homebrew, and HOMEBREW_LIBRARY names
+/// ruby_dir/Library. Homebrew builds paths as HOMEBREW_LIBRARY/"Homebrew/..."
+/// (HOMEBREW_SHIMS_PATH, the macOS system .pc files formulae such as pkgconf
+/// bake into their search path), which otherwise name nothing. Returns true
+/// if the link was (re)created.
+bool ensure_bundle_library_link(const fs::path& ruby_dir);
 
 } // namespace den
