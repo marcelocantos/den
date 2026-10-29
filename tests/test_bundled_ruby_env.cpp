@@ -365,6 +365,38 @@ TEST_SUITE("build::bundled_ruby_env") {
         }
     }
 
+    TEST_CASE("e2e: -s gives formulae Homebrew's ENV helpers") {
+        Scratch s(false);
+        auto tarball = make_source(s.tmp.path, "envtool", "1.0");
+        write(s.tmp.path / "tap/Formula/envtool.rb",
+              "class Envtool < Formula\n  desc \"fixture\"\n  url \"file://" + tarball.string() +
+                  "\"\n  version \"1.0\"\n  sha256 \"" + hash_file(tarball) +
+                  "\"\n\n  def install\n"
+                  "    ENV.append_to_cflags \"-DDEN_ENV_PROBE\"\n"
+                  "    ENV.append \"LDFLAGS\", \"-L/den/probe\"\n"
+                  "    ENV[\"MAKEFLAGS\"] = \"-j8\"\n"
+                  "    ENV.deparallelize\n"
+                  "    system \"make\", \"install\", \"PREFIX=#{prefix}\"\n"
+                  "    (share/\"fixture\").mkpath\n"
+                  "    (share/\"fixture/env\").write [ENV[\"CFLAGS\"], ENV[\"CXXFLAGS\"], "
+                  "ENV[\"LDFLAGS\"], ENV[\"MAKEFLAGS\"]].join(\"\\n\")\n"
+                  "  end\nend\n");
+        auto tap = s.den("tap add test/envtap --url " + (s.tmp.path / "tap").string());
+        INFO(tap);
+        auto out = s.den("install -s test/envtap/envtool");
+        INFO(out);
+        CHECK(out.find("bundled ruby build failed") == std::string::npos);
+        CHECK(out.find("==> Built envtool 1.0") != std::string::npos);
+        auto env = slurp(s.prefix() / "Cellar/envtool/1.0/share/fixture/env");
+        // CFLAGS and CXXFLAGS both got the flag, LDFLAGS its own, and
+        // deparallelize took -j8 out of MAKEFLAGS.
+        auto first = env.find("-DDEN_ENV_PROBE");
+        REQUIRE(first != std::string::npos);
+        CHECK(env.find("-DDEN_ENV_PROBE", first + 1) != std::string::npos);
+        CHECK(env.find("-L/den/probe") != std::string::npos);
+        CHECK(env.find("-j8") == std::string::npos);
+    }
+
     // Same fixture, but with the formula's sha256 replaced.
     std::string formula_with_sha(const std::string& klass, const std::string& version,
                                  const fs::path& tarball, const std::string& sha) {
