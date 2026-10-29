@@ -161,4 +161,16 @@ std::string sandboxed_shell_command(const BuildSandbox& sb, const std::string& c
            sh_quote(cmd);
 }
 
+std::map<std::string, std::string> build_cache_env(const BuildSandbox& sb) {
+    const auto& t = sb.temp_dir;
+    return {
+        {"GOCACHE", (t / "go-build").string()},
+        {"GOMODCACHE", (t / "go" / "pkg" / "mod").string()},
+        {"GOPATH", (t / "go").string()},
+        {"PIP_CACHE_DIR", (t / "pip").string()},
+        {"npm_config_cache", (t / "npm").string()},
+        {"CARGO_HOME", (t / "cargo").string()},
+    };
+}
+
 } // namespace den

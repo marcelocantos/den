@@ -67,6 +67,12 @@ Within den's trees, three directories stay writable:
   native-fallback build commands get as `TMPDIR` and which is removed after
   the build.
 
+Language tool caches live in the cache temp directory too, on every build
+path: `GOCACHE` (`go-build`), `GOMODCACHE` (`go/pkg/mod`), `GOPATH` (`go`),
+`PIP_CACHE_DIR` (`pip`), `npm_config_cache` (`npm`) and `CARGO_HOME`
+(`cargo`). Their defaults are under `$HOME/Library/Caches`, which the sandbox
+denies, or in the home directory, where a build should leave nothing behind.
+
 Denied writes include creating, overwriting, removing, renaming, chmod and
 extended attributes. Seatbelt matches real paths, so a write through a
 symlink (such as the opt link to an older keg) is denied when its target is.
