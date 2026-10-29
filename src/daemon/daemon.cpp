@@ -13,6 +13,7 @@
 #include "../provider/registry.h"
 #include "../store/pins.h"
 #include "../store/store.h"
+#include "inuse.h"
 #include "../trust/degraded_installs.h"
 #include "../trust/unattended.h"
 #include "trust_screen.h"
@@ -641,10 +642,13 @@ void apply_daemon_upgrade(const Config& config, PackageProvider& provider, const
     // Revision-bumped dependents move in the same batch (and are rolled back
     // with it). Their own pending entries, if any, then find them current;
     // the pass logs activity for those as usual.
+    // A dependent that would move under a running process defers the whole
+    // batch (the pass already checked pu's own keg).
     // A dependent is screened by the unattended trust policy like any
     // pending upgrade; a held one stays put (and is in the trust ledger).
     VersionChangeOptions opts;
     opts.upgrade_dependents = true;
+    opts.keg_in_use = [](const fs::path& keg) { return !files_in_use_under(keg).empty(); };
     if (const TrustPolicy policy = current_trust_policy(config); policy.unattended) {
         opts.screen_dependents = [&config, &idx, policy](const std::vector<VersionChange>& cs) {
             std::vector<PendingUpgrade> pending;
@@ -655,6 +659,13 @@ void apply_daemon_upgrade(const Config& config, PackageProvider& provider, const
     }
     auto res = apply_version_changes(config, provider, &idx,
                                      {{pu.name, pu.installed, pu.available}}, opts);
+    if (!res.deferred_in_use.empty()) {
+        std::string held;
+        for (const auto& c : res.deferred_in_use) {
+            held += (held.empty() ? "" : ", ") + c.name + " " + c.from;
+        }
+        throw UpgradeDeferred("dependent in use: " + held);
+    }
     if (!res.rolled_back.empty()) {
         throw UserError(
             describe_rollback(config.store.parent_path(), res.rolled_back.front(), "auto-upgrade"));
