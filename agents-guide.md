@@ -8,7 +8,7 @@ binary.
 
 - **Cellar**: Shared package storage at `/opt/homebrew/Cellar/<name>/<version>/`.
   Den uses the same Cellar as Homebrew. Den rewrites bottle
-  placeholders on pour: Mach-O deps are pinned to exact kegs on macOS
+  placeholders on pour: Mach-O deps go through `<prefix>/opt/<dep>` where den owns the link, else are pinned to exact kegs, on macOS
   (den never writes Homebrew's shared `/opt/homebrew/opt`), and Linux
   bottles are patchelf'd.
 - **Environment**: A named set of symlinks into the Cellar.

@@ -3,6 +3,7 @@
 
 #include "doctor.h"
 
+#include "../build/linkage_scan.h"
 #include "../build/macho_scan.h"
 #include "../core/error.h"
 #include "../env/environment.h"
@@ -21,6 +22,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <map>
 #include <set>
 #include <sstream>
 #include <string>
@@ -328,6 +330,33 @@ void check_brew_dependencies(const Config& config, std::vector<Finding>& finding
 }
 
 // ---------------------------------------------------------------------------
+// Check: keg linkage
+// Pins that remain (an [info] list) and libraries den's kegs load through a
+// missing or dangling <prefix>/opt/<dep> (a warning).
+// ---------------------------------------------------------------------------
+void check_keg_linkage(const Config& config, std::vector<Finding>& findings,
+                       std::vector<std::string>& notes) {
+    SPDLOG_DEBUG("check: keg linkage");
+    std::error_code ec;
+    if (!fs::is_directory(config.store, ec))
+        return;
+    const auto linkage = scan_keg_linkage(config);
+    if (auto note = format_pinned_kegs(linkage.pinned, config.shares_homebrew_cellar());
+        !note.empty())
+        notes.push_back(std::move(note));
+    if (linkage.broken_opt.empty())
+        return;
+    std::string text = std::to_string(linkage.broken_opt.size()) + " librar" +
+                       (linkage.broken_opt.size() == 1 ? "y" : "ies") +
+                       " den's kegs load through " + (config.prefix / "opt").string() +
+                       " cannot be found:";
+    for (const auto& line : linkage.broken_opt)
+        text += "\n    " + line;
+    text += "\n  Reinstall the dependency (den install <dep>) so den recreates its opt link.";
+    warn(findings, std::move(text));
+}
+
+// ---------------------------------------------------------------------------
 // Check 7: file permissions on sensitive files
 // config.json and any *.key / *.pem files should be mode 0600.
 // ---------------------------------------------------------------------------
@@ -489,6 +518,66 @@ std::string format_source_built_kegs(const std::vector<SourceBuiltKeg>& kegs) {
         if (!k.pending_rebuild.empty())
             text += " [rebuild pending]";
     }
+    return text;
+}
+
+KegLinkage scan_keg_linkage(const Config& config) {
+    KegLinkage out;
+    const auto opt_dir = config.store.parent_path() / "opt";
+    std::set<std::string> broken;
+    for (const auto& keg : list_installed(config.store)) {
+        if (!keg_owned_by_den(keg.path))
+            continue;
+        const auto label = keg.name + " " + keg.version;
+        std::map<std::string, std::pair<size_t, fs::path>> pins;
+        for (const auto& p : keg_pinned_loads(keg.path, config.store, keg.name)) {
+            auto& [count, file] = pins[p.dep + " " + p.version];
+            if (count++ == 0)
+                file = p.file.lexically_relative(keg.path);
+        }
+        for (const auto& [dep, cf] : pins)
+            out.pinned.push_back(label + " -> " + dep + " (" + std::to_string(cf.first) +
+                                 " load path" + (cf.first == 1 ? "" : "s") + ", e.g. " +
+                                 cf.second.string() + ")");
+        std::set<std::string> reported_links;
+        for (const auto& load : keg_opt_loads(keg.path, opt_dir)) {
+            if (load.dep == keg.name)
+                continue;
+            const auto link = opt_dir / load.dep;
+            std::error_code lec;
+            const auto st = fs::symlink_status(link, lec);
+            std::string why;
+            if (st.type() == fs::file_type::not_found)
+                why = link.string() + " is missing";
+            else if (!fs::exists(link, lec))
+                why = link.string() + " is dangling";
+            else if (load.exact && !fs::exists(link / load.tail, lec))
+                why = link.string() + " has no " + load.tail.string();
+            if (why.empty())
+                continue;
+            // One line per missing link and keg; every missing file.
+            if (!load.exact && !reported_links.insert(load.dep).second)
+                continue;
+            broken.insert(label + ": " + load.file.lexically_relative(keg.path).string() +
+                          " loads " + load.load + ": " + why);
+        }
+    }
+    std::sort(out.pinned.begin(), out.pinned.end());
+    out.broken_opt.assign(broken.begin(), broken.end());
+    return out;
+}
+
+std::string format_pinned_kegs(const std::vector<std::string>& pinned, bool shared) {
+    if (pinned.empty())
+        return {};
+    std::string text = "kegs pinned to versioned dependency kegs: " + std::to_string(pinned.size());
+    if (shared)
+        return text + " (expected: den pins dependencies while it shares Homebrew's prefix, "
+                      "which can repoint any opt link)";
+    text += " (they keep loading that version after it upgrades; reinstalling binds them "
+            "through <prefix>/opt)";
+    for (const auto& p : pinned)
+        text += "\n    " + p;
     return text;
 }
 
@@ -729,6 +818,7 @@ std::vector<Finding> doctor(const Config& config) {
     check_broken_symlinks(config, findings);
     check_missing_packages(config, findings);
     check_brew_dependencies(config, findings, notes);
+    check_keg_linkage(config, findings, notes);
     check_source_builds(config, findings, notes);
     check_file_permissions(config, findings);
     check_host_toolchain(config, findings);
