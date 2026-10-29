@@ -40,8 +40,10 @@ does not build from source by default:
   `trust.source_build_allowlist` (default `gettext,git,openssl@3,openssl@4,pkgconf`;
   set it with `den set trust.source_build_allowlist "git,pkgconf"`) may build
   unattended, but only when the source archive's hash is cross-checked
-  against the replica (key `<name>--<version>--source`). If only one source
-  vouches for it, the build is deferred and reported instead of built.
+  against the replica (key `<name>--<version>--source`; den ships one for
+  each formula in the default allowlist, kept current by the replica-verify
+  pipeline). If only one source vouches for it, the build is deferred and
+  reported instead of built.
 * Hashes that disagree refuse the build in every mode.
 
 A deferred build is not attempted. It is recorded in the trust ledger

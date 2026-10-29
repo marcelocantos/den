@@ -594,8 +594,9 @@ std::string format_pinned_kegs(const std::vector<std::string>& pinned, bool shar
     if (shared)
         return text + " (expected: den pins dependencies while it shares Homebrew's prefix, "
                       "which can repoint any opt link)";
-    text += " (they keep loading that version after it upgrades; reinstalling binds them "
-            "through <prefix>/opt)";
+    text += " (they keep loading that version after it upgrades; `den update` relinks them "
+            "through <prefix>/opt where that link is den's and names the same version, and "
+            "reinstalling binds the rest)";
     for (const auto& p : pinned)
         text += "\n    " + p;
     return text;
