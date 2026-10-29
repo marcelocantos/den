@@ -35,6 +35,26 @@ bool starts_with(const std::string& s, const std::string& prefix) {
     return s.rfind(prefix, 0) == 0;
 }
 
+/// The default prefix of another Homebrew install that `path` names, if any.
+/// A keg den builds into its own prefix must not load from or search one:
+/// a build that found Homebrew there (git's Makefile assumes /opt/homebrew
+/// on arm64) installs a keg that breaks when that Homebrew changes or goes.
+/// A root that is, contains or lies inside den's prefix is den's own.
+std::optional<std::string> foreign_homebrew_root(const std::string& path, const fs::path& store) {
+    const auto own = store.parent_path().lexically_normal().string() + "/";
+    for (const std::string root :
+         {"/opt/homebrew", "/usr/local/Cellar", "/usr/local/opt", "/home/linuxbrew/.linuxbrew"}) {
+        const auto r = root + "/";
+        if (starts_with(own, r) || starts_with(r, own)) {
+            continue;
+        }
+        if (path == root || starts_with(path, r)) {
+            return root;
+        }
+    }
+    return std::nullopt;
+}
+
 /// `target` (a path inside the keg) as seen from `file`'s directory.
 std::string loader_relative(const fs::path& target, const fs::path& file) {
     auto rel = target.lexically_normal().lexically_relative(file.parent_path().lexically_normal());
@@ -266,6 +286,10 @@ std::vector<MachoProblem> verify_keg_macho(const MachoFixContext& ctx, bool chec
         for (const auto& lc : info.commands) {
             if (starts_with(lc.path, "/") && rel_within(fs::path(lc.path), ctx.store)) {
                 problems.push_back({file, "names a versioned keg path: " + lc.path});
+            }
+            if (const auto root = foreign_homebrew_root(lc.path, ctx.store)) {
+                problems.push_back({file, "names another Homebrew prefix (" + *root +
+                                              "), outside den's: " + lc.path});
             }
             if (is_dylib_load(lc.kind) && lc.kind != MachoLoadKind::WeakLoad &&
                 !load_resolves(lc.path, file, info, rpaths)) {

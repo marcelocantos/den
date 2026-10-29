@@ -436,7 +436,8 @@ TEST_SUITE("opt_prefix_build") {
         }
     }
 
-    TEST_CASE("a build that ignores DESTDIR fails and leaves no opt path or keg") {
+    TEST_CASE(
+        "a fixed-cellar formula whose build ignores DESTDIR fails, leaving no opt path or keg") {
         TempTree t;
         const auto cfg = make_config(t.root);
         fs::create_directories(cfg.store);
@@ -463,12 +464,118 @@ TEST_SUITE("opt_prefix_build") {
         pkg.name = name;
         pkg.version = "1.0";
         pkg.ruby_source_path = formula.string();
+        // Its bottles bake the prefix, so den must not retry into a staging
+        // keg and relocate.
+        Package::Archive fixed;
+        fixed.relocation = RelocationType::HardcodedPrefix;
+        pkg.archives["arm64_sequoia"] = fixed;
+        pkg.archives["x86_64_linux"] = fixed;
         idx.packages[name] = pkg;
+        REQUIRE(bakes_fixed_prefix(idx, name));
 
         CHECK_THROWS_WITH_AS(build_from_source(cfg, idx, name, "1.0"),
                              doctest::Contains("ignored DESTDIR"), UserError);
         CHECK_FALSE(fs::exists(fs::symlink_status(cfg.prefix / "opt" / name)));
         CHECK_FALSE(fs::exists(cfg.store / name / "1.0"));
+    }
+
+    TEST_CASE("an install step that ignores DESTDIR retries into a staging keg (tree's Makefile)") {
+        // tree 2.3.2's Makefile in miniature: DESTDIR is its bin directory
+        // and MANDIR an absolute path, so DESTDIR staging puts the binary
+        // loose in the stage and the man page in the live opt path.
+        TempTree t;
+        const auto cfg = make_config(t.root);
+        fs::create_directories(cfg.store);
+        const std::string name = "den-fixture-treelike";
+
+        const auto src = t.root / "src" / "treelike-1.0";
+        write(src / "Makefile", "PREFIX=/usr/local\n"
+                                "DESTDIR=${PREFIX}/bin\n"
+                                "MANDIR=${PREFIX}/man\n"
+                                "all: treelike\n"
+                                "treelike:\n"
+                                "\techo '#!/bin/sh' > treelike\n"
+                                "\techo 'echo treelike' >> treelike\n"
+                                "install: treelike\n"
+                                "\tinstall -d $(DESTDIR)\n"
+                                "\tinstall -m 755 treelike $(DESTDIR)/treelike\n"
+                                "\tinstall -d $(MANDIR)/man1\n"
+                                "\techo '.TH TREELIKE 1' > $(MANDIR)/man1/treelike.1\n"
+                                "\tinstall -d $(PREFIX)/share/treelike\n"
+                                "\techo 'prefix=$(PREFIX)' > $(PREFIX)/share/treelike/paths.txt\n"
+                                "\tln -s $(PREFIX)/bin/treelike $(PREFIX)/share/treelike/link\n");
+        const auto archive = t.root / "treelike-1.0.tar.xz";
+        REQUIRE(sh("tar -cJf " + sh_quote(archive.string()) + " -C " +
+                   sh_quote((t.root / "src").string()) + " treelike-1.0") == 0);
+        const auto formula = t.root / (name + ".rb");
+        write(formula, "class DenFixtureTreelike < Formula\n"
+                       "  desc \"ignores DESTDIR, as tree does\"\n"
+                       "  homepage \"https://example.invalid/treelike\"\n"
+                       "  url \"file://" +
+                           archive.string() + "\"\n  sha256 \"" + hash_file(archive) +
+                           "\"\n\n  def install\n"
+                           "    system \"make\", \"install\", \"PREFIX=#{prefix}\", "
+                           "\"MANDIR=#{man}\"\n"
+                           "  end\nend\n");
+
+        PackageIndex idx;
+        Package pkg;
+        pkg.name = name;
+        pkg.version = "1.0";
+        pkg.ruby_source_path = formula.string();
+        // tree's bottles are :any_skip_relocation.
+        Package::Archive any;
+        any.relocation = RelocationType::Portable;
+        pkg.archives["arm64_sequoia"] = any;
+        pkg.archives["x86_64_linux"] = any;
+        idx.packages[name] = pkg;
+        REQUIRE_FALSE(bakes_fixed_prefix(idx, name));
+
+        const auto opt = cfg.prefix / "opt" / name;
+        const auto keg = cfg.store / name / "1.0";
+        CHECK(build_from_source(cfg, idx, name, "1.0") == keg);
+
+        CHECK(fs::is_regular_file(keg / "bin" / "treelike"));
+        CHECK((fs::status(keg / "bin" / "treelike").permissions() & fs::perms::owner_exec) !=
+              fs::perms::none);
+        CHECK(fs::is_regular_file(keg / "share" / "man" / "man1" / "treelike.1"));
+        // Text naming the staging keg was relocated to the opt path.
+        CHECK(slurp(keg / "share" / "treelike" / "paths.txt") == "prefix=" + opt.string() + "\n");
+        CHECK(fs::read_symlink(keg / "share" / "treelike" / "link") == opt / "bin" / "treelike");
+        CHECK(files_mentioning(keg, ".destdir").empty());
+        // Nothing loose in the stage, and the live opt path was never made.
+        CHECK_FALSE(fs::exists(fs::symlink_status(opt)));
+        CHECK_FALSE(fs::exists(cfg.cache / "build" / (name + "-1.0.destdir")));
+    }
+
+    TEST_CASE("with_staged_keg retargets whole opt paths only") {
+        const fs::path opt = "/p/opt/tree";
+        const fs::path sk = "/h/cache/build/tree-1.destdir/p/opt/tree";
+        CHECK(with_staged_keg("make install PREFIX=/p/opt/tree MANDIR=/p/opt/tree/share/man", opt,
+                              sk) ==
+              "make install PREFIX=" + sk.string() + " MANDIR=" + sk.string() + "/share/man");
+        CHECK(with_staged_keg("make install PREFIX='/p/opt/tree'", opt, sk) ==
+              "make install PREFIX='" + sk.string() + "'");
+        CHECK(with_staged_keg("make install PREFIX=/p/opt/tree-extra", opt, sk) ==
+              "make install PREFIX=/p/opt/tree-extra");
+    }
+
+    TEST_CASE("relocate_staged_keg rewrites text and refuses binaries") {
+        TempTree t;
+        const auto sk = t.root / "stage" / "p" / "opt" / "x";
+        const fs::path opt = "/p/opt/x";
+        write(sk / "share" / "x.pc",
+              "prefix=" + sk.string() + "\nlibdir=" + sk.string() + "/lib\n");
+        fs::create_symlink(sk / "share" / "x.pc", sk / "share" / "link");
+        relocate_staged_keg(sk, opt);
+        CHECK(slurp(sk / "share" / "x.pc") == "prefix=/p/opt/x\nlibdir=/p/opt/x/lib\n");
+        CHECK(fs::read_symlink(sk / "share" / "link") == opt / "share" / "x.pc");
+
+        write(sk / "bin" / "x", std::string("\x7f"
+                                            "ELF\0\0",
+                                            6) +
+                                    sk.string());
+        CHECK_THROWS_WITH_AS(relocate_staged_keg(sk, opt), doctest::Contains("bin/x"), UserError);
     }
 
     TEST_CASE("fixture formula builds opt-based into a versioned keg (.tar.xz, .tar.bz2)") {

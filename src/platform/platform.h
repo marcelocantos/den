@@ -47,6 +47,14 @@ HostFacts detect_host_facts();
 /// discarded so probe failures stay quiet.
 std::optional<std::string> capture_command(const std::string& cmd);
 
+/// The macOS SDK den steers source builds to, resolved without xcrun (🎯T45):
+/// an absolute `SDKROOT` that names a directory, else the developer
+/// directory from `xcode-select -p` (Xcode's
+/// Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk or the Command Line
+/// Tools' SDKs/MacOSX.sdk), else /Library/Developer/CommandLineTools/SDKs/
+/// MacOSX.sdk. Returns nullopt on Linux or when none exists.
+std::optional<std::string> macos_sdk_path();
+
 /// Detect the current CPU architecture at compile time.
 Arch detect_arch();
 
