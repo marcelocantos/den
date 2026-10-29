@@ -85,7 +85,9 @@ struct MachoProblem {
 
 /// Check every Mach-O file in ctx.keg: each non-weak dylib load resolves
 /// (dyld shared-cache paths under /usr/lib and /System are taken as
-/// resolved), and no load command, id or rpath names a path in ctx.store.
+/// resolved), no load command, id or rpath names a path in ctx.store, and
+/// none names another Homebrew's default prefix (/opt/homebrew,
+/// /usr/local/{Cellar,opt}, /home/linuxbrew/.linuxbrew) unless it is den's.
 /// With `check_signatures`, also run `codesign -v` on each file.
 std::vector<MachoProblem> verify_keg_macho(const MachoFixContext& ctx, bool check_signatures);
 

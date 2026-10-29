@@ -510,6 +510,15 @@ pc_paths = installed.values.flat_map { |p|
 ENV["PKG_CONFIG_PATH"] = (pc_paths + [ENV["PKG_CONFIG_PATH"]].compact).join(":")
 ENV["CPATH"] = (inc_paths + [ENV["CPATH"]].compact).join(":")
 ENV["LIBRARY_PATH"] = (lib_paths + [ENV["LIBRARY_PATH"]].compact).join(":")
+# Makefiles that look for Homebrew at its default prefix must find den's
+# instead: git's config.mak.uname sets HOMEBREW_PREFIX = /opt/homebrew and its
+# Makefile then adds -L$(HOMEBREW_PREFIX)/opt/gettext/lib, linking a live
+# Homebrew's libintl into den's keg. A variable after "--" in MAKEFLAGS is a
+# command-line definition, which beats the Makefile's own assignment in make
+# and in every sub-make.
+make_flags = ENV["MAKEFLAGS"].to_s.strip
+make_flags += " --" unless make_flags.split.include?("--")
+ENV["MAKEFLAGS"] = "#{make_flags} HOMEBREW_PREFIX=#{prefix_root}".strip
 bin_paths = installed.values.map { |p| (p / "bin").to_s }.select { |p| File.directory?(p) }
 ENV["PATH"] = (bin_paths + [ENV["PATH"]].compact).join(":")
 

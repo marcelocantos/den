@@ -365,6 +365,35 @@ TEST_SUITE("build::bundled_ruby_env") {
         }
     }
 
+    TEST_CASE("e2e: -s points Makefiles that assume /opt/homebrew at den's prefix") {
+        Scratch s(false);
+        // git's config.mak.uname: HOMEBREW_PREFIX = /opt/homebrew, then
+        // -L$(HOMEBREW_PREFIX)/opt/gettext/lib. The sub-make must agree.
+        auto src = s.tmp.path / "src" / "hbtool-1.0";
+        const std::string share = "$(DESTDIR)$(PREFIX)/share/fixture";
+        write(src / "Makefile", "HOMEBREW_PREFIX = /opt/homebrew\ninstall:\n\tmkdir -p " + share +
+                                    "\n\techo '$(HOMEBREW_PREFIX)' > " + share +
+                                    "/hp\n\t$(MAKE) sub\nsub:\n\techo '$(HOMEBREW_PREFIX)' > " +
+                                    share + "/hp-sub\n");
+        auto tarball = s.tmp.path / "hbtool-1.0.tar.gz";
+        run("tar -czf " + tarball.string() + " -C " + (s.tmp.path / "src").string() +
+            " hbtool-1.0");
+        write(s.tmp.path / "tap/Formula/hbtool.rb",
+              "class Hbtool < Formula\n  desc \"fixture\"\n  url \"file://" + tarball.string() +
+                  "\"\n  version \"1.0\"\n  sha256 \"" + hash_file(tarball) +
+                  "\"\n\n  def install\n"
+                  "    system \"make\", \"install\", \"PREFIX=#{prefix}\"\n"
+                  "  end\nend\n");
+        auto tap = s.den("tap add test/hbtap --url " + (s.tmp.path / "tap").string());
+        INFO(tap);
+        auto out = s.den("install -s test/hbtap/hbtool");
+        INFO(out);
+        CHECK(out.find("bundled ruby build failed") == std::string::npos);
+        auto keg = s.prefix() / "Cellar/hbtool/1.0/share/fixture";
+        CHECK(slurp(keg / "hp") == s.prefix().string() + "\n");
+        CHECK(slurp(keg / "hp-sub") == s.prefix().string() + "\n");
+    }
+
     TEST_CASE("e2e: -s gives formulae Homebrew's ENV and opt-path helpers") {
         Scratch s(false);
         auto tarball = make_source(s.tmp.path, "envtool", "1.0");
