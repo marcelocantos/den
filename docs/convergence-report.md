@@ -25,7 +25,11 @@ item belongs to 🎯T42, not T43 itself.
 ### 🎯T27 — No-code-at-install policy  [weight 2.5]
 Gap: **close**
 Bottle pours already execute zero code — purely unpack + SHA256 verify.
-No post-install hooks are run. What remains: document this as a formal
+No post-install hooks are run. (The declarative `symlink` subset of
+Homebrew's `post_install_steps` is performed natively by den when a
+package is linked, e.g. openssl's `etc/<name>/cert.pem`; no formula code
+runs, and `run` steps such as ca-certificates' bundle builder are not
+executed.) What remains: document this as a formal
 guarantee and add enforcement (e.g., an integration test asserting no
 subprocess spawning in bottle pour paths).
 

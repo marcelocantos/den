@@ -70,6 +70,10 @@ Package formula(const std::string& name, const std::string& version,
     p.ruby_source_path = "Formula/" + name.substr(0, 1) + "/" + name + ".rb";
     p.tap_git_head = std::string(40, 'e');
     p.ruby_source_sha256 = std::string(64, 'f');
+    // Canonical (key-sorted) JSON text, as transform_formula stores it.
+    p.post_install_steps = R"([{"force":true,)"
+                           R"("source":{"path":"{{etc}}/ca-certificates/cert.pem"},)"
+                           R"("target":{"path":"{{pkgetc}}/cert.pem"},"type":"symlink"}])";
     return p;
 }
 
@@ -129,6 +133,7 @@ void check_same(const Package& a, const Package& b) {
     CHECK(a.ruby_source_path == b.ruby_source_path);
     CHECK(a.tap_git_head == b.tap_git_head);
     CHECK(a.ruby_source_sha256 == b.ruby_source_sha256);
+    CHECK(a.post_install_steps == b.post_install_steps);
     CHECK(a.keg_only == b.keg_only);
     CHECK(a.keg_only_reason == b.keg_only_reason);
     CHECK(a.conflicts_with == b.conflicts_with);
@@ -381,7 +386,7 @@ TEST_SUITE("index_cache") {
         // Pins the on-disk format version: bump this alongside kFormatVersion
         // whenever the record layout changes, so an older den's cache is
         // never decoded with the new layout.
-        constexpr uint32_t kExpectedFormatVersion = 9;
+        constexpr uint32_t kExpectedFormatVersion = 10;
         IndexCacheTmpDir tmp;
         auto json = tmp.path / "index.json";
         save_index(fixture(), json);
