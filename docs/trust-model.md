@@ -48,6 +48,74 @@ Every `WarnProceed` install that pours is recorded in
 keg). Re-pouring the same version with both sources agreeing clears it, and
 kegs no longer on disk are not counted.
 
+## Unattended installs — `trust.unattended`
+
+An interactive install that only one hash source vouches for pours with a
+warning that the person who asked for it sees. Nobody sees the warning from
+an unattended run, so `trust.unattended` decides what happens instead
+(`src/trust/unattended.*`):
+
+| cross-check | interactive | `trust.unattended=warn` (default) | `trust.unattended=refuse` |
+|---|---|---|---|
+| both sources agree | install | install | install |
+| hashes disagree | refuse | refuse | refuse |
+| no replica entry / no snapshot | warn, pour, ledger | pour, ledger | hold back, ledger "refused" |
+| snapshot unreadable | refuse | refuse | refuse |
+
+A run is unattended when it is the daemon, when `--unattended` is passed
+(`den --unattended upgrade`), or when it runs as den's launchd job
+(`XPC_SERVICE_NAME=dev.den.daemon`). A missing TTY on its own does not count,
+so CI and scripted installs behave as before, and `--yes` never counts.
+An unknown `trust.unattended` value (or one of the wrong type) is treated as
+`refuse`, an unknown `trust.unattended_source_builds` as `off`, and
+`den doctor` warns about either.
+
+**Holding back skips, it does not abort.** Before each upgrade pass the
+daemon screens its pending upgrades, and `den --unattended upgrade` screens
+its candidates with the same code. A formula that would be held back (single
+source under `refuse`) or refused (hashes disagree, snapshot unreadable)
+stays pending and sits the run out, and so does every pending upgrade that
+would have to install it. The rest carries on. The CLI prints the held set
+once and exits non-zero after upgrading the rest; the daemon notifies once.
+If the screen itself fails, nothing is upgraded.
+
+Every hold goes in the ledger as `{state: "refused", reason, status,
+bottle_sha, bottle_tag, recorded_at}`, so `den trust review` lists all of
+them. `reason` is one of:
+
+| reason | meaning |
+|---|---|
+| `single-source` | one hash source only (`status` says which is missing) |
+| `hash-mismatch` | Homebrew and the replica disagree |
+| `replica-unreadable` | the replica snapshot exists but cannot be read |
+| `unverifiable` | neither source has a hash |
+| `depends on <formula>: …` | held back because it would install `<formula>` |
+| `unattended-source-build` | a source build deferred (see source builds) |
+
+An unattended install that refuses outside a screened upgrade (for example
+a dependency) is recorded the same way.
+
+**Notifications.** At most one macOS notification per daemon pass, and only
+when the pass holds back something it did not hold back in the previous one.
+It names the count and points to `den doctor`. Turn it off with
+`den set trust.notify false`. `den daemon status` shows what is held back and
+when the last notification went out.
+
+**Review and accept.** `den trust review` lists what is held back or
+deferred, what has been accepted, and what was installed on a single source.
+`den trust accept <formula>@<version>` (for example
+`den trust accept openssl@3@3.6.3`) marks one exact version accepted. Only a
+`single-source` hold or a deferred source build can be accepted; a mismatch
+or an unreadable snapshot has to be fixed at the source. The next
+unattended run installs it (recorded as a degraded install) and the refused
+entry goes away. A newer version is screened afresh. `accept` must be run
+interactively.
+
+**Source builds.** See [source-builds.md](source-builds.md#unattended-source-builds).
+
+Self-update is not governed by this policy; it keeps its own
+release-signature path ([self-update.md](self-update.md)).
+
 ## Observability — `den doctor`
 
 `den doctor` prints a trust block (`src/doctor/trust_checks.*`):
@@ -57,14 +125,17 @@ kegs no longer on disk are not counted.
 [trust] replica: active, entries: 12, last sync: bundled-with-den-0.12.0
 [trust] replica source: /opt/homebrew/share/den/known_hashes.json
 [trust] degraded installs: 2 (no-replica-entry: 2)
+[trust] held back (unattended): 0
 [trust] layers: cross-source-hash-agreement
 ```
 
 Findings: an **error** when the snapshot is unreadable (installs are refused
 until it is repaired or removed), a warning when there is no snapshot, a
 warning listing kegs installed on one hash source, and a warning when no
-advanced trust layer is wired (🎯T44). `den daemon status` prints the same
-degraded-install count (`Degraded-trust installs: …`).
+advanced trust layer is wired (🎯T44), plus a warning
+"N refused, M degraded since <time>" listing what the unattended trust policy
+held back. `den daemon status` prints the same degraded-install count
+(`Degraded-trust installs: …`), the ledger summary and the policy in force.
 
 ## The replica snapshot (`data/known_hashes.json`)
 

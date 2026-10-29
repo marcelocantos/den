@@ -10,6 +10,8 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -55,6 +57,9 @@ struct VersionChangeResult {
     /// Dependents with a revision bump that were left alone because they are
     /// pinned (`to` is the index version they would have moved to).
     std::vector<VersionChange> pinned_dependents;
+    /// Dependents with a revision bump that `screen_dependents` held back
+    /// (`to` is the index version), with the screen's reason.
+    std::vector<std::pair<VersionChange, std::string>> held_dependents;
 };
 
 struct VersionChangeOptions {
@@ -77,6 +82,12 @@ struct VersionChangeOptions {
     /// A change that fails is rolled back with its brought-in dependents
     /// (RolledBackChange::broken_loads). Needs an index.
     bool verify_linkage = true;
+    /// Optional screen for each dependent `upgrade_dependents` would add
+    /// (the unattended trust policy): returns name -> reason for one to hold
+    /// back. A held dependent stays at its version, like a pinned one, and
+    /// is listed in `held_dependents`.
+    std::function<std::map<std::string, std::string>(const std::vector<VersionChange>&)>
+        screen_dependents;
 };
 
 /// Move packages in the active environment to new versions as one unit per

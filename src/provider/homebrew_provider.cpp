@@ -19,6 +19,7 @@
 #include "../tap/url_formula.h"
 #include "../trust/degraded_installs.h"
 #include "../trust/trust_model.h"
+#include "../trust/unattended.h"
 
 #include <spdlog/spdlog.h>
 
@@ -142,30 +143,38 @@ bool install_one(const Config& config, const Package& pkg) {
     // and recorded in the degraded-install ledger). A snapshot that exists
     // but cannot be read refuses: corrupting the file must not be a way to
     // switch the cross-check off.
+    //
+    // Nobody watches an unattended install (the daemon's upgrade pass), so
+    // trust.unattended decides whether a single-source bottle pours or is
+    // held back (see trust/unattended.h).
     std::optional<DegradedInstall> degraded;
     bool trust_verified = false;
     {
-        MaybeHash homebrew_hash = archive.sha256.empty() ? std::nullopt : MaybeHash(archive.sha256);
-        ReplicaAnswer replica =
-            lookup_local_replica(config, pkg.name, pkg.upstream_version(), *best);
-
-        TrustCheckResult trust = cross_check_hashes(homebrew_hash, replica);
-        switch (trust.decision) {
-        case TrustDecision::Proceed:
+        BottleTrust trust = evaluate_bottle_trust(config, pkg, *best, archive);
+        TrustPolicy policy = current_trust_policy(config);
+        bool accepted = trust.decision == TrustDecision::WarnProceed && policy.unattended &&
+                        is_install_accepted(config, pkg.name, pkg.version);
+        switch (bottle_action(policy, trust.decision, accepted)) {
+        case BottleAction::Install:
             SPDLOG_INFO("trust: {} {} cross-checked against replica — {}", pkg.name, pkg.version,
                         trust.message);
             trust_verified = true;
             break;
-        case TrustDecision::WarnProceed:
+        case BottleAction::InstallDegraded:
             SPDLOG_WARN("trust: {} {} — {} (degraded trust)", pkg.name, pkg.version, trust.message);
-            degraded = DegradedInstall{pkg.name,
-                                       pkg.version,
-                                       homebrew_hash ? replica_status_tag(replica.status)
-                                                     : "homebrew-hash-missing",
-                                       *best,
-                                       {}};
+            degraded = DegradedInstall{pkg.name, pkg.version, trust.reason_tag, *best, {}};
             break;
-        case TrustDecision::Refuse:
+        case BottleAction::HoldBack:
+            record_refused_install(config, trust_hold_entry(pkg, trust, archive.sha256));
+            throw TrustHeldBack(pkg.name, pkg.version,
+                                "held back '" + pkg.name + " " + pkg.version + "' (" +
+                                    *policy.unattended + ", trust.unattended=refuse): " +
+                                    trust.message + "; review with `den trust review`");
+        case BottleAction::Refuse:
+            // Nobody sees the error of an unattended run: the ledger keeps it
+            // for `den trust review` and `den doctor`.
+            if (policy.unattended)
+                record_refused_install(config, trust_hold_entry(pkg, trust, archive.sha256));
             throw UserError("refusing to install '" + pkg.name + " " + pkg.version +
                             "': trust check failed — " + trust.message);
         }
@@ -288,6 +297,47 @@ bool install_one(const Config& config, const Package& pkg) {
 }
 
 } // namespace
+
+BottleTrust evaluate_bottle_trust(const Config& config, const Package& pkg, const std::string& tag,
+                                  const Package::Archive& archive) {
+    MaybeHash homebrew_hash = archive.sha256.empty() ? std::nullopt : MaybeHash(archive.sha256);
+    ReplicaAnswer replica = lookup_local_replica(config, pkg.name, pkg.upstream_version(), tag);
+    TrustCheckResult check = cross_check_hashes(homebrew_hash, replica);
+    BottleTrust out;
+    out.decision = check.decision;
+    out.message = check.message;
+    out.reason_tag = homebrew_hash || replica.status == ReplicaLookupStatus::Unreadable
+                         ? replica_status_tag(replica.status)
+                         : "homebrew-hash-missing";
+    out.bottle_tag = tag;
+    return out;
+}
+
+DegradedInstall trust_hold_entry(const Package& pkg, const BottleTrust& trust,
+                                 const std::string& bottle_sha) {
+    DegradedInstall d{
+        pkg.name, pkg.version, hold_reason(trust.decision, trust.reason_tag), trust.bottle_tag, {}};
+    d.state = "refused";
+    d.status = trust.reason_tag;
+    d.bottle_sha = bottle_sha;
+    return d;
+}
+
+std::optional<BottleTrust> evaluate_bottle_trust(const Config& config, const Package& pkg) {
+    if (pkg.artifact_type == ArtifactType::App || !pkg.cask_artifacts.empty() ||
+        pkg.archives.empty()) {
+        return std::nullopt;
+    }
+    std::vector<std::string> tags;
+    for (const auto& [tag, _] : pkg.archives)
+        tags.push_back(tag);
+    auto best = best_archive_tag(config.arch, config.macos_version, tags);
+    if (!best)
+        return std::nullopt;
+    Package keg = pkg;
+    keg.name = keg_name(pkg.name);
+    return evaluate_bottle_trust(config, keg, *best, pkg.archives.at(*best));
+}
 
 bool pour_formula_keg(const Config& config, const Package& pkg) {
     return install_one_qualified(config, pkg);
