@@ -190,7 +190,7 @@ void uninstall_packages(const Config& config, PackageProvider& provider,
 }
 
 void upgrade_packages(const Config& config, PackageProvider& provider, const PackageIndex& idx,
-                      const std::vector<std::string>& names) {
+                      const std::vector<std::string>& names, bool dry_run) {
     auto active = active_env_path(config.den_home);
     auto resolved = resolve(config.den_home, active);
 
@@ -200,6 +200,9 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
     // Index older than installed: an upgrade never downgrades (that takes an
     // explicit `den use <name> <version>`), so these are reported and skipped.
     std::vector<UpgradeCandidate> older;
+    // Index version lower but version_scheme higher (VersionDelta::Held):
+    // held with a reason, never upgraded, likewise only `den use` moves it.
+    std::vector<std::pair<UpgradeCandidate, std::string>> held_lower;
 
     if (names.empty()) {
         for (const auto& [name, version] : resolved) {
@@ -214,6 +217,11 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
                 break;
             case VersionDelta::Older:
                 older.push_back({name, version, pkg->version});
+                break;
+            case VersionDelta::Held:
+                held_lower.push_back(
+                    {{name, version, pkg->version},
+                     version_hold_reason(version, pkg->version, pkg->version_scheme)});
                 break;
             case VersionDelta::Same:
                 break;
@@ -248,6 +256,10 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
                 candidates.push_back({name, it->second, pkg->version});
             } else if (delta == VersionDelta::Older) {
                 older.push_back({name, it->second, pkg->version});
+            } else if (delta == VersionDelta::Held) {
+                held_lower.push_back(
+                    {{name, it->second, pkg->version},
+                     version_hold_reason(it->second, pkg->version, pkg->version_scheme)});
             } else {
                 std::cout << name << " is already up to date (" << it->second << ").\n";
             }
@@ -263,6 +275,15 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
         }
     }
 
+    if (!held_lower.empty()) {
+        std::cout << "Holding " << held_lower.size()
+                  << " package(s) (index version below installed):\n";
+        for (const auto& [h, reason] : held_lower) {
+            std::cout << "  " << h.name << " " << h.installed << " (" << reason
+                      << "; to downgrade: den use " << h.name << " " << h.available << ")\n";
+        }
+    }
+
     auto split = partition_pinned(candidates, pins);
     std::vector<UpgradeCandidate> upgrades = split.upgrade;
     if (!split.held.empty()) {
@@ -271,6 +292,26 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
             std::cout << "  " << h.name << " " << h.installed << " (pinned; " << h.available
                       << " available)\n";
         }
+    }
+
+    // --dry-run: report the plan and stop before anything with side effects
+    // (the unattended trust screen writes the trust ledger).
+    if (dry_run) {
+        if (upgrades.empty()) {
+            if (older.empty() && held_lower.empty())
+                std::cout << "All packages are up to date.\n";
+            else
+                std::cout << "Nothing to upgrade.\n";
+        } else {
+            std::cout << "Would upgrade " << upgrades.size() << " package(s):\n";
+            for (const auto& u : upgrades)
+                std::cout << "  " << u.name << " " << u.installed << " -> " << u.available << "\n";
+        }
+        std::cout << "Dry run: nothing changed.\n";
+        if (!explicitly_pinned.empty())
+            throw UserError(std::to_string(explicitly_pinned.size()) +
+                            " requested package(s) are pinned");
+        return;
     }
 
     // `den --unattended upgrade` screens its candidates exactly as the
@@ -309,7 +350,7 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
 
     if (upgrades.empty()) {
         fail_if_held();
-        if (older.empty())
+        if (older.empty() && held_lower.empty())
             std::cout << "All packages are up to date.\n";
         else
             std::cout << "Nothing to upgrade.\n";

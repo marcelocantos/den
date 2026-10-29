@@ -830,7 +830,7 @@ std::optional<uint64_t> free_bytes_at(const fs::path& p, fs::path* at) {
     if (const char* o = std::getenv("DEN_MIGRATE_PREFIX_FREE_BYTES"); o && *o) {
         return std::stoull(o);
     }
-    struct statvfs st {};
+    struct statvfs st{};
     if (::statvfs(probe.c_str(), &st) != 0) {
         return std::nullopt;
     }
@@ -993,10 +993,17 @@ MigratePrefixPlan plan_migrate_prefix(const Config& cfg, const PackageIndex& idx
                 const auto old_keg = from_cellar / name / v;
                 const int scheme =
                     fs::is_directory(old_keg) ? installed_version_scheme(old_keg) : 0;
-                if (version_delta(v, scheme, k.target, k.target_scheme) == VersionDelta::Older) {
+                const auto delta = version_delta(v, scheme, k.target, k.target_scheme);
+                if (delta == VersionDelta::Older) {
                     k.action = KegAction::Blocked;
                     k.reason = "den's index offers " + k.target + ", older than the installed " +
                                v + "; den never downgrades";
+                    break;
+                }
+                if (delta == VersionDelta::Held) {
+                    k.action = KegAction::Blocked;
+                    k.reason = version_hold_reason(v, k.target, k.target_scheme) +
+                               "; den never downgrades";
                     break;
                 }
                 k.action = KegAction::Drift;

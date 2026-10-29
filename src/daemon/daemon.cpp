@@ -13,9 +13,9 @@
 #include "../provider/registry.h"
 #include "../store/pins.h"
 #include "../store/store.h"
-#include "inuse.h"
 #include "../trust/degraded_installs.h"
 #include "../trust/unattended.h"
+#include "inuse.h"
 #include "trust_screen.h"
 #include "upgrade_pass.h"
 
@@ -336,6 +336,19 @@ DaemonState read_daemon_state(const fs::path& den_home) {
             }
         }
 
+        if (j.contains("version_held") && j["version_held"].is_array()) {
+            for (const auto& d : j["version_held"]) {
+                if (!d.is_object())
+                    continue;
+                DeferredUpgrade du;
+                du.name = d.value("name", std::string());
+                du.installed = d.value("installed", std::string());
+                du.available = d.value("available", std::string());
+                du.reason = d.value("reason", std::string());
+                state.version_held.push_back(std::move(du));
+            }
+        }
+
         if (j.contains("deferred") && j["deferred"].is_array()) {
             for (const auto& d : j["deferred"]) {
                 if (!d.is_object())
@@ -403,6 +416,15 @@ void write_daemon_state(const fs::path& den_home, const DaemonState& state) {
     }
     j["index_older"] = older;
 
+    nlohmann::json vheld = nlohmann::json::array();
+    for (const auto& h : state.version_held) {
+        vheld.push_back({{"name", h.name},
+                         {"installed", h.installed},
+                         {"available", h.available},
+                         {"reason", h.reason}});
+    }
+    j["version_held"] = vheld;
+
     nlohmann::json deferred = nlohmann::json::array();
     for (const auto& d : state.deferred) {
         deferred.push_back({{"name", d.name},
@@ -448,10 +470,13 @@ void write_daemon_state(const fs::path& den_home, const DaemonState& state) {
 std::vector<PendingUpgrade> compute_pending(const std::map<std::string, std::string>& installed,
                                             const PackageIndex& idx,
                                             std::vector<PendingUpgrade>* index_older,
-                                            const InstalledSchemeFn& installed_scheme) {
+                                            const InstalledSchemeFn& installed_scheme,
+                                            std::vector<DeferredUpgrade>* version_held) {
     std::vector<PendingUpgrade> out;
     if (index_older)
         index_older->clear();
+    if (version_held)
+        version_held->clear();
     for (const auto& [name, version] : installed) {
         const Package* pkg = idx.find(name);
         if (!pkg || pkg->version.empty() || pkg->version == version)
@@ -464,9 +489,15 @@ std::vector<PendingUpgrade> compute_pending(const std::map<std::string, std::str
         const PendingUpgrade pu{name, version, pkg->version, have_scheme, pkg->version_scheme};
         switch (version_delta(version, have_scheme, pkg->version, pkg->version_scheme)) {
         case VersionDelta::Newer:
-            // Includes a version_scheme bump to a lower version (openssl@3
-            // 3.6.x -> 3.5.9 LTS, scheme 0 -> 1): brew treats it as an upgrade.
             out.push_back(pu);
+            break;
+        case VersionDelta::Held:
+            // A version_scheme bump to a lower version (openssl@3 3.6.x ->
+            // 3.5.9 LTS, scheme 0 -> 1). brew would upgrade; den holds it.
+            if (version_held)
+                version_held->push_back(
+                    {name, version, pkg->version,
+                     version_hold_reason(version, pkg->version, pkg->version_scheme)});
             break;
         case VersionDelta::Older:
             // Never downgrade from an upgrade path: the index can lag what is
@@ -485,6 +516,11 @@ std::vector<PendingUpgrade> compute_pending(const std::map<std::string, std::str
 std::string index_older_message(const PendingUpgrade& p) {
     return p.name + " " + p.installed + ": index older than installed (index has " + p.available +
            "); not downgrading. To downgrade explicitly: den use " + p.name + " " + p.available;
+}
+
+std::string version_held_message(const DeferredUpgrade& h) {
+    return h.name + " " + h.installed + ": " + h.reason +
+           "; not downgrading. To downgrade explicitly: den use " + h.name + " " + h.available;
 }
 
 MaintenanceReport run_maintenance_cycle(const fs::path& cellar, const fs::path& den_home,
@@ -506,8 +542,8 @@ MaintenanceReport run_maintenance_cycle(const fs::path& cellar, const fs::path& 
     }
 
     try {
-        state.pending =
-            compute_pending(hooks.installed(), idx, &state.index_older, hooks.installed_scheme);
+        state.pending = compute_pending(hooks.installed(), idx, &state.index_older,
+                                        hooks.installed_scheme, &state.version_held);
     } catch (const std::exception& e) {
         state.errors.push_back(std::string("outdated check: ") + e.what());
         report.pending = state.pending.size();
@@ -523,6 +559,9 @@ MaintenanceReport run_maintenance_cycle(const fs::path& cellar, const fs::path& 
     log_daemon(den_home, std::to_string(report.pending) + " package(s) outdated");
     for (const auto& o : state.index_older)
         log_daemon(den_home, index_older_message(o));
+    report.version_held = state.version_held.size();
+    for (const auto& h : state.version_held)
+        log_daemon(den_home, version_held_message(h));
 
     if (settings.auto_download && hooks.prefetch) {
         // A pinned package is never upgraded (the upgrade pass and `den

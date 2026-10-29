@@ -16,6 +16,7 @@
 #include "daemon/upgrade_pass.h"
 #include "env/environment.h"
 #include "env/manifest.h"
+#include "env/version_change.h"
 #include "index/index.h"
 #include "index/package.h"
 #include "provider/stub_provider.h"
@@ -267,12 +268,20 @@ TEST_SUITE("no_downgrade") {
 
     // ---- version_scheme: (version_scheme, version, revision) ordering ----
 
-    TEST_CASE("version tuple: openssl@3 3.6.3 scheme 0 -> 3.5.9 scheme 1 is an upgrade") {
+    TEST_CASE("version tuple: a scheme bump to a lower version is held, not an upgrade") {
+        // The tuple order itself is unchanged: (1, 3.5.9) outranks (0, 3.6.3).
         CHECK(compare_versioned(1, "3.5.9", 0, "3.6.3") > 0);
         CHECK(compare_versioned(0, "3.6.3", 1, "3.5.9") < 0);
-        CHECK(version_delta("3.6.3", 0, "3.5.9", 1) == VersionDelta::Newer);
-        // The scheme dominates revisions too.
-        CHECK(version_delta("3.6.3_2", 0, "3.5.9", 1) == VersionDelta::Newer);
+        // But an upgrade never lowers the version: openssl@3 3.6.3 (scheme 0)
+        // -> 3.5.9 LTS (scheme 1) is held.
+        CHECK(version_delta("3.6.3", 0, "3.5.9", 1) == VersionDelta::Held);
+        CHECK(version_delta("3.6.3_2", 0, "3.5.9", 1) == VersionDelta::Held);
+        CHECK(version_delta("3.6.3_1", 0, "3.6.3", 1) == VersionDelta::Held);
+        CHECK(version_hold_reason("3.6.3", "3.5.9", 1) ==
+              "held: index pins 3.5.9 (version_scheme 1), below installed 3.6.3");
+        // A scheme bump to a higher version is still an upgrade.
+        CHECK(version_delta("3.6.3", 0, "3.7.0", 1) == VersionDelta::Newer);
+        CHECK(version_delta("3.6.3", 0, "3.6.3_1", 1) == VersionDelta::Newer);
         // An index that predates the bump is older than a scheme-1 install.
         CHECK(version_delta("3.5.9", 1, "3.6.3", 0) == VersionDelta::Older);
         // Same pkg_version is the same keg whatever the schemes say.
@@ -345,20 +354,29 @@ TEST_SUITE("no_downgrade") {
         CHECK(from_json.find("openssl@3")->version_scheme == 1);
     }
 
-    TEST_CASE("daemon: a version_scheme bump is pending and applied; same scheme is not") {
-        auto idx = index_with({{"openssl@3", "3.5.9"}, {"libfoo", "2.0"}});
+    // ---- openssl@3 3.6.3 installed, index pins 3.5.9 with version_scheme 1 ----
+
+    TEST_CASE("daemon plan: a scheme bump to a lower version is held with its reason") {
+        auto idx = index_with({{"openssl@3", "3.5.9"}, {"jq", "1.8.2"}, {"libfoo", "2.0"}});
         idx.packages["openssl@3"].version_scheme = 1;
-        std::map<std::string, std::string> installed{{"openssl@3", "3.6.3"}, {"libfoo", "2.1"}};
+        std::map<std::string, std::string> installed{
+            {"openssl@3", "3.6.3"}, {"jq", "1.7.1"}, {"libfoo", "2.1"}};
         auto schemes = [](const std::string&, const std::string&) { return 0; };
         std::vector<PendingUpgrade> older;
-        auto pending = compute_pending(installed, idx, &older, schemes);
+        std::vector<DeferredUpgrade> held;
+        auto pending = compute_pending(installed, idx, &older, schemes, &held);
         REQUIRE(pending.size() == 1);
-        CHECK(pending[0].name == "openssl@3");
-        CHECK(pending[0].available == "3.5.9");
-        CHECK(pending[0].installed_scheme == 0);
-        CHECK(pending[0].available_scheme == 1);
+        CHECK(pending[0].name == "jq"); // a normal newer version still upgrades
         REQUIRE(older.size() == 1);
         CHECK(older[0].name == "libfoo"); // lower version, same scheme
+        REQUIRE(held.size() == 1);
+        CHECK(held[0].name == "openssl@3");
+        CHECK(held[0].installed == "3.6.3");
+        CHECK(held[0].available == "3.5.9");
+        CHECK(held[0].reason == "held: index pins 3.5.9 (version_scheme 1), below installed 3.6.3");
+        CHECK(version_held_message(held[0]) ==
+              "openssl@3 3.6.3: held: index pins 3.5.9 (version_scheme 1), below installed "
+              "3.6.3; not downgrading. To downgrade explicitly: den use openssl@3 3.5.9");
 
         // Full cycle with auto_upgrade: the scheme comes from the keg receipt.
         NdTmp t;
@@ -366,58 +384,135 @@ TEST_SUITE("no_downgrade") {
         fs::path home = t.path / "home";
         fs::create_directories(home);
         write_brew_receipt(cellar / "openssl@3" / "3.6.3", "3.6.3", 0);
+        fs::create_directories(cellar / "jq" / "1.7.1");
         fs::create_directories(cellar / "libfoo" / "2.1");
         DaemonState state;
-        std::vector<std::string> applied;
+        std::vector<std::string> applied, fetched;
         MaintenanceHooks h;
         h.refresh_index = [&] { return idx; };
         h.installed = [&] { return installed; };
         h.installed_scheme = [&](const std::string& n, const std::string& v) {
             return installed_version_scheme(cellar / n / v);
         };
+        h.prefetch = [&](const PendingUpgrade& p) { fetched.push_back(p.name); };
         h.apply = [&](const PendingUpgrade& p) { applied.push_back(p.name + "@" + p.available); };
         h.in_window = [](const std::string&) { return true; };
         MaintenanceSettings s;
-        s.auto_download = false;
         s.auto_upgrade = true;
         auto rep = run_maintenance_cycle(cellar, home, s, state, h);
-        CHECK(applied == std::vector<std::string>{"openssl@3@3.5.9"});
+        CHECK(applied == std::vector<std::string>{"jq@1.8.2"});
+        CHECK(fetched == std::vector<std::string>{"jq"}); // no bottle fetched for openssl@3
+        CHECK(rep.version_held == 1);
         CHECK(rep.index_older == 1);
+        CHECK(state.pending.empty());
+        REQUIRE(state.version_held.size() == 1);
+        CHECK(state.version_held[0].name == "openssl@3");
+        CHECK(read_file(home / "daemon.log")
+                  .find("openssl@3 3.6.3: held: index pins 3.5.9 (version_scheme 1), below "
+                        "installed 3.6.3; not downgrading") != std::string::npos);
 
-        // The schemes survive the state file, so a later pass still agrees.
-        DaemonState st2;
-        st2.pending.push_back(pending[0]);
-        write_daemon_state(home, st2);
+        // Without auto_upgrade the plan (pending) carries only jq.
+        DaemonState plan;
+        MaintenanceSettings s2;
+        s2.auto_download = false;
+        run_maintenance_cycle(cellar, home, s2, plan, h);
+        REQUIRE(plan.pending.size() == 1);
+        CHECK(plan.pending[0].name == "jq");
+
+        // The hold and its reason survive the state file and `den daemon status`.
+        write_daemon_state(home, plan);
         auto back = read_daemon_state(home);
         REQUIRE(back.pending.size() == 1);
-        CHECK(back.pending[0].available_scheme == 1);
+        CHECK(back.pending[0].name == "jq");
+        REQUIRE(back.version_held.size() == 1);
+        CHECK(back.version_held[0].reason ==
+              "held: index pins 3.5.9 (version_scheme 1), below installed 3.6.3");
+        std::ostringstream out;
+        format_daemon_status(out, back);
+        const auto status = out.str();
+        CHECK(status.find("Held (index version below installed):") != std::string::npos);
+        CHECK(status.find("openssl@3 3.6.3 (held: index pins 3.5.9 (version_scheme 1), below "
+                          "installed 3.6.3; to downgrade: den use openssl@3 3.5.9)") !=
+              std::string::npos);
+        CHECK(status.find("openssl@3 3.6.3 -> 3.5.9") == std::string::npos);
+
+        // A persisted entry from an older den (pending openssl@3 -> 3.5.9,
+        // scheme 1) is dropped by the upgrade pass, not applied.
+        DaemonState stale;
+        stale.pending.push_back({"openssl@3", "3.6.3", "3.5.9", 0, 1});
         int applies = 0;
-        run_upgrade_pass(cellar, home, back, [&](const PendingUpgrade&) { ++applies; });
-        CHECK(applies == 1);
+        auto res = run_upgrade_pass(cellar, home, stale, [&](const PendingUpgrade&) { ++applies; });
+        CHECK(applies == 0);
+        CHECK(res.not_newer.size() == 1);
     }
 
-    TEST_CASE("den upgrade applies a version_scheme bump and refuses a same-scheme downgrade") {
+    TEST_CASE("den upgrade --dry-run and den upgrade hold a scheme bump to a lower version") {
         NdTmp t;
         auto cfg = scratch_config(t.path);
         StubProvider stub;
-        seed(cfg, stub, {{"openssl@3", "3.6.3"}, {"libfoo", "2.1"}});
+        seed(cfg, stub, {{"openssl@3", "3.6.3"}, {"jq", "1.7.1"}, {"libfoo", "2.1"}});
         write_brew_receipt(cfg.store / "openssl@3" / "3.6.3", "3.6.3", 0);
-        auto idx = index_with({{"openssl@3", "3.5.9"}, {"libfoo", "2.0"}});
+        auto idx = index_with({{"openssl@3", "3.5.9"}, {"jq", "1.8.2"}, {"libfoo", "2.0"}});
         idx.packages["openssl@3"].version_scheme = 1;
+        const std::string held_line = "openssl@3 3.6.3 (held: index pins 3.5.9 (version_scheme "
+                                      "1), below installed 3.6.3; to downgrade: den use "
+                                      "openssl@3 3.5.9)";
+        const auto manifest_before =
+            read_file(cfg.den_home / "manifests" / "ROOT" / "manifest.json");
 
-        {
+        { // --dry-run: the plan holds openssl@3, lists jq, and changes nothing.
+            CoutCapture cap;
+            upgrade_packages(cfg, stub, idx, {}, /*dry_run=*/true);
+            const auto out = cap.str();
+            CHECK(out.find("Holding 1 package(s) (index version below installed):") !=
+                  std::string::npos);
+            CHECK(out.find(held_line) != std::string::npos);
+            CHECK(out.find("Would upgrade 1 package(s):\n  jq 1.7.1 -> 1.8.2\n") !=
+                  std::string::npos);
+            CHECK(out.find("openssl@3 3.6.3 -> 3.5.9") == std::string::npos);
+            CHECK(out.find("Dry run: nothing changed.") != std::string::npos);
+            CHECK(active_version(cfg, "openssl@3") == "3.6.3");
+            CHECK(active_version(cfg, "jq") == "1.7.1");
+            CHECK(read_file(cfg.den_home / "manifests" / "ROOT" / "manifest.json") ==
+                  manifest_before);
+            CHECK_FALSE(stub.is_installed(cfg, "jq", "1.8.2"));
+            CHECK_FALSE(stub.is_installed(cfg, "openssl@3", "3.5.9"));
+        }
+        { // Naming it explicitly is held too.
+            CoutCapture cap;
+            upgrade_packages(cfg, stub, idx, {"openssl@3"}, /*dry_run=*/true);
+            CHECK(cap.str().find(held_line) != std::string::npos);
+            CHECK(cap.str().find("Nothing to upgrade.") != std::string::npos);
+        }
+        { // Real run: jq upgrades, openssl@3 stays at 3.6.3 and is reported held.
             CoutCapture cap;
             upgrade_packages(cfg, stub, idx, {});
-            CHECK(active_version(cfg, "openssl@3") == "3.5.9");
-            CHECK(active_version(cfg, "libfoo") == "2.1");
-            CHECK(cap.str().find("libfoo 2.1 (index has 2.0") != std::string::npos);
-            CHECK(cap.str().find("openssl@3 3.6.3 (index has") == std::string::npos);
+            const auto out = cap.str();
+            CHECK(out.find(held_line) != std::string::npos);
+            CHECK(out.find("1 package(s) to upgrade:\n  jq 1.7.1 -> 1.8.2\n") != std::string::npos);
+            CHECK(out.find("openssl@3 3.6.3 -> 3.5.9") == std::string::npos);
+            CHECK(active_version(cfg, "openssl@3") == "3.6.3");
+            CHECK(active_version(cfg, "jq") == "1.8.2");
+            CHECK(active_version(cfg, "libfoo") == "2.1"); // same-scheme downgrade refused
+            CHECK_FALSE(stub.is_installed(cfg, "openssl@3", "3.5.9"));
         }
-        {
+        { // `den upgrade openssl@3` does not move it either.
             CoutCapture cap;
-            upgrade_packages(cfg, stub, idx, {"libfoo"});
-            CHECK(active_version(cfg, "libfoo") == "2.1");
-            CHECK(cap.str().find("Not downgrading 1 package(s)") != std::string::npos);
+            upgrade_packages(cfg, stub, idx, {"openssl@3"});
+            CHECK(cap.str().find(held_line) != std::string::npos);
+            CHECK(cap.str().find("Nothing to upgrade.") != std::string::npos);
+            CHECK(active_version(cfg, "openssl@3") == "3.6.3");
+        }
+        { // `den use openssl@3 3.5.9` (install, then switch without install,
+            // as the command does) is the explicit way down, and still works.
+            stub.install(cfg, "openssl@3", "3.5.9");
+            VersionChangeOptions vopts;
+            vopts.install = false;
+            auto res =
+                apply_version_changes(cfg, stub, nullptr, {{"openssl@3", "3.6.3", "3.5.9"}}, vopts);
+            CHECK(res.rolled_back.empty());
+            REQUIRE(res.applied.size() == 1);
+            CHECK(active_version(cfg, "openssl@3") == "3.5.9");
         }
     }
 }

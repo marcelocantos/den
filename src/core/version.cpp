@@ -138,14 +138,26 @@ int compare_versioned(int scheme_a, const std::string& a, int scheme_b, const st
 
 VersionDelta version_delta(const std::string& installed, int installed_scheme,
                            const std::string& available, int available_scheme) {
-    if (compare_pkg_versions(available, installed) == 0)
+    const int by_version = compare_pkg_versions(available, installed);
+    if (by_version == 0)
         return VersionDelta::Same;
+    // Never downgrade from an upgrade path, even when the index's
+    // version_scheme outranks the installed keg's (homebrew-core moved
+    // openssl@3 from 3.6.x to 3.5.9 LTS with version_scheme 1).
+    if (by_version < 0 && available_scheme > installed_scheme)
+        return VersionDelta::Held;
     int c = compare_versioned(available_scheme, available, installed_scheme, installed);
     if (c > 0)
         return VersionDelta::Newer;
     if (c < 0)
         return VersionDelta::Older;
     return VersionDelta::Same;
+}
+
+std::string version_hold_reason(const std::string& installed, const std::string& available,
+                                int available_scheme) {
+    return "held: index pins " + available + " (version_scheme " +
+           std::to_string(available_scheme) + "), below installed " + installed;
 }
 
 VersionDelta version_delta(const std::string& installed, const std::string& available) {
