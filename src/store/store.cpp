@@ -176,7 +176,7 @@ std::vector<KegInfo> inspect_cellar(const fs::path& store, const fs::path& den_h
 }
 
 void mark_keg_owned(const fs::path& keg, const std::string& name, const std::string& version,
-                    int version_scheme) {
+                    int version_scheme, const SourceBuildReceipt* source) {
     std::error_code ec;
     if (!fs::is_directory(keg, ec) || ec) {
         SPDLOG_WARN("not recording keg ownership; directory missing: {}", keg.string());
@@ -189,6 +189,30 @@ void mark_keg_owned(const fs::path& keg, const std::string& name, const std::str
         {"version", version},
         {"version_scheme", version_scheme},
     };
+    if (source) {
+        const auto input = [](const SourceBuildReceipt::Input& in, bool named) {
+            nlohmann::json j = {{"url", in.url}, {"sha256", in.sha256}};
+            if (named)
+                j["name"] = in.name;
+            return j;
+        };
+        nlohmann::json resources = nlohmann::json::array();
+        for (const auto& r : source->resources)
+            resources.push_back(input(r, true));
+        nlohmann::json patches = nlohmann::json::array();
+        for (const auto& p : source->patches)
+            patches.push_back(input(p, false));
+        auto src = input(source->source, false);
+        src["resources"] = std::move(resources);
+        src["patches"] = std::move(patches);
+        receipt["built_from_source"] = true;
+        receipt["source"] = std::move(src);
+        receipt["formula"] = {{"tap", source->formula_tap},
+                              {"commit", source->formula_commit},
+                              {"path", source->formula_path}};
+        receipt["toolchain"] = {{"sdk", source->toolchain_sdk}, {"clang", source->toolchain_clang}};
+        receipt["opt_prefix_baked"] = source->opt_prefix_baked;
+    }
 
     // Write beside the final name, then rename into place, so a crash cannot
     // leave a half-written receipt that a later cleanup might misread. Rename
@@ -238,6 +262,52 @@ std::optional<nlohmann::json> read_receipt_json(const fs::path& path) {
 }
 
 } // namespace
+
+std::optional<SourceBuildReceipt> read_source_build_receipt(const fs::path& keg) {
+    auto j = read_receipt_json(keg / kDenReceiptFilename);
+    if (!j)
+        return std::nullopt;
+    const auto built = j->find("built_from_source");
+    if (built == j->end() || !built->is_boolean() || !built->get<bool>())
+        return std::nullopt;
+    const auto str = [](const nlohmann::json& o, const char* key) {
+        if (!o.is_object())
+            return std::string();
+        const auto it = o.find(key);
+        return it != o.end() && it->is_string() ? it->get<std::string>() : std::string();
+    };
+    const auto input = [&](const nlohmann::json& o) {
+        return SourceBuildReceipt::Input{str(o, "name"), str(o, "url"), str(o, "sha256")};
+    };
+    const auto obj = [&](const char* key) {
+        const auto it = j->find(key);
+        return it != j->end() && it->is_object() ? *it : nlohmann::json::object();
+    };
+    const auto inputs = [&](const nlohmann::json& o, const char* key) {
+        std::vector<SourceBuildReceipt::Input> out;
+        const auto it = o.find(key);
+        if (it != o.end() && it->is_array())
+            for (const auto& e : *it)
+                if (e.is_object())
+                    out.push_back(input(e));
+        return out;
+    };
+    SourceBuildReceipt r;
+    const auto src = obj("source");
+    r.source = input(src);
+    r.source.name.clear();
+    r.resources = inputs(src, "resources");
+    r.patches = inputs(src, "patches");
+    const auto formula = obj("formula");
+    r.formula_tap = str(formula, "tap");
+    r.formula_commit = str(formula, "commit");
+    r.formula_path = str(formula, "path");
+    const auto toolchain = obj("toolchain");
+    r.toolchain_sdk = str(toolchain, "sdk");
+    r.toolchain_clang = str(toolchain, "clang");
+    r.opt_prefix_baked = str(*j, "opt_prefix_baked");
+    return r;
+}
 
 int installed_version_scheme(const fs::path& keg) {
     if (auto j = read_receipt_json(keg / kDenReceiptFilename)) {

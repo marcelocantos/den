@@ -128,6 +128,12 @@ struct Package {
     std::optional<std::string> source_url;
     std::optional<std::string> source_sha256;
     std::optional<std::string> ruby_source_path; // e.g. "Formula/t/tree.rb"
+    // The homebrew-core commit the API entry was generated from
+    // ("tap_git_head") and the sha256 of the formula file at that commit
+    // ("ruby_source_checksum.sha256"). fetch_formula_source fetches the .rb
+    // by this commit and verifies it, so the recipe matches the index.
+    std::optional<std::string> tap_git_head;
+    std::optional<std::string> ruby_source_sha256;
 
     // Names this package was previously published under (Homebrew cask
     // "old_tokens", formula "oldnames"), so `den install <old>` follows the

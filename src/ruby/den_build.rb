@@ -362,6 +362,31 @@ end
 require "digest"
 sha256_of = ->(path) { Digest::SHA256.file(path.to_s).hexdigest }
 
+# Every resource and external patch must carry a sha256 as well (Homebrew
+# only warns when one has none). Homebrew's downloader verifies each against
+# it when the formula stages it. den records them all in the keg's receipt.
+den_hex_of = lambda do |checksum|
+  (checksum.respond_to?(:hexdigest) ? checksum.hexdigest : checksum).to_s.downcase
+end
+den_resources = []
+(stable.resources.values rescue []).each do |r|
+  sha = den_hex_of.call(r.checksum)
+  unless sha.match?(/\A[0-9a-f]{64}\z/)
+    abort "error: no sha256 for #{name} resource #{r.name}; refusing to build with an unverified resource"
+  end
+  den_resources << [r.name, r.url.to_s, sha]
+end
+den_patches = []
+(stable.patches rescue []).each do |p|
+  next unless p.respond_to?(:external?) && p.external?
+  res = p.respond_to?(:resource) ? p.resource : p
+  sha = den_hex_of.call(res.checksum)
+  unless sha.match?(/\A[0-9a-f]{64}\z/)
+    abort "error: no sha256 for #{name} patch #{p.url}; refusing to build with an unverified patch"
+  end
+  den_patches << [p.url.to_s, sha]
+end
+
 # The cache name keeps the URL's archive suffix (see source_archive_suffix in
 # src/build/opt_prefix_build.cpp); tar detects the format from content.
 archive_suffix = begin
@@ -436,4 +461,8 @@ $stderr.puts "==> Built #{name} #{version}"
 puts "name=#{name}"
 puts "version=#{version}"
 puts "prefix=#{dest}"
+# Verified inputs, for the keg's receipt (parse_ruby_build_inputs).
+puts "source=#{url}\t#{expected_sha256}"
+den_resources.each { |n, u, s| puts "resource=#{n}\t#{u}\t#{s}" }
+den_patches.each { |u, s| puts "patch=#{u}\t#{s}" }
 puts "status=ok"

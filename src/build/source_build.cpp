@@ -51,8 +51,18 @@ std::pair<int, std::string> run(const std::string& cmd) {
 // tarball" plus both digests. That is a verdict, not a failed build:
 // falling back would fetch the same tarball, fail the same check and report
 // the mismatch a second time. Returns the message (from "SHA256 mismatch")
-// when the Ruby output carries one.
+// when the Ruby output carries one. Its refusal of a resource or patch
+// without a sha256 is a verdict too.
 std::optional<std::string> ruby_sha_mismatch(const std::string& output) {
+    for (auto at = output.find("no sha256 for "); at != std::string::npos;
+         at = output.find("no sha256 for ", at + 1)) {
+        auto line = output.substr(at, output.find('\n', at) - at);
+        if (line.find("refusing to build with an unverified") != std::string::npos) {
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
+                line.pop_back();
+            return line;
+        }
+    }
     auto pos = output.find("SHA256 mismatch for ");
     if (pos == std::string::npos)
         return std::nullopt;
@@ -166,9 +176,30 @@ void apply_shim_free_toolchain(std::map<std::string, std::string>& env) {
 #endif
 }
 
+// The receipt's toolchain: the SDK den steers builds to and the compiler.
+void record_toolchain(SourceBuildReceipt& receipt) {
+#ifdef __APPLE__
+    if (auto sdk = detect_host_facts().sdk_path)
+        receipt.toolchain_sdk = *sdk;
+    const std::vector<std::string> cc = {"/usr/bin/clang", "--version"};
+#else
+    const std::vector<std::string> cc = {"cc", "--version"};
+#endif
+    const auto r = run_tool(cc);
+    if (r.spawned && r.exit_code == 0)
+        receipt.toolchain_clang = r.output.substr(0, r.output.find('\n'));
+}
+
 } // namespace
 
-std::string fetch_formula_source(const PackageIndex& idx, const std::string& name) {
+std::string formula_source_url(const Package& pkg) {
+    const std::string ref = pkg.tap_git_head ? *pkg.tap_git_head : "master";
+    return "https://raw.githubusercontent.com/Homebrew/homebrew-core/" + ref + "/" +
+           pkg.ruby_source_path.value_or("");
+}
+
+std::string fetch_formula_source(const PackageIndex& idx, const std::string& name,
+                                 FormulaOrigin* origin) {
     const auto* pkg = idx.find(name);
     if (!pkg || !pkg->ruby_source_path) {
         SPDLOG_DEBUG("no ruby_source_path for '{}' in index", name);
@@ -189,20 +220,59 @@ std::string fetch_formula_source(const PackageIndex& idx, const std::string& nam
                                    std::istreambuf_iterator<char>());
                 SPDLOG_INFO("read tap formula source for '{}' from {} ({} bytes)", name,
                             *pkg->ruby_source_path, source.size());
+                if (origin) {
+                    const auto slash = name.rfind('/');
+                    *origin = {slash == std::string::npos ? std::string() : name.substr(0, slash),
+                               "", *pkg->ruby_source_path};
+                }
                 return source;
             }
         }
     }
 
-    auto url =
-        "https://raw.githubusercontent.com/Homebrew/homebrew-core/master/" + *pkg->ruby_source_path;
+    const auto url = formula_source_url(*pkg);
+    if (!pkg->tap_git_head)
+        SPDLOG_WARN("index has no tap_git_head for '{}'; fetching its formula from master", name);
+    std::string source;
     try {
-        auto source = fetch_url(url);
-        SPDLOG_INFO("fetched formula source for '{}' from GitHub ({} bytes)", name, source.size());
-        return source;
+        source = fetch_url(url);
     } catch (const std::exception& e) {
         SPDLOG_WARN("failed to fetch formula source for '{}': {}", name, e.what());
         return "";
+    }
+    if (pkg->ruby_source_sha256) {
+        const auto actual = hash_string(source);
+        if (actual != *pkg->ruby_source_sha256)
+            throw UserError("SHA256 mismatch for " + name +
+                            " formula source\n  expected: " + *pkg->ruby_source_sha256 +
+                            "\n  actual:   " + actual + "\n  url:      " + url);
+    }
+    SPDLOG_INFO("fetched formula source for '{}' from {} ({} bytes{})", name, url, source.size(),
+                pkg->ruby_source_sha256 ? ", sha256 verified" : "");
+    if (origin)
+        *origin = {"homebrew/core", pkg->tap_git_head.value_or(""), *pkg->ruby_source_path};
+    return source;
+}
+
+void parse_ruby_build_inputs(const std::string& output, SourceBuildReceipt& receipt) {
+    std::istringstream in(output);
+    for (std::string line; std::getline(in, line);) {
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        const auto eq = line.find('=');
+        if (eq == std::string::npos)
+            continue;
+        const auto key = line.substr(0, eq);
+        std::vector<std::string> f;
+        std::istringstream fields(line.substr(eq + 1));
+        for (std::string v; std::getline(fields, v, '\t');)
+            f.push_back(v);
+        if (key == "source" && f.size() == 2)
+            receipt.source = {"", f[0], f[1]};
+        else if (key == "resource" && f.size() == 3)
+            receipt.resources.push_back({f[0], f[1], f[2]});
+        else if (key == "patch" && f.size() == 2)
+            receipt.patches.push_back({"", f[0], f[1]});
     }
 }
 
@@ -303,6 +373,8 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
     // from one Homebrew poured into the same Cellar.
     // They also fix the keg's Mach-O linkage first (macOS): ids, loads and
     // rpaths stop naming the versioned keg, so it survives opt moving on.
+    SourceBuildReceipt receipt;
+    receipt.opt_prefix_baked = opt_prefix_for(config.store, name).string();
     const auto claim = [&]() -> fs::path {
         try {
             const auto n =
@@ -316,7 +388,8 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
             throw;
         }
         const Package* indexed = idx.find(requested);
-        mark_keg_owned(dest, name, version, indexed ? indexed->version_scheme : 0);
+        record_toolchain(receipt);
+        mark_keg_owned(dest, name, version, indexed ? indexed->version_scheme : 0, &receipt);
         return dest;
     };
 
@@ -354,7 +427,11 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
             "DEN_BUILD_SANDBOX_PROFILE=" + shell_quote(seatbelt_profile(sandbox)) + " ";
 
     // Fetch formula source from GitHub (no brew dependency).
-    auto formula_source = fetch_formula_source(idx, requested);
+    FormulaOrigin origin;
+    auto formula_source = fetch_formula_source(idx, requested, &origin);
+    receipt.formula_tap = origin.tap;
+    receipt.formula_commit = origin.commit;
+    receipt.formula_path = origin.path;
 
     // Path A: Bundled Ruby subprocess. macOS only: Linux's lazily downloaded
     // Portable Ruby has no Homebrew library, so fetching it here would only
@@ -384,6 +461,7 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
             const bool built = fs::is_directory(dest, dec) && !fs::is_empty(dest, dec);
             if (ruby_rc == 0 && ruby_output.find("status=ok") != std::string::npos && built) {
                 std::cout << "==> Built " << name << " " << version << "\n";
+                parse_ruby_build_inputs(ruby_output, receipt);
                 return claim();
             }
             if (auto mismatch = ruby_sha_mismatch(ruby_output)) {
@@ -437,6 +515,7 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
 
             if (ruby_rc == 0 && ruby_output.find("status=ok") != std::string::npos) {
                 std::cout << "==> Built " << name << " " << version << " (via formula)\n";
+                parse_ruby_build_inputs(ruby_output, receipt);
                 return claim();
             }
             if (auto mismatch = ruby_sha_mismatch(ruby_output)) {
@@ -648,6 +727,7 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
 
     fs::remove_all(build_dir, ec);
     std::cout << "==> Built " << name << " " << version << "\n";
+    receipt.source = {"", recipe.source_url, recipe.source_sha256};
     return claim();
 }
 
