@@ -365,7 +365,7 @@ TEST_SUITE("build::bundled_ruby_env") {
         }
     }
 
-    TEST_CASE("e2e: -s gives formulae Homebrew's ENV helpers") {
+    TEST_CASE("e2e: -s gives formulae Homebrew's ENV and opt-path helpers") {
         Scratch s(false);
         auto tarball = make_source(s.tmp.path, "envtool", "1.0");
         write(s.tmp.path / "tap/Formula/envtool.rb",
@@ -379,7 +379,8 @@ TEST_SUITE("build::bundled_ruby_env") {
                   "    system \"make\", \"install\", \"PREFIX=#{prefix}\"\n"
                   "    (share/\"fixture\").mkpath\n"
                   "    (share/\"fixture/env\").write [ENV[\"CFLAGS\"], ENV[\"CXXFLAGS\"], "
-                  "ENV[\"LDFLAGS\"], ENV[\"MAKEFLAGS\"]].join(\"\\n\")\n"
+                  "ENV[\"LDFLAGS\"], ENV[\"MAKEFLAGS\"], formula_opt_prefix(\"some/tap/zlib\"), "
+                  "formula_opt_lib(\"zlib\")].join(\"\\n\")\n"
                   "  end\nend\n");
         auto tap = s.den("tap add test/envtap --url " + (s.tmp.path / "tap").string());
         INFO(tap);
@@ -395,6 +396,9 @@ TEST_SUITE("build::bundled_ruby_env") {
         CHECK(env.find("-DDEN_ENV_PROBE", first + 1) != std::string::npos);
         CHECK(env.find("-L/den/probe") != std::string::npos);
         CHECK(env.find("-j8") == std::string::npos);
+        // Newer Homebrew path helpers resolve under den's prefix.
+        CHECK(env.find("\n" + (s.prefix() / "opt/zlib").string() + "\n") != std::string::npos);
+        CHECK(env.find("\n" + (s.prefix() / "opt/zlib/lib").string()) != std::string::npos);
     }
 
     // Same fixture, but with the formula's sha256 replaced.
