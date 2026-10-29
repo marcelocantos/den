@@ -460,9 +460,17 @@ TEST_SUITE("upgrade_dependents") {
         CHECK(res.held_dependents[0].first.name == "app");
         CHECK(res.held_dependents[0].second == "single source");
         CHECK(res.dependents.empty());
-        CHECK(f.manifest("depa") == "2.0");
         CHECK(f.manifest("app") == "1.0");
         CHECK(f.prov.installed_log == std::vector<std::string>{"depa@2.0"});
+        // As with a pinned dependent: the held app 1.0 loads libdepa.1, which
+        // depa 2.0 drops, so linkage verification holds depa back too rather
+        // than break app.
+        REQUIRE(res.rolled_back.size() == 1);
+        CHECK(res.rolled_back[0].change.name == "depa");
+        REQUIRE(res.rolled_back[0].broken_loads.size() == 1);
+        CHECK(res.rolled_back[0].broken_loads[0].starts_with("app 1.0: bin/app loads "));
+        CHECK(f.manifest("depa") == "1.0");
+        CHECK(f.app_says() == "depa 1.0");
     }
 
     TEST_CASE("a dependency that rolls back takes its dependent with it") {
