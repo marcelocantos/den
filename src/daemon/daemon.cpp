@@ -14,6 +14,9 @@
 #include "../store/pins.h"
 #include "../store/store.h"
 #include "inuse.h"
+#include "../trust/degraded_installs.h"
+#include "../trust/unattended.h"
+#include "trust_screen.h"
 #include "upgrade_pass.h"
 
 #include <algorithm>
@@ -27,6 +30,7 @@
 #include <fcntl.h>
 #include <fstream>
 #include <iomanip>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <sys/file.h>
@@ -348,6 +352,22 @@ DaemonState read_daemon_state(const fs::path& den_home) {
                 state.deferred.push_back(std::move(du));
             }
         }
+
+        if (j.contains("trust_held") && j["trust_held"].is_array()) {
+            for (const auto& d : j["trust_held"]) {
+                if (!d.is_object())
+                    continue;
+                DeferredUpgrade du;
+                du.name = d.value("name", std::string());
+                du.installed = d.value("installed", std::string());
+                du.available = d.value("available", std::string());
+                du.reason = d.value("reason", std::string());
+                state.trust_held.push_back(std::move(du));
+            }
+        }
+        if (j.contains("last_trust_notification") &&
+            j["last_trust_notification"].is_number_unsigned())
+            state.last_trust_notification = j["last_trust_notification"].get<uint64_t>();
     } catch (const std::exception& e) {
         SPDLOG_WARN("daemon: failed to read state from {}: {}", path.string(), e.what());
     }
@@ -391,6 +411,17 @@ void write_daemon_state(const fs::path& den_home, const DaemonState& state) {
                             {"reason", d.reason}});
     }
     j["deferred"] = deferred;
+
+    nlohmann::json trust_held = nlohmann::json::array();
+    for (const auto& d : state.trust_held) {
+        trust_held.push_back({{"name", d.name},
+                              {"installed", d.installed},
+                              {"available", d.available},
+                              {"reason", d.reason}});
+    }
+    j["trust_held"] = trust_held;
+    if (state.last_trust_notification)
+        j["last_trust_notification"] = *state.last_trust_notification;
 
     // Atomic write: write to .tmp then rename.
     fs::path tmp = state_path(den_home).string() + ".tmp";
@@ -538,11 +569,63 @@ MaintenanceReport run_maintenance_cycle(const fs::path& cellar, const fs::path& 
                          (hooks.in_window ? hooks.in_window(settings.upgrade_window)
                                           : in_maintenance_window(settings.upgrade_window));
         if (in_window) {
+            // Screen against the unattended trust policy first: a held-back
+            // upgrade (and every pending upgrade that would install it) sits
+            // out the pass and stays pending.
+            std::map<std::string, std::string> held;
+            if (hooks.trust_screen) {
+                try {
+                    held = hooks.trust_screen(state.pending);
+                } catch (const std::exception& e) {
+                    // Fail closed: an unscreened pass would install unchecked.
+                    state.errors.push_back(std::string("trust screen: ") + e.what());
+                    log_daemon(den_home,
+                               std::string("trust screen failed, not upgrading: ") + e.what());
+                    report.pending = state.pending.size();
+                    return report;
+                }
+            }
+            std::vector<PendingUpgrade> held_pending;
+            std::vector<DeferredUpgrade> trust_held;
+            std::vector<std::string> newly_held;
+            std::erase_if(state.pending, [&](const PendingUpgrade& pu) {
+                auto it = held.find(pu.name);
+                if (it == held.end())
+                    return false;
+                held_pending.push_back(pu);
+                trust_held.push_back({pu.name, pu.installed, pu.available, it->second});
+                bool before =
+                    std::any_of(state.trust_held.begin(), state.trust_held.end(),
+                                [&](const DeferredUpgrade& d) {
+                                    return d.name == pu.name && d.available == pu.available;
+                                });
+                if (!before)
+                    newly_held.push_back(pu.name);
+                return true;
+            });
             UpgradePassResult res = run_upgrade_pass(cellar, den_home, state, hooks.apply);
+            for (auto& pu : held_pending)
+                state.pending.push_back(std::move(pu));
+            std::sort(
+                state.pending.begin(), state.pending.end(),
+                [](const PendingUpgrade& a, const PendingUpgrade& b) { return a.name < b.name; });
+            state.trust_held = std::move(trust_held);
             report.applied = res.applied.size();
             report.deferred = res.deferred.size();
+            report.trust_held = state.trust_held.size();
+            for (const auto& h : state.trust_held)
+                log_daemon(den_home, "held back " + h.name + " " + h.available + ": " + h.reason);
+            if (!newly_held.empty() && hooks.notify_held) {
+                try {
+                    if (hooks.notify_held(newly_held))
+                        state.last_trust_notification = now_secs();
+                } catch (const std::exception& e) {
+                    state.errors.push_back(std::string("notify: ") + e.what());
+                }
+            }
             log_daemon(den_home, "upgrade pass: applied " + std::to_string(report.applied) +
-                                     ", deferred " + std::to_string(report.deferred));
+                                     ", deferred " + std::to_string(report.deferred) +
+                                     ", held back " + std::to_string(report.trust_held));
         } else {
             log_daemon(den_home,
                        "outside upgrade window '" + settings.upgrade_window + "', not upgrading");
@@ -561,9 +644,19 @@ void apply_daemon_upgrade(const Config& config, PackageProvider& provider, const
     // the pass logs activity for those as usual.
     // A dependent that would move under a running process defers the whole
     // batch (the pass already checked pu's own keg).
+    // A dependent is screened by the unattended trust policy like any
+    // pending upgrade; a held one stays put (and is in the trust ledger).
     VersionChangeOptions opts;
     opts.upgrade_dependents = true;
     opts.keg_in_use = [](const fs::path& keg) { return !files_in_use_under(keg).empty(); };
+    if (const TrustPolicy policy = current_trust_policy(config); policy.unattended) {
+        opts.screen_dependents = [&config, &idx, policy](const std::vector<VersionChange>& cs) {
+            std::vector<PendingUpgrade> pending;
+            for (const auto& c : cs)
+                pending.push_back({c.name, c.from, c.to});
+            return screen_unattended_upgrades(config, idx, pending, policy);
+        };
+    }
     auto res = apply_version_changes(config, provider, &idx,
                                      {{pu.name, pu.installed, pu.available}}, opts);
     if (!res.deferred_in_use.empty()) {
@@ -583,6 +676,34 @@ void apply_daemon_upgrade(const Config& config, PackageProvider& provider, const
 }
 
 namespace {
+
+// Post a macOS notification without waiting for it (osascript is detached;
+// the shell exits at once). Elsewhere there is nothing to post to: the hold
+// is in the daemon log, `den daemon status` and `den doctor`.
+bool post_desktop_notification(const std::string& title, const std::string& body) {
+#ifdef __APPLE__
+    auto quote = [](const std::string& s) {
+        // AppleScript string inside a single-quoted shell word.
+        std::string out = "\"";
+        for (char c : s) {
+            if (c == '"' || c == '\\')
+                out += '\\';
+            if (c == '\'')
+                out += "'\\''";
+            else
+                out += c;
+        }
+        return out + "\"";
+    };
+    std::string cmd = "/usr/bin/osascript -e 'display notification " + quote(body) +
+                      " with title " + quote(title) + "' >/dev/null 2>&1 &";
+    return std::system(cmd.c_str()) == 0;
+#else
+    (void)title;
+    (void)body;
+    return false;
+#endif
+}
 
 // Real hooks for the running daemon. Only den-managed homebrew packages in
 // the active env are considered — Homebrew's own kegs and shared opt links
@@ -613,6 +734,12 @@ MaintenanceHooks make_live_hooks(const Config& config, PackageIndex& idx, bool& 
             throw UserError("homebrew provider not registered");
         apply_daemon_upgrade(config, *provider, idx, pu);
         applied_any = true;
+    };
+    h.trust_screen = live_trust_screen(config, idx);
+    h.notify_held = [&config](const std::vector<std::string>& names) {
+        if (!current_trust_policy(config).notify)
+            return false;
+        return post_desktop_notification("den", held_back_notification(names));
     };
     return h;
 }
@@ -645,6 +772,10 @@ void run_daemon(const Config& config, bool once) {
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
     ::sigaction(SIGTERM, &sa, nullptr);
+
+    // Nobody watches the daemon's installs: the unattended trust policy
+    // applies to everything it does (trust/unattended.h).
+    set_unattended(std::string("daemon"));
 
     SPDLOG_INFO("daemon: started (pid {})", ::getpid());
     log_daemon(den_home, std::string("daemon started (pid ") + std::to_string(::getpid()) +

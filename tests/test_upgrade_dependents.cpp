@@ -509,6 +509,36 @@ TEST_SUITE("upgrade_dependents") {
         CHECK(f.prov.installed_log == std::vector<std::string>{"depa@2.0"});
     }
 
+    TEST_CASE("a dependent the trust screen holds back is reported and left") {
+        Fixture f;
+        f.kegs.depa("2.0", 2);
+        f.kegs.app("1.0_1", "2.0", 2);
+        f.set_index({pkg("depa", "2.0", 0), pkg("app", "1.0_1", 1, {"depa"})});
+        VersionChangeOptions opts;
+        opts.upgrade_dependents = true;
+        std::vector<std::string> screened;
+        opts.screen_dependents = [&](const std::vector<VersionChange>& cs) {
+            std::map<std::string, std::string> held;
+            for (const auto& c : cs) {
+                screened.push_back(c.name + "@" + c.to);
+                held[c.name] = "single source";
+            }
+            return held;
+        };
+        VersionChangeResult res;
+        quiet([&] {
+            res = apply_version_changes(f.cfg, f.prov, &f.idx, {{"depa", "1.0", "2.0"}}, opts);
+        });
+        CHECK(screened == std::vector<std::string>{"app@1.0_1"});
+        REQUIRE(res.held_dependents.size() == 1);
+        CHECK(res.held_dependents[0].first.name == "app");
+        CHECK(res.held_dependents[0].second == "single source");
+        CHECK(res.dependents.empty());
+        CHECK(f.manifest("depa") == "2.0");
+        CHECK(f.manifest("app") == "1.0");
+        CHECK(f.prov.installed_log == std::vector<std::string>{"depa@2.0"});
+    }
+
     TEST_CASE("a dependency that rolls back takes its dependent with it") {
         Fixture f;
         f.kegs.depa("2.0", 2);

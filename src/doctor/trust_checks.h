@@ -39,8 +39,9 @@ struct TrustReport {
     std::vector<std::string> active_advanced_layers;      // 🎯T44 layers
     size_t replica_entry_count = 0;                       // entries in the snapshot
     std::string replica_source = "none"; // ReplicaSource::describe(): path or "embedded snapshot"
-    std::optional<std::string> replica_error; // why an Unreadable snapshot could not be read
-    DegradedInstallSummary degraded_installs; // kegs installed on a single hash source
+    std::optional<std::string> replica_error;   // why an Unreadable snapshot could not be read
+    DegradedInstallSummary degraded_installs;   // kegs installed on a single hash source
+    std::vector<std::string> settings_problems; // trust_settings_problems(): bad trust.* values
 };
 
 /// Inspect the live configuration and build a trust report.

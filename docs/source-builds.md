@@ -28,6 +28,28 @@ out:
   `opt_include`, and the rest resolve to `<prefix>/opt/<dep>` (or to the
   dependency's keg if it has no opt link yet).
 
+## Unattended source builds
+
+Interactive `den install -s` builds as described here. An unattended run
+(see [trust-model.md](trust-model.md#unattended-installs--trustunattended))
+does not build from source by default:
+
+* `trust.unattended_source_builds` is `off` by default: every unattended
+  source build is deferred and reported.
+* With `den set trust.unattended_source_builds allowlist`, a formula in
+  `trust.source_build_allowlist` (default `gettext,git,openssl@3,openssl@4,pkgconf`;
+  set it with `den set trust.source_build_allowlist "git,pkgconf"`) may build
+  unattended, but only when the source archive's hash is cross-checked
+  against the replica (key `<name>--<version>--source`). If only one source
+  vouches for it, the build is deferred and reported instead of built.
+* Hashes that disagree refuse the build in every mode.
+
+A deferred build is not attempted. It is recorded in the trust ledger
+(`reason: "unattended-source-build"`, with the setting or replica status
+that deferred it), shown by `den doctor` and `den trust review`, and the
+command exits non-zero. `den trust accept <formula>@<version>` lets that exact
+version build unattended once.
+
 ## What counts as an install step
 
 `make`/`gmake` with an `install`, `install-*` or `install_*` target (den
@@ -168,6 +190,19 @@ build. An index without the commit falls back to `master` with a warning.
 The source tarball must have a sha256, and so must every `resource` and
 external patch: the bundled Ruby build refuses one without, and does not fall
 back to the parser.
+
+**Resources.** The bundled Ruby build fetches every `resource` into den's
+source cache before the build starts, as
+`<cache>/sources/<name>-<version>--<resource><suffix>` (the resource name with
+anything but letters, digits and `._+@-` turned into `-`), and checks each
+against its sha256; a mismatch fails the build before any step runs.
+`resource("x").stage { … }` then unpacks that file into a scratch directory
+under `<cache>/build` and runs the block inside the archive's single top-level
+directory, if it has one; `dir.install resource("x")` moves the unpacked
+contents into `dir`. Homebrew's downloader and cache are not used. This is
+what git's macOS resources need: the `Authen::SASL` and `Net::SMTP::SSL` Perl
+modules (staged with a block) and the `html` and `man` pages (installed into
+a directory). A resource with its own patches is refused for now.
 
 ## Receipt
 

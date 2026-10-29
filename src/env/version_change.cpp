@@ -136,7 +136,7 @@ bool is_revision_bump(const std::string& installed, const Package& pkg) {
 void add_revision_bumped_dependents(const Config& config, const PackageIndex& idx,
                                     const std::string& pname, std::vector<VersionChange>& changes,
                                     std::vector<std::vector<size_t>>& brought_by,
-                                    VersionChangeResult& result) {
+                                    const VersionChangeOptions& opts, VersionChangeResult& result) {
     const auto per = resolve_per_provider(config.den_home, active_env_path(config.den_home));
     auto installed = per.find(pname);
     if (installed == per.end()) {
@@ -173,6 +173,17 @@ void add_revision_bumped_dependents(const Config& config, const PackageIndex& id
                 pinned.insert(name);
                 result.pinned_dependents.push_back({name, version, pkg->version});
                 continue;
+            }
+            if (opts.screen_dependents) {
+                VersionChange candidate{name, version, pkg->version};
+                auto held = opts.screen_dependents({candidate});
+                if (auto h = held.find(name); h != held.end()) {
+                    SPDLOG_WARN("{} {} held back ({}); not moving it to {} with {}", name, version,
+                                h->second, pkg->version, changes[by.front()].name);
+                    pinned.insert(name);
+                    result.held_dependents.emplace_back(std::move(candidate), h->second);
+                    continue;
+                }
             }
             SPDLOG_INFO("{} {} -> {}: revision bump for {}", name, version, pkg->version,
                         changes[by.front()].name);
@@ -283,7 +294,7 @@ VersionChangeResult apply_version_changes(const Config& config, PackageProvider&
     std::vector<std::vector<size_t>> brought_by(changes.size());
     const size_t requested = changes.size();
     if (opts.upgrade_dependents && idx) {
-        add_revision_bumped_dependents(config, *idx, pname, changes, brought_by, result);
+        add_revision_bumped_dependents(config, *idx, pname, changes, brought_by, opts, result);
     }
 
     // A dependent that would move under a running process holds back the

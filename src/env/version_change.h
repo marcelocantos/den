@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -55,6 +56,9 @@ struct VersionChangeResult {
     /// (VersionChangeOptions::keg_in_use). When set, nothing was poured or
     /// changed: the whole batch waits, so the dependency chain moves together.
     std::vector<VersionChange> deferred_in_use;
+    /// Dependents with a revision bump that `screen_dependents` held back
+    /// (`to` is the index version), with the screen's reason.
+    std::vector<std::pair<VersionChange, std::string>> held_dependents;
 };
 
 struct VersionChangeOptions {
@@ -77,6 +81,12 @@ struct VersionChangeOptions {
     /// its in-use probe, so a dependent it would otherwise move under a
     /// running process defers its whole dependency chain.
     std::function<bool(const fs::path& keg)> keg_in_use;
+    /// Optional screen for each dependent `upgrade_dependents` would add
+    /// (the unattended trust policy): returns name -> reason for one to hold
+    /// back. A held dependent stays at its version, like a pinned one, and
+    /// is listed in `held_dependents`.
+    std::function<std::map<std::string, std::string>(const std::vector<VersionChange>&)>
+        screen_dependents;
 };
 
 /// Move packages in the active environment to new versions as one unit per
