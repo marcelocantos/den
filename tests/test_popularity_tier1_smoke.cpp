@@ -45,8 +45,7 @@
 #include <string>
 
 // Tier-1 smoke definition is located relative to the source tree.
-// CMakeLists.txt already defines DEN_CORPUS_DIR; we piggyback on it to
-// locate the smoke directory one level up.
+// CMakeLists.txt defines DEN_SOURCE_DIR; tests/smoke lives under it.
 #ifndef DEN_TIER1_SMOKE_JSON
 #define DEN_TIER1_SMOKE_JSON ""
 #endif
@@ -145,8 +144,7 @@ TEST_SUITE("tier1_smoke_regression [T69]") {
     // Locate tier1.json.  Two candidate paths (runtime checks, not preprocessor
     // string comparisons which are not valid in #if expressions):
     //   1. DEN_TIER1_SMOKE_JSON compile-time override (if non-empty string macro).
-    //   2. Sibling of DEN_CORPUS_DIR: <corpus_root>/../smoke/tier1.json
-    //      where DEN_CORPUS_DIR == <src>/tests/corpus/homebrew-core.
+    //   2. <DEN_SOURCE_DIR>/tests/smoke/tier1.json.
     static fs::path tier1_json() {
         fs::path p;
 #if defined(DEN_TIER1_SMOKE_JSON)
@@ -156,11 +154,9 @@ TEST_SUITE("tier1_smoke_regression [T69]") {
                 return p;
         }
 #endif
-#if defined(DEN_CORPUS_DIR)
-        if (std::string_view(DEN_CORPUS_DIR).size() > 0) {
-            // DEN_CORPUS_DIR = .../tests/corpus/homebrew-core
-            // tier1.json     = .../tests/smoke/tier1.json
-            p = fs::path(DEN_CORPUS_DIR).parent_path().parent_path() / "smoke" / "tier1.json";
+#if defined(DEN_SOURCE_DIR)
+        if (std::string_view(DEN_SOURCE_DIR).size() > 0) {
+            p = fs::path(DEN_SOURCE_DIR) / "tests" / "smoke" / "tier1.json";
             if (fs::is_regular_file(p))
                 return p;
         }
