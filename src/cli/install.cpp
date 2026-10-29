@@ -4,6 +4,7 @@
 #include "install.h"
 
 #include "../activity/activity.h"
+#include "../build/source_plan.h"
 #include "../cask/cask.h"
 #include "../core/error.h"
 #include "../core/version.h"
@@ -18,6 +19,7 @@
 
 #include <iostream>
 #include <map>
+#include <set>
 #include <vector>
 
 namespace den {
@@ -85,6 +87,54 @@ void install_packages(const Config& config, PackageProvider& provider, const Pac
     if (report_link_count(res.links, cask_only(config, names)))
         std::cout << "  " << res.links << " symlinks\n";
     report_version_change_failures(config, res, "install");
+}
+
+void install_from_source(const Config& config, const PackageIndex& idx,
+                         const std::vector<std::string>& names, const MaterialiseOptions& link_opts,
+                         const SourcePlanRunner& runner) {
+    auto active = active_env_path(config.den_home);
+    // G3: plan the whole chain first. Dependencies pour when their
+    // bottle pours into den's Cellar and are built from source when
+    // it can't (a fixed Cellar such as /opt/homebrew/Cellar); build
+    // dependencies of every keg built are installed too.
+    // Each source build goes through trust.unattended_source_builds
+    // (trust/unattended.h): off, or allowlisted formulae whose source
+    // hash cross-checks. Everything else is deferred and reported,
+    // along with whatever needs it.
+    SourcePlanOptions plan_opts;
+    plan_opts.force_source.insert(names.begin(), names.end());
+    auto plan = plan_source_build(config, idx, names, plan_opts);
+    std::cout << "==> Source build plan:\n" << describe_source_plan(plan);
+    auto res = run_source_plan(config, idx, plan, current_trust_policy(config), runner);
+    const std::set<std::string> targets(names.begin(), names.end());
+    size_t deferred_targets = 0;
+    with_manifest(config.den_home, active, [&](Manifest& m) {
+        auto& bucket = m.packages["homebrew"];
+        auto& auto_bucket = m.auto_deps["homebrew"];
+        for (const auto& step : plan.steps) {
+            if (res.is_deferred(step.name)) {
+                deferred_targets += targets.count(step.name);
+                continue;
+            }
+            if (targets.count(step.name)) {
+                bucket[step.name] = step.version;
+                auto_bucket.erase(step.name);
+            } else if (!step.build_only && !bucket.count(step.name)) {
+                // Runtime dependencies join the environment as the
+                // bottle path records them; build-only ones stay out.
+                bucket[step.name] = step.version;
+                auto_bucket.insert(step.name);
+            }
+        }
+    });
+    if (deferred_targets < names.size()) {
+        auto links = materialise(config.den_home, config.store, active, &idx, link_opts);
+        std::cout << "Materialised: " << links << " symlinks.\n";
+    }
+    if (!res.deferred.empty()) {
+        throw UserError("deferred " + std::to_string(res.deferred.size()) +
+                        " unattended source build step(s); nothing was installed for them");
+    }
 }
 
 void uninstall_packages(const Config& config, PackageProvider& provider,

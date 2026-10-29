@@ -5,12 +5,14 @@
 //  - :any / :any_skip_relocation bottles pour into any Cellar;
 //  - a bottle whose `cellar` is a fixed path (/opt/homebrew/Cellar,
 //    /usr/local/Cellar, /home/linuxbrew/.linuxbrew/Cellar) pours only into
-//    that Cellar, so den refuses it up front (naming the formula, suggesting a
-//    source build) and never leaves a keg behind;
+//    that Cellar, so den builds it from source instead when it can
+//    (build/source_plan.h) and otherwise refuses it up front, naming the
+//    formula, never leaving a keg behind;
 //  - running out of Mach-O header space while relocating is a hard error and
 //    the partly relocated keg is rolled back.
 
 #include "build/relocate.h"
+#include "build/source_plan.h"
 #include "core/config.h"
 #include "core/error.h"
 #include "doctor/doctor.h"
@@ -138,7 +140,7 @@ TEST_SUITE("bottle::fixed_cellar") {
         CHECK(required_bottle_cellar("arm64_linux", legacy) == "/home/linuxbrew/.linuxbrew/Cellar");
     }
 
-    TEST_CASE("install refuses a fixed-cellar bottle for another Cellar, naming the formula") {
+    TEST_CASE("install builds a fixed-cellar keg for another Cellar from source, else refuses") {
         auto tmp = fresh_tmp("fixed-cellar-refuse");
         auto cfg = tmp_config(tmp, tmp / "prefix" / "Cellar");
 
@@ -155,6 +157,19 @@ TEST_SUITE("bottle::fixed_cellar") {
         q.source_url.reset();
         idx.packages["nosource"] = q;
 
+        std::vector<std::string> built;
+        SourcePlanRunner runner;
+        runner.pour = [](const Config&, const Package& pkg) {
+            FAIL("unexpected pour of " << pkg.name);
+        };
+        runner.build = [&](const Config& c, const PackageIndex&, const std::string& n,
+                           const std::string& v) {
+            built.push_back(n);
+            fs::create_directories(c.store / n / v);
+            return c.store / n / v;
+        };
+        set_source_plan_runner_for_testing(&runner);
+
         HomebrewProvider provider(&idx);
         std::string msg;
         try {
@@ -162,15 +177,10 @@ TEST_SUITE("bottle::fixed_cellar") {
         } catch (const UserError& e) {
             msg = e.what();
         }
-        REQUIRE_FALSE(msg.empty());
-        CHECK(msg.find("fixedprobe 2.0") != std::string::npos);
-        CHECK(msg.find("/opt/homebrew/Cellar") != std::string::npos);
-        CHECK(msg.find(cfg.store.string()) != std::string::npos);
-        CHECK(msg.find("den install --build-from-source fixedprobe") != std::string::npos);
-        // Refused before download: no keg, no archive fetched, no opt link.
-        CHECK_FALSE(fs::exists(cfg.store / "fixedprobe"));
+        CHECK_MESSAGE(msg.empty(), msg);
+        CHECK(built == std::vector<std::string>{"fixedprobe"});
+        // The bottle it can't pour was never fetched.
         CHECK(fs::is_empty(cfg.cache / "archives"));
-        CHECK_FALSE(fs::exists(cfg.prefix / "opt" / "fixedprobe"));
         CHECK_FALSE(prefetch_bottle(cfg, p).has_value());
 
         std::string msg2;
@@ -179,8 +189,16 @@ TEST_SUITE("bottle::fixed_cellar") {
         } catch (const UserError& e) {
             msg2 = e.what();
         }
+        set_source_plan_runner_for_testing(nullptr);
+        CHECK(msg2.find("nosource 2.0") != std::string::npos);
+        CHECK(msg2.find("/opt/homebrew/Cellar") != std::string::npos);
+        CHECK(msg2.find(cfg.store.string()) != std::string::npos);
         CHECK(msg2.find("No source build is available for nosource") != std::string::npos);
+        // Refused before download: no keg, no archive fetched, no opt link.
         CHECK_FALSE(fs::exists(cfg.store / "nosource"));
+        CHECK(fs::is_empty(cfg.cache / "archives"));
+        CHECK_FALSE(fs::exists(cfg.prefix / "opt" / "nosource"));
+        CHECK(built.size() == 1);
         fs::remove_all(tmp);
     }
 

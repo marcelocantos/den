@@ -4,6 +4,7 @@
 #include "homebrew_provider.h"
 
 #include "../build/relocate.h"
+#include "../build/source_plan.h"
 #include "../cask/cask.h"
 #include "../core/config.h"
 #include "../core/error.h"
@@ -430,6 +431,11 @@ InstallResult HomebrewProvider::install(const Config& config, std::string_view n
         } else if (::den::is_installed(config.store, keg_name(p->name), p->version)) {
             // Already present in the shared Cellar — skip the download/extract.
             SPDLOG_DEBUG("{} {} already installed", p->name, p->version);
+        } else if (has_source_build(*p) && !foreign_fixed_cellar(config, *p).empty()) {
+            // G9: a bottle built for a fixed Cellar that isn't den's can't be
+            // poured here; build it from source instead (trust/unattended.h
+            // decides whether an unattended run may).
+            route_to_source_build(config, *idx_, *p);
         } else {
             install_one_qualified(config, *p);
         }

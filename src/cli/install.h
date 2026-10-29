@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "../build/source_plan.h"
 #include "../core/config.h"
 #include "../env/environment.h"
 #include "../env/version_change.h"
@@ -36,6 +37,15 @@ void report_version_change_failures(const Config& config, const VersionChangeRes
 void install_packages(const Config& config, PackageProvider& provider, const PackageIndex& idx,
                       const std::vector<std::string>& names,
                       const MaterialiseOptions& link_opts = {});
+
+/// `den install -s`: plan the chain for `names` (G3), run it through
+/// `runner`, record the targets and their runtime dependencies in the active
+/// env's manifest (build-only kegs stay out), and materialise the env, which
+/// links every recorded keg and runs its declarative post_install steps,
+/// poured or built alike. Throws a UserError when any step was deferred.
+void install_from_source(const Config& config, const PackageIndex& idx,
+                         const std::vector<std::string>& names, const MaterialiseOptions& link_opts,
+                         const SourcePlanRunner& runner);
 
 /// Uninstall packages by name. Dispatches each uninstall through `provider`
 /// (Homebrew keeps files in the shared Cellar; other providers may reclaim),
