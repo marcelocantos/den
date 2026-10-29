@@ -34,14 +34,27 @@ fs::path select_dep_keg(const fs::path& cellar, const std::string& dep);
 
 /// Rewrite a Mach-O install name / rpath that points through Homebrew's
 /// shared opt link (`@@HOMEBREW_PREFIX@@/opt/<dep>/...`) to the exact keg
-/// den binds instead (`<cellar>/<dep>/<version>/...`). The package's own name
-/// maps to `self_dir`. Den never depends on Homebrew's opt links (which
-/// Homebrew may repoint to an ABI-incompatible version) for Mach-O load
-/// commands; it maintains them only for text references such as shebangs, and
-/// never repoints one Homebrew owns (ensure_prefix_opt_link). Returns the input unchanged when no
-/// keg can be found.
+/// (`<cellar>/<dep>/<version>/...`). The package's own name maps to
+/// `self_dir`. Returns the input unchanged when no keg can be found. Used by
+/// bind_opt_reference wherever den cannot rely on the opt link.
 std::string pin_opt_reference(const std::string& name, const fs::path& cellar,
                               const std::string& self_name, const fs::path& self_dir);
+
+/// How a bottle's `@@HOMEBREW_PREFIX@@/opt/<dep>/...` load command is bound.
+/// Den binds through `<prefix>/opt/<dep>` (as Homebrew does) when den owns
+/// that link: it is missing or dangling (den creates it) or it resolves to a
+/// keg of `<dep>` den poured. A dependency upgrade then moves one link
+/// instead of leaving every dependent on its old keg. Den pins to the exact
+/// keg (pin_opt_reference) when it cannot rely on the link: in a prefix
+/// shared with Homebrew (`shared_prefix`; Homebrew may repoint any opt link
+/// there to an ABI-incompatible version), when `opt/<dep>` is not a
+/// symlink, or when it resolves to a keg den did not pour. The package's own
+/// name always maps to `self_dir`, so several versions of one keg never load
+/// each other's libraries. References that are not opt references are
+/// returned unchanged.
+std::string bind_opt_reference(const std::string& name, const fs::path& cellar,
+                               const std::string& self_name, const fs::path& self_dir,
+                               bool shared_prefix);
 
 /// Resolve a Mach-O tool (otool, install_name_tool). Uses the PATH shim when
 /// it works; otherwise falls back to /Library/Developer/CommandLineTools,
@@ -94,6 +107,10 @@ struct RelocationOptions {
     /// Portable (:any_skip_relocation) bottles: Homebrew still replaces text
     /// placeholders on pour but skips dynamic-linkage (Mach-O/ELF) rewriting.
     bool skip_linkage = false;
+    /// The store is Homebrew's own Cellar (Config::shares_homebrew_cellar).
+    /// Dependency load commands are then pinned to exact kegs rather than
+    /// bound through opt links Homebrew may repoint (bind_opt_reference).
+    bool shared_prefix = false;
 };
 
 /// Full relocation pass for a poured bottle.

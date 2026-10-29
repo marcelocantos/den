@@ -141,9 +141,10 @@ uint32_t link_package(const fs::path& pkg_path, const fs::path& env_dir, const s
     // <prefix>/opt/<name> is Homebrew's shared, single-version link.
     // Relocated text files (node shebangs, wrapper scripts) reference it, so
     // den creates it when missing or dangling, but never repoints a link that
-    // resolves to a keg Homebrew owns (see ensure_prefix_opt_link). Mach-O
-    // load commands don't rely on it: they are pinned to the exact dependency
-    // keg (pin_opt_reference). Only kegs that sit in a Homebrew-style
+    // resolves to a keg Homebrew owns (see ensure_prefix_opt_link). Bottle Mach-O
+    // load commands rely on it only where den owns it; elsewhere (and always
+    // in a prefix shared with Homebrew) they are pinned to the exact
+    // dependency keg (bind_opt_reference). Only kegs that sit in a Homebrew-style
     // <prefix>/Cellar/<name>/<version> layout get a prefix link here; other
     // providers' package roots are left alone.
     {

@@ -3,6 +3,7 @@
 
 #include "version_change.h"
 
+#include "../build/linkage_scan.h"
 #include "../core/version.h"
 #include "../store/pins.h"
 #include "../store/store.h"
@@ -279,6 +280,75 @@ bool undo_pour(const Config& config, const Snapshot& s) {
     return true;
 }
 
+/// Linkage verification: for each change that moves an installed package to
+/// a new keg, the libraries kegs active after the batch load through
+/// `<prefix>/opt/<name>` that the old keg had and the new one lacks, one line
+/// each, by change index. Only kegs whose runtime closure includes a moving
+/// package are scanned.
+std::map<size_t, std::vector<std::string>>
+unverified_linkage(const Config& config, PackageProvider& provider, const PackageIndex& idx,
+                   const std::string& pname, const std::vector<VersionChange>& changes,
+                   const std::vector<Snapshot>& snaps) {
+    std::map<size_t, std::vector<std::string>> out;
+    std::map<std::string, size_t> moving;
+    for (size_t i = 0; i < changes.size(); ++i) {
+        const auto& c = changes[i];
+        std::error_code ec;
+        if (c.from.empty() || c.to.empty() || c.from == c.to || snaps[i].new_keg.empty() ||
+            !fs::is_directory(snaps[i].new_keg, ec)) {
+            continue;
+        }
+        moving[keg_name(c.name)] = i;
+    }
+    if (moving.empty()) {
+        return out;
+    }
+    std::map<std::string, std::string> after;
+    const auto per = resolve_per_provider(config.den_home, active_env_path(config.den_home));
+    if (auto it = per.find(pname); it != per.end()) {
+        after = it->second;
+    }
+    for (const auto& c : changes) {
+        if (!c.to.empty()) {
+            after[c.name] = c.to;
+        }
+    }
+    const auto opt_dir = config.store.parent_path() / "opt";
+    for (const auto& [name, version] : after) {
+        const auto self = keg_name(name);
+        bool relevant = false;
+        for (const auto& dep : runtime_closure(&idx, {name})) {
+            relevant = relevant || (dep != self && moving.count(dep));
+        }
+        std::error_code ec;
+        const auto keg = provider.package_root(config, self, version);
+        if (!relevant || !fs::is_directory(keg, ec)) {
+            continue;
+        }
+        std::set<std::string> seen;
+        for (const auto& load : keg_opt_loads(keg, opt_dir)) {
+            auto m = moving.find(load.dep);
+            if (m == moving.end() || m->first == self) {
+                continue;
+            }
+            const auto& c = changes[m->second];
+            const auto old_keg = provider.package_root(config, keg_name(c.name), c.from);
+            std::error_code fec;
+            if (!fs::exists(old_keg / load.tail, fec) ||
+                fs::exists(snaps[m->second].new_keg / load.tail, fec)) {
+                continue;
+            }
+            auto line = name + " " + version + ": " + load.file.lexically_relative(keg).string() +
+                        " loads " + load.load;
+            if (seen.insert(line).second) {
+                SPDLOG_WARN("linkage: {}, which {} {} does not have", line, c.name, c.to);
+                out[m->second].push_back(std::move(line));
+            }
+        }
+    }
+    return out;
+}
+
 } // namespace
 
 VersionChangeResult apply_version_changes(const Config& config, PackageProvider& provider,
@@ -355,10 +425,68 @@ VersionChangeResult apply_version_changes(const Config& config, PackageProvider&
         }
     }
 
+    // Linkage verification, before anything switches: a change whose new
+    // keg drops a library installed kegs load through its opt link does not
+    // reach the manifest, and neither does a dependent it brought in.
+    std::map<size_t, std::vector<std::string>> unverified;
+    if (opts.verify_linkage && idx) {
+        unverified = unverified_linkage(config, provider, *idx, pname, changes, snaps);
+    }
+    std::map<size_t, std::vector<fs::path>> conflicted;
+    std::map<size_t, std::string> undone_with;
+    auto failed = [&](size_t i) {
+        return conflicted.count(i) || unverified.count(i) || undone_with.count(i);
+    };
+    // Every dependent that joined the batch only because of a failed change
+    // fails with it.
+    auto cascade = [&] {
+        for (bool grew = true; grew;) {
+            grew = false;
+            for (size_t i = 0; i < changes.size(); ++i) {
+                const auto& c = changes[i];
+                if (failed(i) || c.from.empty() || c.from == c.to) {
+                    continue;
+                }
+                for (auto b : brought_by[i]) {
+                    if (failed(b)) {
+                        undone_with[i] = changes[b].name;
+                        grew = true;
+                        break;
+                    }
+                }
+            }
+        }
+    };
+    // Opt links the batch moved go back, except where a change that stays
+    // applied (or something it depends on) still needs them. A rolled-back
+    // package's own link always goes back.
+    auto restore_failed_opt_links = [&] {
+        std::vector<std::string> kept;
+        std::set<std::string> rolled;
+        for (size_t i = 0; i < changes.size(); ++i) {
+            if (failed(i)) {
+                rolled.insert(keg_name(changes[i].name));
+            } else {
+                kept.push_back(changes[i].name);
+            }
+        }
+        const auto needed = runtime_closure(idx, kept);
+        restore_opt_links(opt_dir, opt_before, [&](const std::string& name) {
+            return !rolled.count(name) && needed.count(name);
+        });
+    };
+    if (!unverified.empty()) {
+        cascade();
+        restore_failed_opt_links();
+    }
+
     with_manifest(config.den_home, active, [&](Manifest& m) {
         auto& bucket = m.packages[pname];
         auto& auto_bucket = m.auto_deps[pname];
         for (size_t i = 0; i < changes.size(); ++i) {
+            if (failed(i)) {
+                continue;
+            }
             bucket[changes[i].name] = changes[i].to;
             if (!opts.record_auto_deps) {
                 continue;
@@ -384,38 +512,22 @@ VersionChangeResult apply_version_changes(const Config& config, PackageProvider&
 
     // A change already in the manifest that cannot be linked is undone, and
     // so is every dependent that joined the batch only because of it.
-    std::map<size_t, std::vector<fs::path>> conflicted;
     for (size_t i = 0; i < changes.size(); ++i) {
         const auto& c = changes[i];
         auto it = by_pkg.find(keg_name(c.name));
-        if (it == by_pkg.end() || c.from.empty() || c.from == c.to) {
+        if (it == by_pkg.end() || c.from.empty() || c.from == c.to || failed(i)) {
             continue;
         }
         conflicted[i] = std::move(it->second);
         by_pkg.erase(it);
     }
-    std::map<size_t, std::string> undone_with;
-    for (bool grew = true; grew;) {
-        grew = false;
-        for (size_t i = 0; i < changes.size(); ++i) {
-            const auto& c = changes[i];
-            if (conflicted.count(i) || undone_with.count(i) || c.from.empty() || c.from == c.to) {
-                continue;
-            }
-            for (auto b : brought_by[i]) {
-                if (conflicted.count(b) || undone_with.count(b)) {
-                    undone_with[i] = changes[b].name;
-                    grew = true;
-                    break;
-                }
-            }
-        }
-    }
+    cascade();
     std::vector<size_t> undo;
     for (size_t i = 0; i < changes.size(); ++i) {
         auto conf = conflicted.find(i);
         auto with = undone_with.find(i);
-        if (conf == conflicted.end() && with == undone_with.end()) {
+        auto unv = unverified.find(i);
+        if (conf == conflicted.end() && with == undone_with.end() && unv == unverified.end()) {
             result.applied.push_back(changes[i]);
             continue;
         }
@@ -423,6 +535,8 @@ VersionChangeResult apply_version_changes(const Config& config, PackageProvider&
         rb.change = changes[i];
         if (conf != conflicted.end()) {
             rb.conflicts = std::move(conf->second);
+        } else if (unv != unverified.end()) {
+            rb.broken_loads = std::move(unv->second);
         } else {
             rb.with = with->second;
         }
@@ -459,21 +573,7 @@ VersionChangeResult apply_version_changes(const Config& config, PackageProvider&
                 result.conflicts.push_back(std::move(c));
             }
         }
-        // Opt links the batch moved go back too, except where a change that
-        // stays applied (or something it depends on) still needs them. A
-        // rolled-back package's own link always goes back.
-        std::vector<std::string> kept;
-        std::set<std::string> rolled;
-        for (const auto& c : result.applied) {
-            kept.push_back(c.name);
-        }
-        for (auto i : undo) {
-            rolled.insert(keg_name(changes[i].name));
-        }
-        const auto needed = runtime_closure(idx, kept);
-        restore_opt_links(opt_dir, opt_before, [&](const std::string& name) {
-            return !rolled.count(name) && needed.count(name);
-        });
+        restore_failed_opt_links();
         for (size_t k = 0; k < undo.size(); ++k) {
             if (opts.install) {
                 result.rolled_back[k].keg_removed = undo_pour(config, snaps[undo[k]]);
@@ -496,6 +596,28 @@ std::string describe_rollback(const fs::path& prefix, const RolledBackChange& rb
             out << "; the " << c.to << " keg den poured was removed";
         }
         out << ".";
+        return out.str();
+    }
+    if (!rb.broken_loads.empty()) {
+        out << verb << " of " << c.name << " " << c.from << " -> " << c.to
+            << " was rolled back before switching: " << c.name << " " << c.to << " no longer has "
+            << rb.broken_loads.size() << " librar" << (rb.broken_loads.size() == 1 ? "y" : "ies")
+            << " that installed packages load through "
+            << (prefix / "opt" / keg_name(c.name)).string()
+            << ", and the index has no rebuilt (revision-bumped) version of them yet:\n";
+        size_t shown = 0;
+        for (const auto& line : rb.broken_loads) {
+            if (shown++ == max_paths) {
+                out << "  ... and " << (rb.broken_loads.size() - max_paths) << " more\n";
+                break;
+            }
+            out << "  " << line << "\n";
+        }
+        out << c.name << " stays at " << c.from << " (still linked)";
+        if (rb.keg_removed) {
+            out << "; the " << c.to << " keg den poured was removed";
+        }
+        out << ". Try again once the index has rebuilt them.";
         return out.str();
     }
     out << verb << " of " << c.name << " " << c.from << " -> " << c.to

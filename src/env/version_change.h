@@ -37,6 +37,11 @@ struct RolledBackChange {
     /// Set for a dependent that joined the batch only because `with` (one of
     /// its runtime dependencies) moved; it is undone when `with` is.
     std::string with;
+    /// Set when the new keg fails linkage verification: libraries installed
+    /// kegs load through `<prefix>/opt/<name>` that the old keg had and the
+    /// new one does not, one "app 1.0: bin/app loads <path>" line each. The
+    /// change is undone before anything switches.
+    std::vector<std::string> broken_loads;
 };
 
 struct VersionChangeResult {
@@ -81,6 +86,13 @@ struct VersionChangeOptions {
     /// its in-use probe, so a dependent it would otherwise move under a
     /// running process defers its whole dependency chain.
     std::function<bool(const fs::path& keg)> keg_in_use;
+    /// Before the manifest switches, check that every keg active after the
+    /// batch still finds the libraries it loads through `<prefix>/opt/<dep>`
+    /// for each dependency the batch moves (a library the old keg had and the
+    /// new keg lacks, such as a soname bump with no rebuilt dependent, fails).
+    /// A change that fails is rolled back with its brought-in dependents
+    /// (RolledBackChange::broken_loads). Needs an index.
+    bool verify_linkage = true;
     /// Optional screen for each dependent `upgrade_dependents` would add
     /// (the unattended trust policy): returns name -> reason for one to hold
     /// back. A held dependent stays at its version, like a pinned one, and

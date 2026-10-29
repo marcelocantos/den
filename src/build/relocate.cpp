@@ -6,6 +6,7 @@
 #include "core/error.h"
 #include "core/self_exe.h"
 #include "provider/exec.h"
+#include "store/store.h"
 
 #include <spdlog/spdlog.h>
 
@@ -247,10 +248,11 @@ void codesign_adhoc(const fs::path& file) {
 /// bytes; /opt/homebrew/Cellar is 20), so in-place null-pad patching is not
 /// sufficient for load commands.
 uint32_t fix_macho_placeholders(const fs::path& dir, const std::string& prefix,
-                                const std::string& cellar, const std::string& self_name) {
+                                const std::string& cellar, const std::string& self_name,
+                                bool shared_prefix) {
     auto rewrite = [&](const std::string& n) {
-        return expand_homebrew_placeholders(pin_opt_reference(n, cellar, self_name, dir), prefix,
-                                            cellar);
+        return expand_homebrew_placeholders(
+            bind_opt_reference(n, cellar, self_name, dir, shared_prefix), prefix, cellar);
     };
     uint32_t count = 0;
     std::error_code ec;
@@ -819,6 +821,82 @@ std::string pin_opt_reference(const std::string& name, const fs::path& cellar,
     return keg.string() + tail;
 }
 
+namespace {
+/// Split `@@HOMEBREW_PREFIX@@/opt/<dep>/<tail>` into dep and "/<tail>".
+bool split_opt_reference(const std::string& name, std::string& dep, std::string& tail) {
+    static constexpr std::string_view kOpt = "@@HOMEBREW_PREFIX@@/opt/";
+    if (!name.starts_with(kOpt)) {
+        return false;
+    }
+    const auto rest = name.substr(kOpt.size());
+    const auto slash = rest.find('/');
+    dep = rest.substr(0, slash);
+    tail = slash == std::string::npos ? "" : rest.substr(slash);
+    return !dep.empty();
+}
+
+/// Why den cannot rely on `<prefix>/opt/<dep>` for a load command, or empty
+/// when it can.
+std::string opt_link_unreliable(const fs::path& cellar, const std::string& dep,
+                                bool shared_prefix) {
+    if (shared_prefix) {
+        return "the prefix is shared with Homebrew";
+    }
+    const auto link = cellar.parent_path() / "opt" / dep;
+    std::error_code ec;
+    const auto st = fs::symlink_status(link, ec);
+    fs::path keg;
+    if (st.type() == fs::file_type::not_found) {
+        keg = select_dep_keg(cellar, dep); // den creates the link for it
+    } else if (st.type() != fs::file_type::symlink) {
+        return link.string() + " is not a symlink";
+    } else {
+        auto target = fs::read_symlink(link, ec);
+        if (!ec && target.is_relative()) {
+            target = link.parent_path() / target;
+        }
+        if (ec || !fs::exists(target, ec)) {
+            keg = select_dep_keg(cellar, dep); // dangling: den repoints it
+        } else {
+            const auto real = fs::weakly_canonical(target, ec);
+            const auto base = fs::weakly_canonical(cellar / dep, ec);
+            if (real.parent_path() != base) {
+                return link.string() + " resolves outside " + (cellar / dep).string();
+            }
+            keg = real;
+        }
+    }
+    if (keg.empty()) {
+        return "no keg of it in " + cellar.string();
+    }
+    if (!keg_owned_by_den(keg)) {
+        return link.string() + " names " + keg.string() + ", which den did not pour";
+    }
+    return {};
+}
+} // namespace
+
+std::string bind_opt_reference(const std::string& name, const fs::path& cellar,
+                               const std::string& self_name, const fs::path& self_dir,
+                               bool shared_prefix) {
+    std::string dep, tail;
+    if (!split_opt_reference(name, dep, tail)) {
+        return name;
+    }
+    if (dep == self_name) {
+        return self_dir.string() + tail;
+    }
+    const auto why = opt_link_unreliable(cellar, dep, shared_prefix);
+    if (why.empty()) {
+        return name; // expands to <prefix>/opt/<dep>/...
+    }
+    auto pinned = pin_opt_reference(name, cellar, self_name, self_dir);
+    if (pinned != name) {
+        SPDLOG_INFO("relocate: pinning {} to {} ({})", name, pinned, why);
+    }
+    return pinned;
+}
+
 std::string macho_tool(const std::string& tool) {
     static std::map<std::string, std::string> cache;
     if (auto it = cache.find(tool); it != cache.end()) {
@@ -879,7 +957,8 @@ void relocate_bottle(const fs::path& package_dir, const std::string& name,
         return;
     }
 #ifdef __APPLE__
-    auto macho_count = fix_macho_placeholders(package_dir, prefix_path, cellar_path, name);
+    auto macho_count =
+        fix_macho_placeholders(package_dir, prefix_path, cellar_path, name, options.shared_prefix);
     if (auto bad = unresolved_macho_placeholders(package_dir); !bad.empty()) {
         std::string msg = "relocation of '" + name +
                           "' left unresolved Homebrew placeholders "
