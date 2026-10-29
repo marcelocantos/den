@@ -68,6 +68,14 @@ std::string bundled_ruby_command(const Config& config, const fs::path& ruby_dir,
                                  const fs::path& formula_file, const std::string& name,
                                  const std::string& version);
 
+/// Called when a Ruby build of `name` `version` failed (`why`) and den is
+/// about to build it with its native recipe parser instead. With
+/// build.strict set in `den_home`'s config this throws UserError. Otherwise
+/// it prints a warning and records "fallback": "native" in `receipt`.
+void allow_native_fallback(const fs::path& den_home, const std::string& name,
+                           const std::string& version, const std::string& why,
+                           SourceBuildReceipt& receipt);
+
 /// The `brew` an unqualified `brew` would run on `path`, or empty.
 fs::path find_brew_on_path(const std::string& path);
 

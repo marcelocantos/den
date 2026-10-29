@@ -212,6 +212,10 @@ void mark_keg_owned(const fs::path& keg, const std::string& name, const std::str
                               {"path", source->formula_path}};
         receipt["toolchain"] = {{"sdk", source->toolchain_sdk}, {"clang", source->toolchain_clang}};
         receipt["opt_prefix_baked"] = source->opt_prefix_baked;
+        if (!source->fallback.empty()) {
+            receipt["fallback"] = source->fallback;
+            receipt["fallback_reason"] = source->fallback_reason;
+        }
     }
 
     // Write beside the final name, then rename into place, so a crash cannot
@@ -306,6 +310,8 @@ std::optional<SourceBuildReceipt> read_source_build_receipt(const fs::path& keg)
     r.toolchain_sdk = str(toolchain, "sdk");
     r.toolchain_clang = str(toolchain, "clang");
     r.opt_prefix_baked = str(*j, "opt_prefix_baked");
+    r.fallback = str(*j, "fallback");
+    r.fallback_reason = str(*j, "fallback_reason");
     return r;
 }
 

@@ -69,6 +69,25 @@ paths. Only what reaches a build command is rewritten to the opt path:
 The native fallback (no Ruby) uses the same mode. Its formula parser and the
 generic cmake, autotools and make recipes are configured with the opt path.
 
+### When the Ruby build fails
+
+den tries the bundled Ruby build first (macOS), then `brew ruby` when a brew
+serves den's prefix. If a Ruby build ran and failed, den builds with its
+native recipe parser instead, but not silently:
+
+* It prints a warning naming the Ruby failure (exit status and the last line
+  of its output).
+* The keg's receipt records `"fallback": "native"` and the reason in
+  `fallback_reason`.
+* `den doctor` marks the keg `[fallback=native]` in its source-built list and
+  warns, suggesting a rebuild once the Ruby build works.
+
+`den set build.strict true` turns the fallback into an error: the install
+fails with the Ruby build's reason and nothing is built. `build.strict` is
+`false` by default. A source checksum mismatch never falls back, in either
+mode. Where no Ruby build is available (Linux, or no formula source), the
+parser is the only path, so it is not a fallback.
+
 ## Build sandbox (macOS)
 
 On macOS every configure, build and install command runs under
@@ -216,6 +235,9 @@ keg has:
   a local tap or an unpinned fetch), and its `path`.
 - `toolchain`: the macOS `sdk` path and the first line of `clang --version`.
 - `opt_prefix_baked`: the `<prefix>/opt/<name>` path the build compiled in.
+- `fallback` and `fallback_reason`: present only when den's native parser
+  built the keg after a Ruby build failed (`"fallback": "native"`; see
+  [When the Ruby build fails](#when-the-ruby-build-fails)).
 
 `den doctor` lists source-built kegs. It warns about any whose formula, at the
 same version, now names a source tarball with a different sha256, and

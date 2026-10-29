@@ -92,6 +92,9 @@ struct SourceBuildReceipt {
     std::string toolchain_sdk;    // macOS SDK path; empty elsewhere or if unknown
     std::string toolchain_clang;  // first line of the compiler's --version
     std::string opt_prefix_baked; // <prefix>/opt/<name>
+    std::string fallback;         // "native" when den's recipe parser built it after a Ruby
+                                  // build failed; empty when the Ruby build succeeded
+    std::string fallback_reason;  // why the Ruby build failed, when fallback is set
 };
 
 /// Record that den poured or built the keg at `keg` (a `store/<name>/<version>`

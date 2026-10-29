@@ -15,6 +15,7 @@
 #include "../provider/exec.h"
 #include "../ruby/bundle.h"
 #include "../ruby/ruby_env.h"
+#include "../settings/settings.h"
 #include "../store/link.h"
 #include "../store/store.h"
 
@@ -352,6 +353,41 @@ bool brew_serves_prefix(const fs::path& brew, const fs::path& prefix) {
     return false;
 }
 
+namespace {
+
+// ": <last non-empty line>" of a build's output (at most 200 characters), or
+// empty: enough to say why a Ruby build failed without its whole log.
+std::string last_output_line(const std::string& output) {
+    auto end = output.find_last_not_of(" \t\r\n");
+    if (end == std::string::npos)
+        return {};
+    auto begin = output.rfind('\n', end);
+    begin = begin == std::string::npos ? 0 : begin + 1;
+    auto line = output.substr(begin, end - begin + 1);
+    if (line.size() > 200)
+        line = line.substr(0, 197) + "...";
+    return ": " + line;
+}
+
+} // namespace
+
+void allow_native_fallback(const fs::path& den_home, const std::string& name,
+                           const std::string& version, const std::string& why,
+                           SourceBuildReceipt& receipt) {
+    if (read_settings(den_home).build.strict)
+        throw UserError(why + "\nbuild.strict is set, so den will not build " + name + " " +
+                        version +
+                        " with its native recipe parser instead. Fix the Ruby build, or run "
+                        "`den set build.strict false` to allow the fallback.");
+    std::cerr << "Warning: " << why << "\n"
+              << "Warning: building " << name << " " << version
+              << " with den's native recipe parser instead. Its receipt records "
+                 "fallback=native and `den doctor` lists it; `den set build.strict true` "
+                 "makes this an error.\n";
+    receipt.fallback = "native";
+    receipt.fallback_reason = why;
+}
+
 fs::path build_from_source(const Config& config, const PackageIndex& idx,
                            const std::string& requested, const std::string& version) {
     // "user/repo/name" is looked up qualified and built into Cellar/<name>.
@@ -433,6 +469,10 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
     receipt.formula_commit = origin.commit;
     receipt.formula_path = origin.path;
 
+    // Why a Ruby build (Path A or B) failed; set means the native parser
+    // below is a fallback rather than the only path den had.
+    std::string ruby_failure;
+
     // Path A: Bundled Ruby subprocess. macOS only: Linux's lazily downloaded
     // Portable Ruby has no Homebrew library, so fetching it here would only
     // be thrown away.
@@ -471,6 +511,9 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
             }
             SPDLOG_WARN("bundled ruby build failed (rc={}{}), falling back", ruby_rc,
                         built ? "" : ", no keg at " + dest.string());
+            ruby_failure = "bundled Ruby build failed (exit " + std::to_string(ruby_rc) +
+                           (ruby_rc == 0 && !built ? ", no keg" : "") + ")" +
+                           last_output_line(ruby_output);
             SPDLOG_WARN("bundled ruby output (tail): {}",
                         ruby_output.size() > 2000 ? ruby_output.substr(ruby_output.size() - 2000)
                                                   : ruby_output);
@@ -524,12 +567,16 @@ fs::path build_from_source(const Config& config, const PackageIndex& idx,
                 throw UserError(*mismatch);
             }
             SPDLOG_WARN("ruby build failed (rc={}), falling back to parser", ruby_rc);
+            ruby_failure = "`brew ruby` build failed (exit " + std::to_string(ruby_rc) + ")" +
+                           last_output_line(ruby_output);
             std::error_code ec;
             fs::remove_all(dest, ec);
         }
     }
 
     // Fallback: text-parser-based build.
+    if (!ruby_failure.empty())
+        allow_native_fallback(config.den_home, name, version, ruby_failure, receipt);
     auto recipe = extract_build_recipe(idx, requested);
     if (recipe.source_url.empty())
         throw UserError("no source URL found for " + name);

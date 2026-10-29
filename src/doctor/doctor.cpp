@@ -434,6 +434,24 @@ void check_source_builds(const Config& config, std::vector<Finding>& findings,
     auto note = format_source_built_kegs(kegs);
     if (!note.empty())
         notes.push_back(std::move(note));
+    std::string fallbacks;
+    int fallback_count = 0;
+    for (const auto& k : kegs) {
+        if (k.receipt.fallback.empty())
+            continue;
+        ++fallback_count;
+        fallbacks += "\n    " + k.name + "/" + k.version;
+        if (!k.receipt.fallback_reason.empty())
+            fallbacks += ": " + k.receipt.fallback_reason;
+    }
+    if (fallback_count > 0)
+        warn(findings, std::to_string(fallback_count) +
+                           " source-built keg(s) were built by den's native recipe parser after "
+                           "their Ruby build failed (fallback=native):" +
+                           fallbacks +
+                           "\n  Rebuild them once the Ruby build works (den install "
+                           "--build-from-source <name>). `den set build.strict true` makes "
+                           "that fallback an error.");
     std::string pending;
     int count = 0;
     for (const auto& k : kegs) {
@@ -486,6 +504,8 @@ std::string format_source_built_kegs(const std::vector<SourceBuiltKeg>& kegs) {
                 text += "@" + f.formula_commit.substr(0, 12);
             text += ")";
         }
+        if (!f.fallback.empty())
+            text += " [fallback=" + f.fallback + "]";
         if (!k.pending_rebuild.empty())
             text += " [rebuild pending]";
     }
