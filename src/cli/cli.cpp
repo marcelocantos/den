@@ -72,6 +72,12 @@ namespace {
 
 const char* agent_guide = "See agents-guide.md for the full agent guide.\n";
 
+/// Why `den install` / `den info` cannot resolve a Homebrew package before the
+/// first `den update`. Raised as a UserError so the command exits non-zero.
+std::string empty_index_message() {
+    return "the package index is empty; run `den update` first";
+}
+
 /// Format a byte count as a human-readable, deterministic size string.
 /// Uses binary (1024) units and always two decimals for KB and above so the
 /// output is stable across runs.
@@ -340,10 +346,8 @@ void Cli::M::setup() {
         if (this->build_from_source) {
             // Source builds are Homebrew-only — the Ruby DSL belongs to the
             // Homebrew ecosystem. --provider is ignored on this path.
-            if (idx.empty()) {
-                SPDLOG_ERROR("package index is empty — run `den update` first");
-                return;
-            }
+            if (idx.empty())
+                throw UserError(empty_index_message());
             install_from_source(cfg, idx, install_names, link_opts, active_source_plan_runner());
             return;
         }
@@ -359,12 +363,16 @@ void Cli::M::setup() {
         }
         // The index is only consulted by the Homebrew provider; require it
         // only when a Homebrew install is actually in the batch, so installs
-        // through pip/npm/go/cargo work without `den update`.
-        for (auto& [provider, names] : by_provider) {
-            if (provider->provider_name() == "homebrew" && idx.empty()) {
-                SPDLOG_ERROR("package index is empty — run `den update` first");
-                continue;
+        // through pip/npm/go/cargo work without `den update`. Refuse the
+        // whole batch up front (non-zero exit) rather than installing the
+        // rest and silently exiting 0.
+        if (idx.empty()) {
+            for (const auto& [provider, names] : by_provider) {
+                if (provider->provider_name() == "homebrew")
+                    throw UserError(empty_index_message());
             }
+        }
+        for (auto& [provider, names] : by_provider) {
             install_packages(cfg, *provider, idx, names, link_opts);
         }
     });
@@ -695,11 +703,9 @@ void Cli::M::setup() {
                     break;
                 }
             }
-            if (version.empty()) {
-                std::cerr << "Package not found: " << info_name << " (provider " << provider_name
-                          << ")\n";
-                return;
-            }
+            if (version.empty())
+                throw UserError("package not found: " + info_name + " (provider " + provider_name +
+                                ")");
             std::cout << "Name:         " << info_name << "\n"
                       << "Version:      " << version << "\n"
                       << "Provider:     " << provider_name << "\n";
@@ -708,9 +714,11 @@ void Cli::M::setup() {
 
         const auto* pkg = idx.find(info_name);
         if (!pkg) {
-            std::cerr << "Package not found: " << info_name << "\n";
-            std::cerr << "Run 'den update' to refresh the index.\n";
-            return;
+            if (idx.empty())
+                throw UserError("package not found: " + info_name + " (" + empty_index_message() +
+                                ")");
+            throw UserError("package not found: " + info_name +
+                            " (run `den update` to refresh the index)");
         }
         std::cout << "Name:         " << pkg->name << "\n"
                   << "Version:      " << pkg->version << "\n"

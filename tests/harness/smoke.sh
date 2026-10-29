@@ -242,8 +242,9 @@ step_info() {
 # Step 5: install
 # ---------------------------------------------------------------------------
 # Verifies BOTH exit code AND that the binary actually appears under the
-# sandbox.  den currently returns 0 on some install no-ops (e.g. empty
-# index) — this check catches those.
+# sandbox.  den exits non-zero when it cannot resolve the package (e.g.
+# empty index), but a zero exit is not proof by itself — this check makes
+# sure something was actually installed.
 step_install() {
     if [ "${INDEX_READY}" -ne 1 ]; then
         skip "install" "index not populated (offline or den update unavailable)"
