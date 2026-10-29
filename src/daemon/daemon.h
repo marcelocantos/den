@@ -61,6 +61,11 @@ struct DaemonState {
     std::vector<DeferredUpgrade> deferred;
     std::optional<uint64_t> last_upgrade;
     std::vector<std::string> errors;
+    // Pending upgrades the last upgrade pass held back under the unattended
+    // trust policy (reason in DeferredUpgrade::reason). They stay pending.
+    std::vector<DeferredUpgrade> trust_held;
+    // When the daemon last posted a held-back notification.
+    std::optional<uint64_t> last_trust_notification;
 };
 
 /// Apply one pending upgrade for the daemon's upgrade pass: install it,
@@ -125,6 +130,13 @@ struct MaintenanceHooks {
     std::function<void(const PendingUpgrade&)> apply;              // optional
     std::function<bool(const std::string&)> in_window;             // default: in_maintenance_window
     InstalledSchemeFn installed_scheme; // optional: installed keg's version_scheme (default 0)
+    // optional: pending name → reason for upgrades to hold back under the
+    // unattended trust policy (see trust_screen.h). Runs before the pass.
+    std::function<std::map<std::string, std::string>(const std::vector<PendingUpgrade>&)>
+        trust_screen;
+    // optional: told once per pass about upgrades newly held back (not held
+    // in the previous pass). Returns true when a notification went out.
+    std::function<bool(const std::vector<std::string>&)> notify_held;
 };
 
 struct MaintenanceReport {
@@ -135,6 +147,7 @@ struct MaintenanceReport {
     std::size_t skipped_pinned = 0; // pending but pinned: not pre-downloaded
     std::size_t applied = 0;
     std::size_t deferred = 0;
+    std::size_t trust_held = 0; // held back by the unattended trust policy
 };
 
 /// One maintenance cycle: refresh the index, recompute `state.pending`

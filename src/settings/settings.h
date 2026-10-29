@@ -11,6 +11,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace den {
 
@@ -41,11 +42,31 @@ struct StoreSettings {
     std::optional<std::string> prefix;
 };
 
+// Trust policy for installs nobody is watching (the daemon's upgrade pass,
+// `den --unattended`). Interactive installs ignore all of this.
+//   unattended: "warn" (pour single-source bottles, record them in the
+//               ledger, notify) or "refuse" (hold them back). Any other value
+//               is treated as "refuse".
+//   notify:     post a desktop notification when a pass holds something back.
+//   unattended_source_builds: "off" (defer every unattended source build) or
+//               "allowlist" (build the formulae in source_build_allowlist when
+//               their source hash cross-checks; defer the rest).
+// Stored under "trust" in config.json. source_build_allowlist may also be a
+// comma-separated string (what `den set` writes).
+struct TrustSettings {
+    std::string unattended = "warn";
+    bool notify = true;
+    std::string unattended_source_builds = "off";
+    std::vector<std::string> source_build_allowlist = {"gettext", "git", "openssl@3", "openssl@4",
+                                                       "pkgconf"};
+};
+
 struct Settings {
     DaemonSettings daemon;
     StoreSettings store;
     SearchSettings search;
     TapSettings taps;
+    TrustSettings trust;
     /// Casks recorded by `den migrate` (token -> version). These stay in the
     /// Homebrew Caskroom; they are not Cellar packages and are not linked
     /// into environments.
