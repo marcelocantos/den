@@ -191,6 +191,7 @@ den set daemon.auto_download false       # disable background downloads
 den set daemon.auto_upgrade true         # auto-apply upgrades
 den set daemon.upgrade_window "3:00-5:00"  # when to apply
 den set trust.unattended refuse          # daemon: hold back single-source bottles
+den set build.strict true                # fail a source build instead of falling back to den's parser
 den trust review                         # what the daemon held back, and why
 den get store.prefix                     # print one setting (exit 1 if unset)
 den settings                             # show all settings

@@ -205,6 +205,11 @@ Package transform_formula(const json& f) {
 
     pkg.old_names = json_string_array(f, "oldnames");
 
+    if (f.contains("post_install_steps") && f["post_install_steps"].is_array() &&
+        !f["post_install_steps"].empty()) {
+        pkg.post_install_steps = f["post_install_steps"].dump();
+    }
+
     // Ruby source path (for fetching formula without brew cat).
     if (f.contains("ruby_source_path") && f["ruby_source_path"].is_string()) {
         pkg.ruby_source_path = f["ruby_source_path"].get<std::string>();
@@ -500,6 +505,11 @@ json package_to_json(const Package& pkg) {
         j["ruby_source_sha256"] = *pkg.ruby_source_sha256;
     if (!pkg.old_names.empty())
         j["old_names"] = pkg.old_names;
+    if (!pkg.post_install_steps.empty()) {
+        auto steps = json::parse(pkg.post_install_steps, nullptr, /*allow_exceptions=*/false);
+        if (steps.is_array())
+            j["post_install_steps"] = std::move(steps);
+    }
 
     if (!pkg.cask_artifacts.empty()) {
         json arts = json::array();
@@ -597,6 +607,10 @@ Package package_from_json(const json& j) {
         pkg.ruby_source_sha256 = j["ruby_source_sha256"].get<std::string>();
     }
     pkg.old_names = json_string_array(j, "old_names");
+    if (j.contains("post_install_steps") && j["post_install_steps"].is_array() &&
+        !j["post_install_steps"].empty()) {
+        pkg.post_install_steps = j["post_install_steps"].dump();
+    }
 
     if (j.contains("cask_artifacts") && j["cask_artifacts"].is_array()) {
         for (const auto& aj : j["cask_artifacts"]) {

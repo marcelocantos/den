@@ -11,6 +11,7 @@
 #include "../store/prefix_link.h"
 #include "../store/store.h"
 #include "manifest.h"
+#include "post_install.h"
 
 #include <spdlog/spdlog.h>
 
@@ -235,6 +236,37 @@ uint32_t root_opt_link(const PrefixLinkContext& ctx, const fs::path& pkg_path,
     return link_opt_into_prefix(ctx, pkg_path, name) ? 1 : 0;
 }
 
+/// Run a formula's declarative post_install symlink steps (see
+/// post_install.h) once its keg is in the prefix. `fresh` means this version
+/// was just linked (install, upgrade, switch), so a `force` step may replace
+/// what is there, as `brew postinstall` does; otherwise only missing links
+/// are recreated, so a re-materialise heals a deleted link without ever
+/// clobbering a file the user put there.
+uint32_t run_post_install_steps(const PrefixLinkContext& ctx, const Package* info,
+                                const std::string& name, const std::string& version,
+                                const fs::path& pkg_path, bool fresh) {
+    if (!info || info->post_install_steps.empty()) {
+        return 0;
+    }
+    auto plan = plan_post_install(info->post_install_steps, {name, ctx.prefix, pkg_path});
+    if (!plan.unsupported.empty()) {
+        if (fresh) {
+            SPDLOG_WARN("{}@{}: post_install steps not run by den: {}", name, version,
+                        plan.unsupported);
+        }
+        return 0;
+    }
+    auto result = apply_post_install(plan, ctx.prefix, /*replace=*/fresh);
+    for (const auto& why : result.skipped) {
+        if (fresh) {
+            SPDLOG_WARN("{}@{}: post_install link skipped: {}", name, version, why);
+        } else {
+            SPDLOG_DEBUG("{}@{}: post_install link skipped: {}", name, version, why);
+        }
+    }
+    return result.created;
+}
+
 uint32_t materialise_root(const fs::path& den_home, const fs::path& store, const PackageIndex* idx,
                           const MaterialiseOptions& opts, std::vector<PrefixConflict>& conflicts) {
     const std::string env_path = "/";
@@ -289,26 +321,31 @@ uint32_t materialise_root(const fs::path& den_home, const fs::path& store, const
             auto current = prefix_linked_version(ctx, name);
 
             bool opt_only = skip_versioned.count(entry) > 0 || skip_versioned.count(name) > 0;
+            const Package* info = nullptr;
             if (provider_name == "homebrew" && idx) {
-                if (const auto* info = idx->find(entry); info && info->keg_only) {
+                info = idx->find(entry);
+                if (info && info->keg_only) {
                     opt_only = true;
                 }
             }
+            const bool fresh = !current || *current != version;
 
             if (opt_only) {
-                if (!current || *current != version || prefix_ledger_has_tree_links(ctx, name)) {
+                if (fresh || prefix_ledger_has_tree_links(ctx, name)) {
                     unlink_from_prefix(ctx, name);
                     SPDLOG_INFO("{}@{} is keg-only or a versioned-family loser, linking opt/ only",
                                 name, version);
                 }
                 total += root_opt_link(ctx, pkg_path, name);
                 record_prefix_linked_version(ctx, name, version);
+                total += run_post_install_steps(ctx, info, name, version, pkg_path, fresh);
                 continue;
             }
 
-            if (current && *current == version) {
+            if (!fresh) {
                 SPDLOG_INFO("{}@{} already linked, skipping", name, version);
                 total += root_opt_link(ctx, pkg_path, name);
+                total += run_post_install_steps(ctx, info, name, version, pkg_path, false);
                 continue;
             }
             const bool overwrite =
@@ -340,6 +377,7 @@ uint32_t materialise_root(const fs::path& den_home, const fs::path& store, const
             total += result.created;
             total += root_opt_link(ctx, pkg_path, name);
             record_prefix_linked_version(ctx, name, version);
+            total += run_post_install_steps(ctx, info, name, version, pkg_path, true);
         }
     }
 

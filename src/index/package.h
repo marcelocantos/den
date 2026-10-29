@@ -140,6 +140,11 @@ struct Package {
     // rename the way brew does.
     std::vector<std::string> old_names;
 
+    // Homebrew's declarative post_install steps ("post_install_steps" in the
+    // formula API), kept as the JSON array text; empty when there are none.
+    // den runs the symlink subset itself (see env/post_install.h).
+    std::string post_install_steps;
+
     // Linking control.
     bool keg_only = false;
     std::string keg_only_reason; // e.g. ":versioned_formula", ":provided_by_macos", or custom

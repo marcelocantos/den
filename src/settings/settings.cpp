@@ -156,7 +156,18 @@ inline void from_json(const nlohmann::json& j, TrustSettings& t) {
     }
 }
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Settings, daemon, store, search, taps, trust, casks)
+inline void to_json(nlohmann::json& j, const BuildSettings& b) {
+    j = nlohmann::json{{"strict", b.strict}};
+}
+
+inline void from_json(const nlohmann::json& j, BuildSettings& b) {
+    b = BuildSettings{};
+    if (j.is_object() && j.contains("strict"))
+        json_as_bool(j["strict"], &b.strict);
+}
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Settings, daemon, store, search, taps, trust, build,
+                                                casks)
 
 // ---------------------------------------------------------------------------
 // File helpers
@@ -339,8 +350,8 @@ void set_setting(const fs::path& den_home, const std::string& key, const std::st
     // Known boolean keys always store JSON booleans (not "true"/"false" strings).
     // Without this, first-time `den set daemon.auto_upgrade true` wrote a string
     // that from_json ignored, so the daemon kept the default false.
-    const bool known_bool =
-        (key == "daemon.auto_download" || key == "daemon.auto_upgrade" || key == "trust.notify");
+    const bool known_bool = (key == "daemon.auto_download" || key == "daemon.auto_upgrade" ||
+                             key == "trust.notify" || key == "build.strict");
     if (known_bool || (cur->contains(leaf) && (*cur)[leaf].is_boolean())) {
         if (value == "true")
             (*cur)[leaf] = true;

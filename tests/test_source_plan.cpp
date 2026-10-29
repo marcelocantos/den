@@ -8,11 +8,14 @@
 // defer the rest, with everything that needs it.
 
 #include "build/source_plan.h"
+#include "cli/install.h"
 #include "core/config.h"
 #include "core/error.h"
+#include "env/manifest.h"
 #include "index/index.h"
 #include "index/package.h"
 #include "provider/homebrew_provider.h"
+#include "store/store.h"
 #include "trust/degraded_installs.h"
 #include "trust/unattended.h"
 
@@ -120,11 +123,13 @@ struct Recorder {
         r.pour = [this](const Config& c, const Package& p) {
             log.push_back("pour " + p.name);
             fs::create_directories(c.store / p.name / p.version);
+            mark_keg_owned(c.store / p.name / p.version, p.name, p.version);
         };
         r.build = [this](const Config& c, const PackageIndex&, const std::string& n,
                          const std::string& v) {
             log.push_back("build " + n);
             fs::create_directories(c.store / n / v);
+            mark_keg_owned(c.store / n / v, n, v);
             return c.store / n / v;
         };
         return r;
@@ -332,6 +337,41 @@ TEST_SUITE("build::source_plan") {
         CHECK(fs::exists(cfg.store / "gettext" / "0.26"));
         // Nothing was downloaded for the bottle it can't pour.
         CHECK(fs::is_empty(cfg.cache / "archives"));
+        fs::remove_all(tmp);
+    }
+
+    TEST_CASE("install -s runs post_install steps for every keg it builds or pours") {
+        // openssl@4 is built from source (fixed-Cellar bottle) and curl is
+        // poured; both declare a symlink post_install step. The chain must
+        // leave both links in the prefix, as brew's postinstall would.
+        auto tmp = fresh_tmp("source-plan-post-install");
+        auto cfg = tmp_config(tmp);
+        auto idx = git_chain();
+        const std::string cert_step = R"([{"type":"symlink","force":true,)"
+                                      R"("source":{"path":"{{etc}}/ca-certificates/cert.pem"},)"
+                                      R"("target":{"path":"{{pkgetc}}/cert.pem"}}])";
+        idx.packages["openssl@4"].keg_only = true;
+        idx.packages["openssl@4"].post_install_steps = cert_step;
+        idx.packages["curl"].post_install_steps = cert_step;
+        Recorder rec;
+        install_from_source(cfg, idx, {"git"}, {}, rec.runner());
+
+        CHECK(std::find(rec.log.begin(), rec.log.end(), "build openssl@4") != rec.log.end());
+        CHECK(std::find(rec.log.begin(), rec.log.end(), "pour curl") != rec.log.end());
+        const auto bundle = cfg.prefix / "etc" / "ca-certificates" / "cert.pem";
+        for (const char* keg : {"openssl@4", "curl"}) {
+            INFO(keg);
+            auto link = cfg.prefix / "etc" / keg / "cert.pem";
+            REQUIRE(fs::is_symlink(fs::symlink_status(link)));
+            CHECK(fs::read_symlink(link) == bundle);
+        }
+        // The built keg-only dependency is reachable through opt/ and
+        // recorded as an automatic dependency.
+        CHECK(fs::exists(fs::symlink_status(cfg.prefix / "opt" / "openssl@4")));
+        auto m = read_manifest(cfg.den_home, "/");
+        CHECK(m.packages["homebrew"].count("git") == 1);
+        CHECK(m.auto_deps["homebrew"].count("openssl@4") == 1);
+        CHECK(m.auto_deps["homebrew"].count("curl") == 1);
         fs::remove_all(tmp);
     }
 }
