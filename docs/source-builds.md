@@ -28,6 +28,36 @@ out:
   `opt_include`, and the rest resolve to `<prefix>/opt/<dep>` (or to the
   dependency's keg if it has no opt link yet).
 
+## Dependencies and fixed-Cellar bottles
+
+Most bottles are `:any` or `:any_skip_relocation` and pour into den's
+Cellar. Some are built for a fixed Cellar (`/opt/homebrew/Cellar` on Apple
+silicon) and can't be relocated. When `den install` meets one and the
+formula has a source build, den builds it from source instead of refusing.
+Without a source build it still refuses, naming the formula.
+
+`den install -s` and these routed builds plan the whole chain first,
+dependencies before dependents:
+
+* A keg that is already installed is left alone. A keg named on the
+  `den install -s` command line is always built.
+* A dependency whose bottle pours into den's Cellar is poured.
+* A dependency whose bottle needs another Cellar is built from source.
+* Build dependencies (`depends_on … => :build`) are followed only for kegs
+  den builds. They are installed into the Cellar but not recorded in the
+  environment. Runtime dependencies are recorded as automatic dependencies,
+  as they are for bottles.
+
+For git on Apple silicon, the plan is: pour ca-certificates, libunistring,
+json-c and pcre2; build gettext and openssl@4; build pkgconf (build-only);
+pour curl, which links `opt/openssl@4`; then build git.
+
+Every build in the plan goes through the trust gate below. If a step is
+deferred or held, everything that needs it is deferred too. Those steps are
+recorded in the trust ledger with `reason: "depends on <step>: deferred"`, so
+a chain is never half installed. When the daemon routes a keg this way and
+the build is deferred, it holds that package and its dependents back.
+
 ## Unattended source builds
 
 Interactive `den install -s` builds as described here. An unattended run

@@ -11,6 +11,7 @@
 #include "../activity/activity.h"
 #include "../build/relink_pins.h"
 #include "../build/source_build.h"
+#include "../build/source_plan.h"
 #include "../core/config.h"
 #include "../core/error.h"
 #include "../core/version.h"
@@ -344,58 +345,48 @@ void Cli::M::setup() {
                 return;
             }
             auto active = active_env_path(cfg.den_home);
-            // Unattended source builds follow trust.unattended_source_builds
+            // G3: plan the whole chain first. Dependencies pour when their
+            // bottle pours into den's Cellar and are built from source when
+            // it can't (a fixed Cellar such as /opt/homebrew/Cellar); build
+            // dependencies of every keg built are installed too.
+            // Each source build goes through trust.unattended_source_builds
             // (trust/unattended.h): off, or allowlisted formulae whose source
-            // hash cross-checks. Everything else is deferred and reported.
-            TrustPolicy policy = current_trust_policy(cfg);
-            std::vector<std::string> deferred;
-            for (const auto& name : install_names) {
-                auto* pkg = idx.find(name);
-                std::string version = pkg ? pkg->version : "unknown";
-                if (policy.unattended && pkg) {
-                    MaybeHash source_hash =
-                        pkg->source_sha256 ? MaybeHash(*pkg->source_sha256) : std::nullopt;
-                    ReplicaAnswer replica =
-                        lookup_local_replica(cfg, pkg->name, pkg->upstream_version(), "source");
-                    TrustCheckResult check = cross_check_hashes(source_hash, replica);
-                    bool accepted = is_install_accepted(cfg, pkg->name, version);
-                    switch (source_build_action(policy, name, check.decision, accepted)) {
-                    case SourceBuildAction::Build:
-                        break;
-                    case SourceBuildAction::Refuse:
-                        throw UserError("refusing to build '" + name + " " + version +
-                                        "' from source: trust check failed — " + check.message);
-                    case SourceBuildAction::Defer: {
-                        bool listed =
-                            policy.source_builds && policy.source_build_allowlist.count(name);
-                        DegradedInstall d{
-                            pkg->name, version, "unattended-source-build", "source", {}};
-                        d.status = !policy.source_builds ? "trust.unattended_source_builds=off"
-                                   : !listed             ? "not in trust.source_build_allowlist"
-                                                         : replica_status_tag(replica.status);
-                        d.bottle_sha = pkg->source_sha256.value_or("");
-                        record_refused_install(cfg, d);
-                        std::cerr << "deferred: source build of " << name << " " << version << " ("
-                                  << *policy.unattended << ": " << d.status
-                                  << "); review with `den trust review`\n";
-                        deferred.push_back(name);
+            // hash cross-checks. Everything else is deferred and reported,
+            // along with whatever needs it.
+            SourcePlanOptions plan_opts;
+            plan_opts.force_source.insert(install_names.begin(), install_names.end());
+            auto plan = plan_source_build(cfg, idx, install_names, plan_opts);
+            std::cout << "==> Source build plan:\n" << describe_source_plan(plan);
+            auto res = run_source_plan(cfg, idx, plan, current_trust_policy(cfg),
+                                       active_source_plan_runner());
+            const std::set<std::string> targets(install_names.begin(), install_names.end());
+            size_t deferred_targets = 0;
+            with_manifest(cfg.den_home, active, [&](Manifest& m) {
+                auto& bucket = m.packages["homebrew"];
+                auto& auto_bucket = m.auto_deps["homebrew"];
+                for (const auto& step : plan.steps) {
+                    if (res.is_deferred(step.name)) {
+                        deferred_targets += targets.count(step.name);
                         continue;
                     }
+                    if (targets.count(step.name)) {
+                        bucket[step.name] = step.version;
+                        auto_bucket.erase(step.name);
+                    } else if (!step.build_only && !bucket.count(step.name)) {
+                        // Runtime dependencies join the environment as the
+                        // bottle path records them; build-only ones stay out.
+                        bucket[step.name] = step.version;
+                        auto_bucket.insert(step.name);
                     }
                 }
-                auto dest = den::build_from_source(cfg, idx, name, version);
-                with_manifest(cfg.den_home, active,
-                              [&](Manifest& m) { m.packages["homebrew"][name] = version; });
-                // Built: a deferral (or the accept that let it through) is done.
-                clear_refused_install(cfg, name, version);
-            }
-            if (deferred.size() < install_names.size()) {
+            });
+            if (deferred_targets < install_names.size()) {
                 auto links = materialise(cfg.den_home, cfg.store, active, &idx, link_opts);
                 std::cout << "Materialised: " << links << " symlinks.\n";
             }
-            if (!deferred.empty()) {
-                throw UserError("deferred " + std::to_string(deferred.size()) +
-                                " unattended source build(s); nothing was built for them");
+            if (!res.deferred.empty()) {
+                throw UserError("deferred " + std::to_string(res.deferred.size()) +
+                                " unattended source build step(s); nothing was installed for them");
             }
             return;
         }
