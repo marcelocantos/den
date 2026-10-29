@@ -61,12 +61,22 @@ struct TrustSettings {
                                                        "pkgconf"};
 };
 
+// Source-build policy, stored under "build" in config.json.
+//   strict: when a Ruby build (bundled Ruby or `brew ruby`) fails, fail the
+//           install instead of falling back to den's native recipe parser.
+//           Off by default: the fallback warns and the receipt records
+//           "fallback": "native".
+struct BuildSettings {
+    bool strict = false;
+};
+
 struct Settings {
     DaemonSettings daemon;
     StoreSettings store;
     SearchSettings search;
     TapSettings taps;
     TrustSettings trust;
+    BuildSettings build;
     /// Casks recorded by `den migrate` (token -> version). These stay in the
     /// Homebrew Caskroom; they are not Cellar packages and are not linked
     /// into environments.
