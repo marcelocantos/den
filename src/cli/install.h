@@ -31,6 +31,14 @@ bool report_link_count(uint32_t links, bool casks_only);
 void report_version_change_failures(const Config& config, const VersionChangeResult& res,
                                     const std::string& verb);
 
+/// Why a command that needs the Homebrew package index cannot proceed before
+/// the first `den update` (the index is missing, empty, or unreadable).
+std::string empty_index_message();
+
+/// Throw UserError(empty_index_message()) when `idx` holds no packages, so
+/// the CLI prints "error: ..." and exits 1 instead of exiting 0.
+void require_index(const PackageIndex& idx);
+
 /// Install packages by name. Dispatches each install through `provider`,
 /// then updates the active env's manifest with the provider-reported
 /// resolved version + auto-deps, and re-materialises the env. `link_opts`

@@ -24,6 +24,15 @@
 
 namespace den {
 
+std::string empty_index_message() {
+    return "the package index is empty; run `den update` first";
+}
+
+void require_index(const PackageIndex& idx) {
+    if (idx.empty())
+        throw UserError(empty_index_message());
+}
+
 bool cask_only(const Config& config, const std::vector<std::string>& names) {
     if (names.empty())
         return false;

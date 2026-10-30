@@ -72,12 +72,6 @@ namespace {
 
 const char* agent_guide = "See agents-guide.md for the full agent guide.\n";
 
-/// Why `den install` / `den info` cannot resolve a Homebrew package before the
-/// first `den update`. Raised as a UserError so the command exits non-zero.
-std::string empty_index_message() {
-    return "the package index is empty; run `den update` first";
-}
-
 /// Format a byte count as a human-readable, deterministic size string.
 /// Uses binary (1024) units and always two decimals for KB and above so the
 /// output is stable across runs.
@@ -456,10 +450,10 @@ void Cli::M::setup() {
         auto idx = load_index(cfg.cache / "index.json");
         // Manifest entries may be tap-qualified ("user/repo/name").
         merge_taps_into_index(cfg, idx);
-        if (idx.empty()) {
-            SPDLOG_ERROR("package index is empty — run `den update` first");
-            return;
-        }
+        // Every form (all, named, --dry-run) needs the index to know what is
+        // newer; without it there is nothing to compare against, so fail
+        // rather than exit 0 as though everything were up to date.
+        require_index(idx);
         auto registry = make_default_registry(&idx);
         auto active = active_env_path(cfg.den_home);
         auto manifest = read_manifest(cfg.den_home, active);
