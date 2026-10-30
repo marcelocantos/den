@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -64,6 +65,9 @@ struct VersionChangeResult {
     /// Dependents with a revision bump that `screen_dependents` held back
     /// (`to` is the index version), with the screen's reason.
     std::vector<std::pair<VersionChange, std::string>> held_dependents;
+    /// Dependents with a revision bump that `refuse_dependent` refused
+    /// (`to` is the index version), with its reason.
+    std::vector<std::pair<VersionChange, std::string>> refused_dependents;
 };
 
 struct VersionChangeOptions {
@@ -99,6 +103,12 @@ struct VersionChangeOptions {
     /// is listed in `held_dependents`.
     std::function<std::map<std::string, std::string>(const std::vector<VersionChange>&)>
         screen_dependents;
+    /// Optional check for each dependent `upgrade_dependents` would add:
+    /// returns a reason to refuse it (`den upgrade` refuses one disabled
+    /// upstream, or one that would pour a disabled dependency). A refused
+    /// dependent stays at its version, like a pinned one, and is listed in
+    /// `refused_dependents`.
+    std::function<std::optional<std::string>(const VersionChange&)> refuse_dependent;
 };
 
 /// Move packages in the active environment to new versions as one unit per

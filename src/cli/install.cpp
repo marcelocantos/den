@@ -18,6 +18,7 @@
 #include "../trust/unattended.h"
 
 #include <algorithm>
+#include <deque>
 #include <iostream>
 #include <map>
 #include <set>
@@ -106,8 +107,42 @@ std::string refused_count_message(size_t n) {
     return std::to_string(n) + " requested package(s) are disabled upstream";
 }
 
-bool is_cask_package(const Package& pkg) {
-    return pkg.artifact_type == ArtifactType::App || !pkg.cask_artifacts.empty();
+/// The UserError for a run that refused `disabled` named packages and
+/// `needs_disabled` whose install would pour a disabled dependency.
+void throw_if_refused(size_t disabled, size_t needs_disabled) {
+    std::string msg;
+    if (disabled)
+        msg = refused_count_message(disabled);
+    if (needs_disabled) {
+        if (!msg.empty())
+            msg += "; ";
+        msg += std::to_string(needs_disabled) +
+               " requested package(s) need a dependency that is disabled upstream";
+    }
+    if (!msg.empty())
+        throw UserError(msg);
+}
+
+/// --force lets a disabled formula through, as `brew install --force`
+/// does; a disabled cask has no such bypass (brew has none either).
+bool force_bypasses(const Package& pkg, bool force) {
+    return force && !is_cask_package(pkg);
+}
+
+/// Prints the error (or, under --force for formulae, the warning) for each
+/// disabled package installing `name` would pour; true when `name` is
+/// refused.
+bool refuse_for_disabled_dependencies(const Config& config, const PackageProvider& provider,
+                                      const PackageIndex& idx, const std::string& name,
+                                      bool force) {
+    bool refused = false;
+    for (const auto* dep : disabled_dependencies(config, provider, idx, name)) {
+        const bool bypass = force_bypasses(*dep, force);
+        std::cerr << (bypass ? "warning: " : "error: ") << disabled_dependency_message(name, *dep)
+                  << "\n";
+        refused = refused || !bypass;
+    }
+    return refused;
 }
 
 /// A named package that is disabled upstream but already installed at the
@@ -138,14 +173,56 @@ std::string disabled_package_message(const Package& pkg) {
     return msg;
 }
 
+bool is_cask_package(const Package& pkg) {
+    return pkg.artifact_type == ArtifactType::App || !pkg.cask_artifacts.empty();
+}
+
+std::string disabled_dependency_message(const std::string& dependent, const Package& dep) {
+    // "'bar' is disabled upstream: ..." -> "'foo' needs 'bar', which is ..."
+    const auto msg = disabled_package_message(dep);
+    const auto head = "'" + dep.name + "' is ";
+    return "'" + dependent + "' needs '" + dep.name + "', which is " + msg.substr(head.size());
+}
+
+std::vector<const Package*> disabled_dependencies(const Config& config,
+                                                  const PackageProvider& provider,
+                                                  const PackageIndex& idx,
+                                                  const std::string& name) {
+    // Every runtime dependency is poured unless its index version is already
+    // installed (HomebrewProvider::install), and a satisfied one's own
+    // dependencies are still checked, so walk the whole closure.
+    std::vector<const Package*> found;
+    std::set<std::string> seen{keg_name(name)};
+    std::deque<std::string> todo;
+    if (const auto* root = idx.find(name))
+        todo.insert(todo.end(), root->dependencies.begin(), root->dependencies.end());
+    while (!todo.empty()) {
+        auto dep_name = std::move(todo.front());
+        todo.pop_front();
+        if (!seen.insert(keg_name(dep_name)).second)
+            continue;
+        const auto* dep = idx.find(dep_name);
+        if (!dep)
+            continue;
+        todo.insert(todo.end(), dep->dependencies.begin(), dep->dependencies.end());
+        if (dep->disabled && !provider.is_installed(config, keg_name(dep->name), dep->version))
+            found.push_back(dep);
+    }
+    return found;
+}
+
 std::vector<std::string> refuse_disabled_packages(const PackageIndex& idx,
-                                                  const std::vector<std::string>& names) {
+                                                  const std::vector<std::string>& names,
+                                                  bool force) {
     std::vector<std::string> refused;
     for (const auto& name : names) {
         const auto* pkg = idx.find(name);
         if (pkg && pkg->disabled) {
-            std::cerr << "error: " << disabled_package_message(*pkg) << "\n";
-            refused.push_back(name);
+            const bool bypass = force_bypasses(*pkg, force);
+            std::cerr << (bypass ? "warning: " : "error: ") << disabled_package_message(*pkg)
+                      << "\n";
+            if (!bypass)
+                refused.push_back(name);
         }
     }
     return refused;
@@ -153,7 +230,7 @@ std::vector<std::string> refuse_disabled_packages(const PackageIndex& idx,
 
 void install_packages(const Config& config, PackageProvider& provider, const PackageIndex& idx,
                       const std::vector<std::string>& requested,
-                      const MaterialiseOptions& link_opts) {
+                      const MaterialiseOptions& link_opts, bool force) {
     auto active = active_env_path(config.den_home);
     auto pname = std::string(provider.provider_name());
 
@@ -162,7 +239,8 @@ void install_packages(const Config& config, PackageProvider& provider, const Pac
     // already installed here at the index version, when there is nothing to
     // do: it is reported up to date, with a warning. The index only
     // describes Homebrew packages, so a name another provider installs is
-    // never matched against it.
+    // never matched against it. --force installs a disabled formula anyway,
+    // with the message as a warning; a disabled cask is refused regardless.
     const auto manifest = read_manifest(config.den_home, active);
     auto recorded_at = [&](const std::string& name, const std::string& version) {
         auto b = manifest.packages.find(pname);
@@ -183,14 +261,29 @@ void install_packages(const Config& config, PackageProvider& provider, const Pac
                                 provider.is_installed(config, name, pkg->version);
         if (up_to_date) {
             warn_disabled_up_to_date(*pkg, name, pkg->version);
+        } else if (force_bypasses(*pkg, force)) {
+            std::cerr << "warning: " << disabled_package_message(*pkg) << "\n";
+            names.push_back(name);
         } else {
             std::cerr << "error: " << disabled_package_message(*pkg) << "\n";
             refused.push_back(name);
         }
     }
+    // As brew does, a name whose install would pour a disabled dependency
+    // is refused too (or warned about, under --force, for a formula); a
+    // disabled dependency already installed at the index version is not
+    // poured, so it is not mentioned.
+    size_t needs_disabled = 0;
+    if (pname == "homebrew") {
+        std::erase_if(names, [&](const std::string& name) {
+            const bool refuse =
+                refuse_for_disabled_dependencies(config, provider, idx, name, force);
+            needs_disabled += refuse;
+            return refuse;
+        });
+    }
     if (names.empty() && !requested.empty()) {
-        if (!refused.empty())
-            throw UserError(refused_count_message(refused.size()));
+        throw_if_refused(refused.size(), needs_disabled);
         return;
     }
 
@@ -217,19 +310,18 @@ void install_packages(const Config& config, PackageProvider& provider, const Pac
     if (report_link_count(res.links, cask_only(config, names)))
         std::cout << "  " << res.links << " symlinks\n";
     report_version_change_failures(config, res, "install");
-    if (!refused.empty())
-        throw UserError(refused_count_message(refused.size()));
+    throw_if_refused(refused.size(), needs_disabled);
 }
 
 void install_from_source(const Config& config, const PackageIndex& idx,
                          const std::vector<std::string>& names, const MaterialiseOptions& link_opts,
-                         const SourcePlanRunner& runner) {
+                         const SourcePlanRunner& runner, bool force) {
     auto active = active_env_path(config.den_home);
     // A disabled formula is refused before anything is planned or built:
     // building it from source is no way around homebrew-core disabling it.
     // -s builds even an installed formula, so an installed one is refused
-    // too.
-    if (auto refused = refuse_disabled_packages(idx, names); !refused.empty())
+    // too. --force builds it anyway, with a warning.
+    if (auto refused = refuse_disabled_packages(idx, names, force); !refused.empty())
         throw UserError(refused_count_message(refused.size()));
     // G3: plan the whole chain first. Dependencies pour when their
     // bottle pours into den's Cellar and are built from source when
@@ -242,6 +334,37 @@ void install_from_source(const Config& config, const PackageIndex& idx,
     SourcePlanOptions plan_opts;
     plan_opts.force_source.insert(names.begin(), names.end());
     auto plan = plan_source_build(config, idx, names, plan_opts);
+    // A disabled dependency the plan would pour or build (build-only ones
+    // included) refuses every target that needs it, before anything runs.
+    {
+        std::set<std::string> blocked;
+        for (const auto& target : names) {
+            std::set<std::string> seen;
+            std::deque<std::string> todo{target};
+            while (!todo.empty()) {
+                auto step_name = std::move(todo.front());
+                todo.pop_front();
+                if (!seen.insert(step_name).second)
+                    continue;
+                const auto* step = plan.find(step_name);
+                if (!step)
+                    continue;
+                todo.insert(todo.end(), step->needs.begin(), step->needs.end());
+                if (step_name == target || step->action == SourceStepAction::Installed ||
+                    std::find(names.begin(), names.end(), step_name) != names.end())
+                    continue;
+                const auto* dep = idx.find(step_name);
+                if (!dep || !dep->disabled)
+                    continue;
+                const bool bypass = force_bypasses(*dep, force);
+                std::cerr << (bypass ? "warning: " : "error: ")
+                          << disabled_dependency_message(target, *dep) << "\n";
+                if (!bypass)
+                    blocked.insert(target);
+            }
+        }
+        throw_if_refused(0, blocked.size());
+    }
     std::cout << "==> Source build plan:\n" << describe_source_plan(plan);
     auto res = run_source_plan(config, idx, plan, current_trust_policy(config), runner);
     const std::set<std::string> targets(names.begin(), names.end());
@@ -328,7 +451,7 @@ void uninstall_packages(const Config& config, PackageProvider& provider,
 }
 
 void upgrade_packages(const Config& config, PackageProvider& provider, const PackageIndex& idx,
-                      const std::vector<std::string>& names, bool dry_run) {
+                      const std::vector<std::string>& names, bool dry_run, bool force) {
     auto active = active_env_path(config.den_home);
     // Only this provider's own bucket is compared against `idx`. A package
     // another provider manages (cowsay 6.1 from pip) is not the index's
@@ -403,7 +526,7 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
             }
             const auto delta = sel.delta;
             if (pkg->disabled) {
-                if (delta == VersionDelta::Newer) {
+                if (delta == VersionDelta::Newer && !force_bypasses(*pkg, force)) {
                     std::cerr << "error: " << disabled_package_message(*pkg) << "\n";
                     refused_disabled.push_back(name);
                     continue;
@@ -427,6 +550,16 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
             }
         }
     }
+
+    // A candidate whose new version would pour a disabled dependency is
+    // refused, as brew does (under --force a formula dependency only warns);
+    // the other candidates proceed.
+    size_t needs_disabled = 0;
+    std::erase_if(candidates, [&](const UpgradeCandidate& c) {
+        const bool refuse = refuse_for_disabled_dependencies(config, provider, idx, c.name, force);
+        needs_disabled += refuse;
+        return refuse;
+    });
 
     if (!older.empty()) {
         std::cout << "Not downgrading " << older.size()
@@ -469,7 +602,7 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
     if (dry_run) {
         if (upgrades.empty()) {
             if (older.empty() && held_lower.empty() && manual_casks.empty() &&
-                explicitly_pinned.empty() && refused_disabled.empty())
+                explicitly_pinned.empty() && refused_disabled.empty() && needs_disabled == 0)
                 std::cout << "All packages are up to date.\n";
             else
                 std::cout << "Nothing to upgrade.\n";
@@ -482,8 +615,7 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
         if (!explicitly_pinned.empty())
             throw UserError(std::to_string(explicitly_pinned.size()) +
                             " requested package(s) are pinned");
-        if (!refused_disabled.empty())
-            throw UserError(refused_count_message(refused_disabled.size()));
+        throw_if_refused(refused_disabled.size(), needs_disabled);
         return;
     }
 
@@ -511,12 +643,15 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
                           [&](const UpgradeCandidate& u) { return trust_held.contains(u.name); });
         }
     }
+    size_t refused_dependents = 0;
     auto fail_if_held = [&] {
         if (!explicitly_pinned.empty())
             throw UserError(std::to_string(explicitly_pinned.size()) +
                             " requested package(s) are pinned");
-        if (!refused_disabled.empty())
-            throw UserError(refused_count_message(refused_disabled.size()));
+        throw_if_refused(refused_disabled.size(), needs_disabled);
+        if (refused_dependents)
+            throw UserError(std::to_string(refused_dependents) +
+                            " dependent(s) are disabled upstream or need a dependency that is");
         if (!trust_held.empty())
             throw UserError(std::to_string(trust_held.size()) +
                             " package(s) held back by the unattended trust policy; review with "
@@ -560,7 +695,38 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
             return screen_unattended_upgrades(config, idx, pending, policy);
         };
     }
+    // A revision-bumped dependent that is disabled upstream, or would pour a
+    // disabled dependency, stays put and fails the run (brew reports such a
+    // dependent and upgrades the rest); --force lets a formula through.
+    opts.refuse_dependent = [&](const VersionChange& c) -> std::optional<std::string> {
+        const auto* pkg = idx.find(c.name);
+        if (!pkg)
+            return std::nullopt;
+        if (pkg->disabled) {
+            if (!force_bypasses(*pkg, force))
+                return disabled_package_message(*pkg);
+            std::cerr << "warning: " << disabled_package_message(*pkg) << "\n";
+        }
+        std::optional<std::string> why;
+        for (const auto* dep : disabled_dependencies(config, provider, idx, c.name)) {
+            const auto msg = disabled_dependency_message(c.name, *dep);
+            if (force_bypasses(*dep, force))
+                std::cerr << "warning: " << msg << "\n";
+            else if (!why)
+                why = msg;
+        }
+        return why;
+    };
     auto res = apply_version_changes(config, provider, &idx, changes, opts);
+    if (!res.refused_dependents.empty()) {
+        std::cout << "Not upgrading " << res.refused_dependents.size()
+                  << " dependent(s) (disabled upstream):\n";
+        for (const auto& [d, why] : res.refused_dependents) {
+            std::cout << "  " << d.name << " " << d.from << " (" << d.to << " available)\n";
+            std::cerr << "error: " << why << "\n";
+        }
+        refused_dependents = res.refused_dependents.size();
+    }
     if (!res.dependents.empty()) {
         std::cout << "Also upgraded " << res.dependents.size()
                   << " dependent(s) rebuilt for the new version:\n";
@@ -605,7 +771,7 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
 }
 
 void upgrade_all_packages(const Config& config, const ProviderRegistry& registry,
-                          const PackageIndex& idx, bool dry_run) {
+                          const PackageIndex& idx, bool dry_run, bool force) {
     const auto manifest = read_manifest(config.den_home, active_env_path(config.den_home));
     for (const auto& [provider_name, pkgs] : manifest.packages) {
         if (!pkgs.empty() && !registry.find(provider_name)) {
@@ -618,7 +784,7 @@ void upgrade_all_packages(const Config& config, const ProviderRegistry& registry
         provider = registry.default_provider();
     if (!provider)
         throw InternalError("no package provider registered");
-    upgrade_packages(config, *provider, idx, {}, dry_run);
+    upgrade_packages(config, *provider, idx, {}, dry_run, force);
 }
 
 } // namespace den

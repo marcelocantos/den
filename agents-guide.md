@@ -41,9 +41,11 @@ binary.
 ```bash
 den install <name>           # install with dependency resolution
 den install <name> --provider <p>   # route to a specific provider
+den install <name> --force   # install a formula (or dependency) disabled upstream, with a warning; casks: no bypass
 den uninstall <name>         # remove from active environment
 den use <pkg> <version>      # switch active version
 den upgrade                  # upgrade all outdated packages
+den upgrade <name> --force   # upgrade even if it, or a new dependency, is a disabled formula
 den env create <path>        # create child environment
 den env use <path>           # switch environment
 den env show [path]          # show resolved packages

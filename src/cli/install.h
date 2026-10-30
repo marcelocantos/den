@@ -50,9 +50,28 @@ std::string disabled_package_message(const Package& pkg);
 
 /// The names in `names` the index marks disabled (formulae and casks; names
 /// not in the index are not). Each is reported on stderr as
-/// "error: <disabled_package_message>".
+/// "error: <disabled_package_message>". With `force`, a disabled formula is
+/// reported as "warning: <disabled_package_message>" and not returned; a
+/// disabled cask is refused regardless.
 std::vector<std::string> refuse_disabled_packages(const PackageIndex& idx,
-                                                  const std::vector<std::string>& names);
+                                                  const std::vector<std::string>& names,
+                                                  bool force = false);
+
+/// Whether the index entry is a cask (an app bundle or cask artifacts).
+bool is_cask_package(const Package& pkg);
+
+/// "'<dependent>' needs '<dep>', which is disabled upstream: it <reason>
+/// (disabled on <date>; replacement: <name>)", from disabled_package_message.
+std::string disabled_dependency_message(const std::string& dependent, const Package& dep);
+
+/// The packages in `name`'s runtime dependency closure (per `idx`, `name`
+/// itself left out) that the index marks disabled and `provider` does not
+/// have installed at the index version, i.e. the disabled packages
+/// installing `name` would pour. One already installed at the index version
+/// is satisfied and not listed, as brew skips it.
+std::vector<const Package*> disabled_dependencies(const Config& config,
+                                                  const PackageProvider& provider,
+                                                  const PackageIndex& idx, const std::string& name);
 
 /// Install packages by name. Dispatches each install through `provider`,
 /// then updates the active env's manifest with the provider-reported
@@ -62,10 +81,16 @@ std::vector<std::string> refuse_disabled_packages(const PackageIndex& idx,
 /// installed, then the call throws a UserError naming how many were
 /// refused. One already installed in the env at the index version is not
 /// refused (there is nothing to install): it is reported up to date, with a
-/// "warning: <disabled_package_message>" on stderr.
+/// "warning: <disabled_package_message>" on stderr. Through the homebrew
+/// provider, a name whose install would pour a disabled dependency
+/// (disabled_dependencies) is refused the same way, with "error:
+/// <disabled_dependency_message>"; a disabled dependency already installed
+/// at the index version is not mentioned. With `force` (`den install
+/// --force`), a disabled formula, named or a dependency, is installed with
+/// the message as a "warning:"; a disabled cask is refused regardless.
 void install_packages(const Config& config, PackageProvider& provider, const PackageIndex& idx,
                       const std::vector<std::string>& names,
-                      const MaterialiseOptions& link_opts = {});
+                      const MaterialiseOptions& link_opts = {}, bool force = false);
 
 /// `den install -s`: plan the chain for `names` (G3), run it through
 /// `runner`, record the targets and their runtime dependencies in the active
@@ -73,10 +98,12 @@ void install_packages(const Config& config, PackageProvider& provider, const Pac
 /// links every recorded keg and runs its declarative post_install steps,
 /// poured or built alike. Throws a UserError when any step was deferred, and
 /// before planning anything when a named formula is disabled upstream
-/// (installed or not: -s would build it).
+/// (installed or not: -s would build it), and before running the plan when
+/// it would pour or build a disabled dependency (build-only ones included)
+/// of a target. `force` turns both refusals into warnings for formulae.
 void install_from_source(const Config& config, const PackageIndex& idx,
                          const std::vector<std::string>& names, const MaterialiseOptions& link_opts,
-                         const SourcePlanRunner& runner);
+                         const SourcePlanRunner& runner, bool force = false);
 
 /// Uninstall packages by name. Dispatches each uninstall through `provider`
 /// (Homebrew keeps files in the shared Cellar; other providers may reclaim),
@@ -94,7 +121,13 @@ void uninstall_packages(const Config& config, PackageProvider& provider,
 /// the call then throws a UserError, as for a named pinned package. When
 /// nothing would be applied to it (up to date, or index older or held) it
 /// is reported as usual, with a "warning: <disabled_package_message>", and
-/// does not fail the call. Only the
+/// does not fail the call. A candidate (named or not) whose new version
+/// would pour a disabled dependency is refused the same way, and a
+/// revision-bumped dependent that is disabled, or would pour one, is left
+/// at its version and fails the call after the rest are applied. With
+/// `force` (`den upgrade --force`) each of these is a "warning:" instead
+/// for a formula, and it is upgraded; a disabled cask is refused
+/// regardless. A bare upgrade still leaves disabled formulae out. Only the
 /// active environment's bucket for `provider` is considered: a package
 /// another provider manages is never compared against `idx` (the daemon's
 /// maintenance cycle reads the homebrew bucket the same way). Each
@@ -109,7 +142,8 @@ void uninstall_packages(const Config& config, PackageProvider& provider,
 /// reason); `den use <name> <version>` is the only way down. With `dry_run`
 /// the same plan is printed and nothing is installed, linked or recorded.
 void upgrade_packages(const Config& config, PackageProvider& provider, const PackageIndex& idx,
-                      const std::vector<std::string>& names, bool dry_run = false);
+                      const std::vector<std::string>& names, bool dry_run = false,
+                      bool force = false);
 
 /// `den upgrade` with no names: exactly one upgrade_packages pass over
 /// every installed package. That pass already scans the whole resolved
@@ -121,6 +155,6 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
 /// registered under that name. Buckets under an unregistered provider are
 /// reported, as before.
 void upgrade_all_packages(const Config& config, const ProviderRegistry& registry,
-                          const PackageIndex& idx, bool dry_run = false);
+                          const PackageIndex& idx, bool dry_run = false, bool force = false);
 
 } // namespace den
