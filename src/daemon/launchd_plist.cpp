@@ -242,9 +242,16 @@ std::optional<std::string> plist_with_path_value(const std::string& plist,
 }
 
 std::vector<std::string> plist_unrecognised_keys(const std::string& plist) {
-    static const std::set<std::string> kKnown = {
-        "Label",    "ProgramArguments", "EnvironmentVariables", "DEN_HOME",        "DEN_PREFIX",
-        "PATH",     "RunAtLoad",        "KeepAlive",            "StandardOutPath", "StandardErrorPath"};
+    static const std::set<std::string> kKnown = {"Label",
+                                                 "ProgramArguments",
+                                                 "EnvironmentVariables",
+                                                 "DEN_HOME",
+                                                 "DEN_PREFIX",
+                                                 "PATH",
+                                                 "RunAtLoad",
+                                                 "KeepAlive",
+                                                 "StandardOutPath",
+                                                 "StandardErrorPath"};
     std::vector<std::string> out;
     constexpr std::string_view kOpen = "<key>";
     for (auto at = plist.find(kOpen); at != std::string::npos; at = plist.find(kOpen, at)) {
@@ -294,14 +301,16 @@ std::string stale_daemon_path_problem(const fs::path& plist_file, const std::str
     if (auto dp = plist_env_value(plist, "DEN_PREFIX"); dp && !dp->empty()) {
         den_prefix = *dp;
     }
-    const auto stale = stale_homebrew_path_dirs(plist_path_value(plist), den_prefix, homebrew_prefix);
+    const auto stale =
+        stale_homebrew_path_dirs(plist_path_value(plist), den_prefix, homebrew_prefix);
     if (stale.empty()) {
         return {};
     }
     return "den daemon LaunchAgent PATH includes Homebrew's " + join(stale, ", ") +
            ", which is not den's prefix (" + den_prefix.string() +
            "), so the daemon and anything it runs can pick up Homebrew's tools: " +
-           plist_file.string() + "\n  Regenerate it with `den daemon install` (`den self-update` "
+           plist_file.string() +
+           "\n  Regenerate it with `den daemon install` (`den self-update` "
            "also refreshes its PATH).";
 }
 

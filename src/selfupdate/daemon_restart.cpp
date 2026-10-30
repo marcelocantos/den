@@ -129,7 +129,9 @@ DaemonRestartOutcome restart_daemon_after_update(const Config& cfg, std::ostream
     env.helper_log = cfg.den_home / "daemon-restart.log";
     if (env.launchd_plist) {
         const auto plist = *env.launchd_plist;
-        env.refresh_plist = [&cfg, plist](std::ostream& o) { refresh_daemon_plist_path(cfg, plist, o); };
+        env.refresh_plist = [&cfg, plist](std::ostream& o) {
+            refresh_daemon_plist_path(cfg, plist, o);
+        };
         env.restart_launchd = [plist](std::ostream& o) {
             auto ops = real_launchd_ops(kLabel, plist);
             auto before = ops.launchctl({"print", ops.domain + "/" + ops.label});

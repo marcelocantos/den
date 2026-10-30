@@ -521,7 +521,8 @@ void check_daemon_plist_path(const Config& config, std::vector<Finding>& finding
     const auto den_home = plist_env_value(text, "DEN_HOME");
     if (!den_home || fs::path(*den_home).lexically_normal() != config.den_home.lexically_normal())
         return;
-    if (auto problem = stale_daemon_path_problem(plist, text, config.prefix, config.homebrew_prefix);
+    if (auto problem =
+            stale_daemon_path_problem(plist, text, config.prefix, config.homebrew_prefix);
         !problem.empty())
         warn(findings, std::move(problem));
 }
