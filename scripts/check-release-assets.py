@@ -20,11 +20,16 @@
 # release-candidate.yml names it outright on its prerelease; it never reaches
 # a GA release.
 #
-#   scripts/check-release-assets.py [repo-root]
+#   scripts/check-release-assets.py [--version X.Y.Z] [--rc-tag vX.Y.Z-rc.N] [repo-root]
+#
+# The sample release is den-<version> with RC tag <rc-tag>. --version defaults
+# to project(den VERSION X.Y.Z) in the root's CMakeLists.txt (this
+# repository's when the root has none); --rc-tag defaults to v<version>-rc.1.
 #
 # Exit 0 when clean, 1 with one "file:line: message" per problem, 2 when there
-# is nothing to scan.
+# is nothing to scan or the version or RC tag is invalid.
 
+import argparse
 import fnmatch
 import glob
 import os
@@ -32,26 +37,48 @@ import re
 import shlex
 import sys
 
-VERSION = "0.15.0"
-RC_TAG = "v0.15.0-rc.5"
 TARGETS = ["darwin-aarch64", "linux-x86_64", "linux-aarch64"]
-REQUIRED = (
-    [f"den-{VERSION}-{t}.tar.gz" for t in TARGETS]
-    + [f"den-{VERSION}-{t}.tar.gz.sha256" for t in TARGETS]
-    + [f"den-{VERSION}-checksums.txt"]
-)
 HARNESS_LOG = re.compile(r"^harness-linux-logs-.*\.tar\.gz$")
-# Files that can be in the working directory or on an RC next to den's assets.
-FOREIGN = [
-    f"harness-linux-logs-{RC_TAG}.tar.gz",
-    "harness-linux-logs.tar.gz",
-    "release-notes.md",
-    "ga-release-notes.md",
-    "source.tar.gz",
-    f"den-{VERSION}.tar.gz.sha256.sig",
-    "checksums.txt",
-    "logs.sha256",
-]
+CMAKE_VERSION = re.compile(r"^\s*project\(\s*den\s+VERSION\s+(\d+\.\d+\.\d+)\b", re.M)
+VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+RC_TAG_RE = re.compile(r"^v(\d+\.\d+\.\d+)-rc\.\d+$")
+
+# The sample release, set by configure() from --version / --rc-tag.
+VERSION = RC_TAG = None
+REQUIRED = FOREIGN = []
+
+
+def configure(version, rc_tag):
+    """Name the sample release's den assets and the files that sit beside them."""
+    global VERSION, RC_TAG, REQUIRED, FOREIGN
+    VERSION, RC_TAG = version, rc_tag
+    REQUIRED = (
+        [f"den-{version}-{t}.tar.gz" for t in TARGETS]
+        + [f"den-{version}-{t}.tar.gz.sha256" for t in TARGETS]
+        + [f"den-{version}-checksums.txt"]
+    )
+    # Files that can be in the working directory or on an RC next to den's assets.
+    FOREIGN = [
+        f"harness-linux-logs-{rc_tag}.tar.gz",
+        "harness-linux-logs.tar.gz",
+        "release-notes.md",
+        "ga-release-notes.md",
+        "source.tar.gz",
+        f"den-{version}.tar.gz.sha256.sig",
+        "checksums.txt",
+        "logs.sha256",
+    ]
+
+
+def cmake_version(root):
+    """project(den VERSION ...) from root's CMakeLists.txt, else this repository's."""
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for d in (root, here):
+        path = os.path.join(d, "CMakeLists.txt")
+        if os.path.isfile(path):
+            m = CMAKE_VERSION.search(open(path, encoding="utf-8").read())
+            return (m.group(1) if m else None), path
+    return None, os.path.join(here, "CMakeLists.txt")
 HARNESS_LOG_OWNER = "release-candidate.yml"
 
 # gh release flags that take a value; anything else starting with - is boolean.
@@ -236,8 +263,30 @@ def scan_file(path, rel, problems):
 
 
 def main():
-    root = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(
-        os.path.dirname(os.path.abspath(__file__)))
+    ap = argparse.ArgumentParser(description="Check that den releases carry only den's own assets.")
+    ap.add_argument("root", nargs="?", default=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    help="repository root to scan (default: this repository)")
+    ap.add_argument("--version", help="den version X.Y.Z (default: CMakeLists.txt project version)")
+    ap.add_argument("--rc-tag", help="RC tag vX.Y.Z-rc.N (default: v<version>-rc.1)")
+    args = ap.parse_args()
+    root = args.root
+    version = args.version
+    if version is None:
+        version, path = cmake_version(root)
+        if version is None:
+            print(f"check-release-assets: no project(den VERSION X.Y.Z) in {path}; pass --version",
+                  file=sys.stderr)
+            return 2
+    version = version[1:] if version.startswith("v") else version
+    if not VERSION_RE.match(version):
+        print(f"check-release-assets: --version {version!r} is not X.Y.Z", file=sys.stderr)
+        return 2
+    rc_tag = args.rc_tag if args.rc_tag is not None else f"v{version}-rc.1"
+    m = RC_TAG_RE.match(rc_tag)
+    if not m or m.group(1) != version:
+        print(f"check-release-assets: --rc-tag {rc_tag!r} is not v{version}-rc.N", file=sys.stderr)
+        return 2
+    configure(version, rc_tag)
     files = sorted(
         glob.glob(os.path.join(root, ".github/workflows/*.yml"))
         + glob.glob(os.path.join(root, ".github/workflows/*.yaml"))
@@ -256,7 +305,7 @@ def main():
         for p in problems:
             print(p, file=sys.stderr)
         return 1
-    print("check-release-assets: OK")
+    print(f"check-release-assets: OK (den-{VERSION}, {RC_TAG})")
     return 0
 
 

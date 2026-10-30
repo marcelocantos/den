@@ -5,7 +5,8 @@
 # Tests for scripts/check-release-assets.py: the real tree must pass, and a
 # scratch copy of the real workflows with a release step widened back to a
 # bare glob, a non-den asset added, or a den asset dropped must fail and name
-# the offending file.
+# the offending file. The sample release defaults to the CMakeLists.txt
+# version and v<version>-rc.1; --version and --rc-tag override them.
 #
 # Run:
 #   sh tests/scripts/test_release_assets.sh
@@ -62,12 +63,24 @@ expect_fail() {
     fi
 }
 
+# The sample release the guard defaults to.
+V=$(sed -n -E 's/^[[:space:]]*project\([[:space:]]*den[[:space:]]+VERSION[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' "$ROOT/CMakeLists.txt" | head -1)
+if [ -z "$V" ]; then
+    echo "FAIL: no project(den VERSION) in $ROOT/CMakeLists.txt"
+    exit 1
+fi
+RCT="v${V}-rc.1"
+
 P=.github/workflows/promote-rc.yml
 RC=.github/workflows/release-candidate.yml
 R=.github/workflows/release.yml
 
 # The real repository is clean.
 if out=$(python3 "$SCRIPT" "$ROOT" 2>&1); then ok "repo is clean"; else bad "repo is clean: $out"; fi
+case "$out" in
+*"OK (den-${V}, ${RCT})"*) ok "defaults to the CMakeLists version and rc.1" ;;
+*) bad "defaults to the CMakeLists version and rc.1: $out" ;;
+esac
 
 fresh_tree
 if out=$(python3 "$SCRIPT" "$work/t" 2>&1); then ok "copied workflows pass"; else bad "copied workflows pass: $out"; fi
@@ -76,11 +89,11 @@ if out=$(python3 "$SCRIPT" "$work/t" 2>&1); then ok "copied workflows pass"; els
 # harness log.
 fresh_tree
 swap "$P" '--pattern "den-${VERSION}-*.tar.gz" \' "--pattern '*.tar.gz' \\"
-expect_fail "promote download *.tar.gz" "$P" "harness-linux-logs-v0.15.0-rc.5.tar.gz"
+expect_fail "promote download *.tar.gz" "$P" "harness-linux-logs-${RCT}.tar.gz"
 
 fresh_tree
 swap "$P" 'rc-assets/den-"${VERSION}"-*.tar.gz \' 'rc-assets/*.tar.gz \'
-expect_fail "promote create *.tar.gz" "$P" "harness-linux-logs-v0.15.0-rc.5.tar.gz"
+expect_fail "promote create *.tar.gz" "$P" "harness-linux-logs-${RCT}.tar.gz"
 
 fresh_tree
 swap "$P" 'rc-assets/den-"${VERSION}"-*.tar.gz.sha256 \' 'rc-assets/*.sha256 \'
@@ -100,12 +113,12 @@ expect_fail "harness log named on GA" "$P" "is not a den release asset"
 fresh_tree
 swap "$P" ' \
             "rc-assets/den-${VERSION}-checksums.txt"' ''
-expect_fail "GA without checksums" "$P" "do not publish den-0.15.0-checksums.txt"
+expect_fail "GA without checksums" "$P" "do not publish den-${V}-checksums.txt"
 
 fresh_tree
 swap "$RC" '
             dist/den-"${VERSION}"-*.tar.gz.sha256 \' ''
-expect_fail "RC without .sha256 files" "$RC" "den-0.15.0-linux-x86_64.tar.gz.sha256"
+expect_fail "RC without .sha256 files" "$RC" "den-${V}-linux-x86_64.tar.gz.sha256"
 
 # The old release.yml loop downloaded whatever `gh release view` listed.
 fresh_tree
@@ -125,6 +138,44 @@ expect_fail "other workflow uploads a non-den file" .github/workflows/extra.yaml
 fresh_tree
 printf '#!/bin/sh\ngh release upload "$1" \\\n    out/*.tar.gz\n' >"$work/t/scripts/publish.sh"
 expect_fail "script uploads *.tar.gz" scripts/publish.sh "also matches non-den assets"
+
+# --version and --rc-tag name the sample release; --rc-tag defaults to
+# v<version>-rc.1, and a scanned root's own CMakeLists.txt sets the default
+# version.
+fresh_tree
+swap "$P" '--pattern "den-${VERSION}-*.tar.gz" \' "--pattern '*.tar.gz' \\"
+out=$(python3 "$SCRIPT" --version 9.8.0 --rc-tag v9.8.0-rc.3 "$work/t" 2>&1)
+case "$out" in
+*"harness-linux-logs-v9.8.0-rc.3.tar.gz"*) ok "--rc-tag names the harness log" ;;
+*) bad "--rc-tag names the harness log: $out" ;;
+esac
+out=$(python3 "$SCRIPT" --version v9.8.0 "$work/t" 2>&1)
+case "$out" in
+*"harness-linux-logs-v9.8.0-rc.1.tar.gz"*) ok "--rc-tag defaults to v<version>-rc.1" ;;
+*) bad "--rc-tag defaults to v<version>-rc.1: $out" ;;
+esac
+fresh_tree
+printf 'project(den VERSION 1.2.0 LANGUAGES C CXX)\n' >"$work/t/CMakeLists.txt"
+out=$(python3 "$SCRIPT" "$work/t" 2>&1)
+case "$out" in
+*"OK (den-1.2.0, v1.2.0-rc.1)"*) ok "the scanned root's CMakeLists.txt sets the default" ;;
+*) bad "the scanned root's CMakeLists.txt sets the default: $out" ;;
+esac
+fresh_tree
+swap "$P" ' \
+            "rc-assets/den-${VERSION}-checksums.txt"' ''
+out=$(python3 "$SCRIPT" --version 9.8.0 "$work/t" 2>&1)
+if [ $? -eq 1 ] && printf '%s\n' "$out" | grep -qF "do not publish den-9.8.0-checksums.txt"; then
+    ok "--version names the den assets"
+else
+    bad "--version names the den assets: $out"
+fi
+for a in "--version 9.8" "--version 9.8.0 --rc-tag v9.8.1-rc.1" "--version 9.8.0 --rc-tag 9.8.0-rc.1"; do
+    # shellcheck disable=SC2086
+    python3 "$SCRIPT" $a "$ROOT" >/dev/null 2>&1
+    rc=$?
+    if [ "$rc" -eq 2 ]; then ok "rejects $a"; else bad "rejects $a (exit $rc)"; fi
+done
 
 # Nothing to scan is a usage error, not a pass.
 mkdir -p "$work/empty"
