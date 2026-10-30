@@ -760,10 +760,9 @@ void Cli::M::setup() {
     search->callback([this] {
         auto cfg = Config::detect();
         auto idx = load_index(cfg.cache / "index.json");
-        if (idx.empty()) {
-            std::cerr << "Index is empty. Run 'den update' first.\n";
-            return;
-        }
+        // With no index there is nothing to search; fail rather than exit 0
+        // as though the query simply had no matches.
+        require_index(idx);
         // Search scans every package, so decode the whole index up front.
         idx.materialise_all();
         // Case-insensitive substring match.
@@ -1571,10 +1570,9 @@ void Cli::M::setup() {
     outdated->callback([] {
         auto cfg = Config::detect();
         auto idx = load_index(cfg.cache / "index.json");
-        if (idx.empty()) {
-            std::cerr << "Index is empty. Run 'den update' first.\n";
-            return;
-        }
+        // Without the index nothing can be compared; fail rather than exit 0
+        // as though everything were up to date (same as `den upgrade`).
+        require_index(idx);
         auto installed = list_installed(cfg.store);
         if (installed.empty()) {
             std::cout << "No packages installed.\n";

@@ -751,8 +751,9 @@ step_defer_while_in_use() {
     echo "${_o}" | while IFS= read -r _line; do
         echo "  [outdated] ${_line}" >&2
     done
-    # `outdated` may print to stderr ("Index is empty") and return 0 on a fresh
-    # sandbox — that is fine. We only fail on a crash (no output at all).
+    # `outdated` exits 1 with "error: the package index is empty" on a fresh
+    # sandbox with no index — that is fine. We only fail on a crash (no output
+    # at all).
     if [ -z "${_o}" ] && [ "${_orc}" -ne 0 ]; then
         fail "defer_while_in_use" "den outdated produced no output (rc=${_orc})"
         return
