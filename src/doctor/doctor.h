@@ -4,6 +4,7 @@
 #pragma once
 
 #include "../core/config.h"
+#include "../daemon/daemon.h"
 #include "../index/package.h"
 #include "../platform/platform.h"
 #include "../store/store.h"
@@ -135,6 +136,21 @@ KegLinkage scan_keg_linkage(const Config& config);
 /// N" and one indented line each), or empty. In a prefix shared with
 /// Homebrew (`shared`) pins are expected and only the count is shown.
 std::string format_pinned_kegs(const std::vector<std::string>& pinned, bool shared);
+
+/// Installed packages the upgrade plan holds (core/version.h
+/// VersionDelta::Held): the index's only version for the formula is lower
+/// than the installed one but carries a higher version_scheme (openssl@3
+/// 3.6.3 installed, index pins 3.5.9 with version_scheme 1), so there is no
+/// newer version in the installed line and den never downgrades on its own.
+/// Computed now from `idx` and the active environment's homebrew bucket with
+/// the daemon's compute_pending, the plan `den upgrade` and the maintenance
+/// cycle use, rather than read back from daemon_state.json. Sorted by name.
+std::vector<DeferredUpgrade> held_packages(const Config& config, const PackageIndex& idx);
+
+/// The doctor warning text for `held` ("N package(s) held ..." and, per
+/// package, installed vs available, the reason, and `den use <name>
+/// <version>` to downgrade deliberately), or an empty string when none.
+std::string format_held_packages(const std::vector<DeferredUpgrade>& held);
 
 /// Run all health checks and print a summary.
 /// Returns the list of findings so callers can set a non-zero exit code

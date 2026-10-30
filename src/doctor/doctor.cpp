@@ -6,6 +6,7 @@
 #include "../build/linkage_scan.h"
 #include "../build/macho_scan.h"
 #include "../core/error.h"
+#include "../daemon/daemon.h"
 #include "../env/environment.h"
 #include "../env/manifest.h"
 #include "../env/post_install.h"
@@ -499,7 +500,60 @@ void check_source_builds(const Config& config, std::vector<Finding>& findings,
                        pending + "\n  Rebuild them (den install --build-from-source <name>).");
 }
 
+// ---------------------------------------------------------------------------
+// Check: packages held by a version_scheme bump to a lower version
+// ---------------------------------------------------------------------------
+
+void check_held_packages(const Config& config, std::vector<Finding>& findings) {
+    SPDLOG_DEBUG("check: held packages");
+    std::error_code ec;
+    const auto index_path = config.cache / "index.json";
+    if (!fs::exists(index_path, ec))
+        return;
+    std::vector<DeferredUpgrade> held;
+    try {
+        held = held_packages(config, load_index(index_path));
+    } catch (const std::exception& e) {
+        SPDLOG_DEBUG("held-package check skipped: {}", e.what());
+        return;
+    }
+    auto text = format_held_packages(held);
+    if (!text.empty())
+        warn(findings, std::move(text));
+}
+
 } // namespace
+
+std::vector<DeferredUpgrade> held_packages(const Config& config, const PackageIndex& idx) {
+    const auto per = resolve_per_provider(config.den_home, active_env_path(config.den_home));
+    const auto it = per.find("homebrew");
+    if (it == per.end())
+        return {};
+    std::vector<DeferredUpgrade> held;
+    compute_pending(
+        it->second, idx, nullptr,
+        [&config](const std::string& name, const std::string& version) {
+            return installed_version_scheme(config.store / keg_name(name) / version);
+        },
+        &held);
+    return held;
+}
+
+std::string format_held_packages(const std::vector<DeferredUpgrade>& held) {
+    if (held.empty())
+        return "";
+    std::string text = std::to_string(held.size()) +
+                       " package(s) held: the index offers only a lower version (with a higher "
+                       "version_scheme), so there is nothing newer in the installed line and den "
+                       "will not downgrade on its own:";
+    for (const auto& h : held)
+        text += "\n    " + h.name + ": installed " + h.installed + ", index has " + h.available +
+                " (" + h.reason + ")";
+    text += "\n  To downgrade deliberately:";
+    for (const auto& h : held)
+        text += "\n    den use " + h.name + " " + h.available;
+    return text;
+}
 
 std::vector<SourceBuiltKeg> source_built_kegs(const fs::path& store, const PackageIndex* idx) {
     std::vector<SourceBuiltKeg> out;
@@ -857,6 +911,7 @@ std::vector<Finding> doctor(const Config& config) {
     check_brew_dependencies(config, findings, notes);
     check_keg_linkage(config, findings, notes);
     check_source_builds(config, findings, notes);
+    check_held_packages(config, findings);
     check_file_permissions(config, findings);
     check_host_toolchain(config, findings);
     check_trust_model(config, findings);
