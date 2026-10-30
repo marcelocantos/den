@@ -325,7 +325,7 @@ jobs:
             echo ""
             echo "## What requires manual validation before promotion"
             echo ""
-            echo "- **macOS harness** — run \`make harness-macos\` against \`den-test-mac\`."
+            echo "- **macOS harness** — run \`make harness-macos\` on a macOS test machine."
             echo "  CI cannot exercise this (test laptop is not a GitHub runner)."
             echo ""
             echo "## Promoting to GA"
