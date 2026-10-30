@@ -643,10 +643,17 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
             std::cout << "  " << d.name << " " << d.from << " (pinned; " << d.to << " available)\n";
         }
     }
-    if (!res.held_dependents.empty()) {
-        std::cout << "Held back " << res.held_dependents.size()
+    // A bare upgrade screens a revision-bumped package as a candidate (it is
+    // outdated in its own right), so one held above can come back here as a
+    // held dependent of the batch; it is listed and counted once (#185).
+    std::vector<std::pair<VersionChange, std::string>> held_dependents;
+    for (const auto& h : res.held_dependents)
+        if (!trust_held.contains(h.first.name))
+            held_dependents.push_back(h);
+    if (!held_dependents.empty()) {
+        std::cout << "Held back " << held_dependents.size()
                   << " dependent(s) (unattended trust policy):\n";
-        for (const auto& [d, why] : res.held_dependents) {
+        for (const auto& [d, why] : held_dependents) {
             std::cout << "  " << d.name << " " << d.from << " -> " << d.to << ": " << why << "\n";
             trust_held.emplace(d.name, why);
         }
