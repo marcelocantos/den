@@ -281,7 +281,7 @@ jobs:
         run: |
           VERSION="${{ github.event.inputs.version }}"
           checksums="den-${VERSION}-checksums.txt"
-          cat dist/*.sha256 > "${checksums}"
+          cat dist/den-"${VERSION}"-*.tar.gz.sha256 > "${checksums}"
           echo "CHECKSUMS_FILE=${checksums}" >> "$GITHUB_ENV"
 
       - name: Generate release notes
@@ -344,8 +344,8 @@ jobs:
         with:
           name: release-dry-run-${{ github.event.inputs.version }}
           path: |
-            dist/*.tar.gz
-            dist/*.sha256
+            dist/den-${{ github.event.inputs.version }}-*.tar.gz
+            dist/den-${{ github.event.inputs.version }}-*.tar.gz.sha256
             ${{ env.CHECKSUMS_FILE }}
             release-notes.md
             harness-linux-logs-${{ needs.preflight.outputs.rc_tag }}.tar.gz
@@ -361,7 +361,7 @@ jobs:
           echo "  Assets: artifact release-dry-run-${{ github.event.inputs.version }}"
           echo "============================================================"
           ls -l dist/ "${{ env.CHECKSUMS_FILE }}"
-          for a in dist/*.tar.gz; do echo "== $a"; tar tzf "$a"; done
+          for a in dist/den-*.tar.gz; do echo "== $a"; tar tzf "$a"; done
 
       - name: Create RC tag
         if: ${{ !inputs.dry_run }}
@@ -377,13 +377,17 @@ jobs:
           RC_TAG="${{ needs.preflight.outputs.rc_tag }}"
           VERSION="${{ github.event.inputs.version }}"
 
+          # den's own assets by name, plus the Linux harness log, which is
+          # named outright: it belongs on the RC only and promote-rc.yml does
+          # not carry it to GA. scripts/check-release-assets.py (ctest
+          # script_test_release_assets) guards these patterns.
           gh release create "$RC_TAG" \
             --prerelease \
             --target "${{ github.sha }}" \
             --title "den ${RC_TAG}" \
             --notes-file release-notes.md \
-            dist/*.tar.gz \
-            dist/*.sha256 \
+            dist/den-"${VERSION}"-*.tar.gz \
+            dist/den-"${VERSION}"-*.tar.gz.sha256 \
             "${{ env.CHECKSUMS_FILE }}" \
             "harness-linux-logs-${RC_TAG}.tar.gz"
 
