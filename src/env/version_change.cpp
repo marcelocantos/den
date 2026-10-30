@@ -175,6 +175,16 @@ void add_revision_bumped_dependents(const Config& config, const PackageIndex& id
                 result.pinned_dependents.push_back({name, version, pkg->version});
                 continue;
             }
+            if (opts.refuse_dependent) {
+                VersionChange candidate{name, version, pkg->version};
+                if (auto why = opts.refuse_dependent(candidate)) {
+                    SPDLOG_WARN("{} {} refused ({}); not moving it to {} with {}", name, version,
+                                *why, pkg->version, changes[by.front()].name);
+                    pinned.insert(name);
+                    result.refused_dependents.emplace_back(std::move(candidate), std::move(*why));
+                    continue;
+                }
+            }
             if (opts.screen_dependents) {
                 VersionChange candidate{name, version, pkg->version};
                 auto held = opts.screen_dependents({candidate});

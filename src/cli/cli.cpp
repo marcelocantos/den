@@ -218,6 +218,7 @@ struct Cli::M {
     std::vector<std::string> install_names;
     bool build_from_source = false;
     bool install_overwrite = false;
+    bool install_force = false;
     std::string install_provider;
 
     // uninstall
@@ -229,6 +230,7 @@ struct Cli::M {
     std::vector<std::string> upgrade_names;
     std::string upgrade_provider;
     bool upgrade_dry_run = false;
+    bool upgrade_force = false;
 
     // list
     bool list_cellar = false;
@@ -322,6 +324,9 @@ void Cli::M::setup() {
                       "(like `brew link --overwrite`)");
     install->add_option("--provider", install_provider,
                         "Provider to install through (default: auto-resolve)");
+    install->add_flag("--force", install_force,
+                      "Install a formula, or a formula dependency, that is disabled upstream "
+                      "(warn instead of refusing; disabled casks are still refused)");
     install->callback([this] {
         auto cfg = Config::detect();
         auto idx = load_index(cfg.cache / "index.json");
@@ -343,7 +348,8 @@ void Cli::M::setup() {
             // Homebrew ecosystem. --provider is ignored on this path.
             if (idx.empty())
                 throw UserError(empty_index_message());
-            install_from_source(cfg, idx, install_names, link_opts, active_source_plan_runner());
+            install_from_source(cfg, idx, install_names, link_opts, active_source_plan_runner(),
+                                this->install_force);
             return;
         }
 
@@ -368,7 +374,7 @@ void Cli::M::setup() {
             }
         }
         for (auto& [provider, names] : by_provider) {
-            install_packages(cfg, *provider, idx, names, link_opts);
+            install_packages(cfg, *provider, idx, names, link_opts, this->install_force);
         }
     });
 
@@ -445,6 +451,9 @@ void Cli::M::setup() {
                         "Provider whose packages to upgrade (default: auto-resolve)");
     upgrade->add_flag("-n,--dry-run", upgrade_dry_run,
                       "Show what would be upgraded or held, without changing anything");
+    upgrade->add_flag("--force", upgrade_force,
+                      "Upgrade a named formula, or pour a formula dependency, that is disabled "
+                      "upstream (warn instead of refusing; disabled casks are still refused)");
     upgrade->callback([this] {
         auto cfg = Config::detect();
         auto idx = load_index(cfg.cache / "index.json");
@@ -459,7 +468,7 @@ void Cli::M::setup() {
         auto manifest = read_manifest(cfg.den_home, active);
 
         if (upgrade_names.empty()) {
-            upgrade_all_packages(cfg, registry, idx, upgrade_dry_run);
+            upgrade_all_packages(cfg, registry, idx, upgrade_dry_run, upgrade_force);
             return;
         }
 
@@ -481,7 +490,7 @@ void Cli::M::setup() {
                               << " provider; den upgrade does not track its versions yet\n";
                 continue;
             }
-            upgrade_packages(cfg, *provider, idx, names, upgrade_dry_run);
+            upgrade_packages(cfg, *provider, idx, names, upgrade_dry_run, upgrade_force);
         }
     });
 
