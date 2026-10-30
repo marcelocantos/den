@@ -349,6 +349,46 @@ TEST_SUITE("upgrade_dry_run_parity") {
         CHECK(real_f.ledger() == 2);
     }
 
+    TEST_CASE("--unattended, bare: a held package that is also a held dependent is listed once") {
+        // Regression for #185. With no names, jqx 1.0_1 (a revision bump, so
+        // outdated in its own right) is screened and held as a candidate; when
+        // jq's batch then reaches it as a dependent it is already held, so it
+        // is not listed again under held dependents.
+        auto setup = [](Fixture& f) {
+            f.add(bottled(pkg("jq", "1.8.2"), 'c'));
+            f.add(bottled(pkg("probe", "1.0"), 'a'));
+            f.add(bottled(rev_bump(pkg("jqx", "1.0_1", {"jq"})), 'b'));
+            fs::create_directories(f.cfg.den_home / "trust");
+            std::ofstream(f.cfg.den_home / "trust" / "known_hashes.json")
+                << R"({"schema_version": 1, "hashes": {"jq--1.8.2--default": ")" +
+                       std::string(64, 'c') + R"("}})";
+            set_setting(f.cfg.den_home, "trust.unattended", "refuse");
+        };
+        Scenario s{{{"jqx", "1.0"}, {"probe", "0.9"}}, setup, {}};
+        s.unattended = true;
+        auto dry = check_parity(s);
+        const std::string held = "Held back 2 package(s) (unattended trust policy):\n"
+                                 "  jqx 1.0 -> 1.0_1: single-source";
+        CHECK(dry.out.starts_with(held));
+        CHECK(has(dry.out, "\n  probe 0.9 -> 1.0: single-source"));
+        CHECK(has(dry.out, "Would upgrade 1 package(s):\n  jq 1.7.1 -> 1.8.2\n"));
+        CHECK_FALSE(has(dry.out, "dependent(s)"));
+        size_t listed = 0;
+        for (size_t at = 0; (at = dry.out.find("  jqx 1.0 -> 1.0_1", at)) != std::string::npos;
+             ++at)
+            ++listed;
+        CHECK(listed == 1);
+        CHECK(dry.thrown == "2 package(s) held back by the unattended trust policy; review with "
+                            "`den trust review`");
+        Fixture real_f(s.extra);
+        setup(real_f);
+        auto real = run_upgrade(real_f, s.names, /*dry_run=*/false, false, /*unattended=*/true);
+        CHECK(real.thrown == dry.thrown);
+        CHECK(real_f.ledger() == 2);
+        CHECK(real_f.manifest().at("jq") == "1.8.2");
+        CHECK(real_f.manifest().at("jqx") == "1.0");
+    }
+
     TEST_CASE("plain cases keep parity: one upgrade, and nothing to do") {
         auto one = check_parity({});
         CHECK(one.out == "Would upgrade 1 package(s):\n  jq 1.7.1 -> 1.8.2\n"
