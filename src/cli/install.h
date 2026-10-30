@@ -39,26 +39,30 @@ std::string empty_index_message();
 /// the CLI prints "error: ..." and exits 1 instead of exiting 0.
 void require_index(const PackageIndex& idx);
 
-/// The refusal for a named formula homebrew-core has disabled, e.g.
-/// "'rye' is disabled upstream: it is not maintained upstream (disabled on
-/// 2026-08-18; replacement: uv)". The reason, date and replacement come from
-/// the index's disable! fields and are left out when it has none. Homebrew's
-/// reason symbols read as brew words them; a custom reason is quoted as-is.
-std::string disabled_formula_message(const Package& pkg);
+/// The refusal (or, for one already up to date, the warning) for a named
+/// formula or cask the index marks disabled, e.g. "'rye' is disabled
+/// upstream: it is not maintained upstream (disabled on 2026-08-18;
+/// replacement: uv)". The reason, date and replacement come from the
+/// index's disable! fields and are left out when it has none. Homebrew's
+/// reason symbols read as brew words them (its formula or cask list, by the
+/// package's kind); a custom reason is quoted as-is.
+std::string disabled_package_message(const Package& pkg);
 
-/// The named formulae in `names` the index marks disabled (casks and names
+/// The names in `names` the index marks disabled (formulae and casks; names
 /// not in the index are not). Each is reported on stderr as
-/// "error: <disabled_formula_message>".
-std::vector<std::string> refuse_disabled_formulae(const PackageIndex& idx,
+/// "error: <disabled_package_message>".
+std::vector<std::string> refuse_disabled_packages(const PackageIndex& idx,
                                                   const std::vector<std::string>& names);
 
 /// Install packages by name. Dispatches each install through `provider`,
 /// then updates the active env's manifest with the provider-reported
 /// resolved version + auto-deps, and re-materialises the env. `link_opts`
 /// carries `--overwrite` through to the root env's prefix linking. A
-/// formula the index marks disabled is refused (refuse_disabled_formulae):
-/// the rest are installed, then the call throws a UserError naming how many
-/// were refused.
+/// formula or cask the index marks disabled is refused: the rest are
+/// installed, then the call throws a UserError naming how many were
+/// refused. One already installed in the env at the index version is not
+/// refused (there is nothing to install): it is reported up to date, with a
+/// "warning: <disabled_package_message>" on stderr.
 void install_packages(const Config& config, PackageProvider& provider, const PackageIndex& idx,
                       const std::vector<std::string>& names,
                       const MaterialiseOptions& link_opts = {});
@@ -68,7 +72,8 @@ void install_packages(const Config& config, PackageProvider& provider, const Pac
 /// env's manifest (build-only kegs stay out), and materialise the env, which
 /// links every recorded keg and runs its declarative post_install steps,
 /// poured or built alike. Throws a UserError when any step was deferred, and
-/// before planning anything when a named formula is disabled upstream.
+/// before planning anything when a named formula is disabled upstream
+/// (installed or not: -s would build it).
 void install_from_source(const Config& config, const PackageIndex& idx,
                          const std::vector<std::string>& names, const MaterialiseOptions& link_opts,
                          const SourcePlanRunner& runner);
@@ -84,9 +89,12 @@ void uninstall_packages(const Config& config, PackageProvider& provider,
 /// doctor` and the daemon share: casks and disabled formulae are left out
 /// (newer casks are listed as upgradable by name). A package named in
 /// `names` is compared the same way (select_upgrade) and upgraded even when
-/// it is a cask; a named formula the index marks disabled is refused
-/// (refuse_disabled_formulae), the other names proceed, and the call then
-/// throws a UserError, as for a named pinned package. Only the
+/// it is a cask. A named formula or cask the index marks disabled is
+/// refused when the index version is newer: the other names proceed, and
+/// the call then throws a UserError, as for a named pinned package. When
+/// nothing would be applied to it (up to date, or index older or held) it
+/// is reported as usual, with a "warning: <disabled_package_message>", and
+/// does not fail the call. Only the
 /// active environment's bucket for `provider` is considered: a package
 /// another provider manages is never compared against `idx` (the daemon's
 /// maintenance cycle reads the homebrew bucket the same way). Each

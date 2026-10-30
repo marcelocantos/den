@@ -404,6 +404,14 @@ Package transform_cask(const json& c) {
         c.contains("deprecated") && c["deprecated"].is_boolean() && c["deprecated"].get<bool>();
     pkg.disabled =
         c.contains("disabled") && c["disabled"].is_boolean() && c["disabled"].get<bool>();
+    if (pkg.disabled) {
+        // The cask API carries the same disable! fields as the formula API.
+        pkg.disable_date = json_string(c, "disable_date");
+        pkg.disable_reason = json_string(c, "disable_reason");
+        pkg.disable_replacement = json_string(c, "disable_replacement_cask");
+        if (pkg.disable_replacement.empty())
+            pkg.disable_replacement = json_string(c, "disable_replacement_formula");
+    }
     pkg.old_names = json_string_array(c, "old_tokens");
 
     if (c.contains("version") && c["version"].is_string()) {

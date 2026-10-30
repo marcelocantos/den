@@ -71,35 +71,60 @@ void report_version_change_failures(const Config& config, const VersionChangeRes
 namespace {
 
 /// Homebrew's wording for its disable!/deprecate! reason symbols
-/// (DeprecateDisable::FORMULA_DEPRECATE_DISABLE_REASONS), so den's refusal
-/// reads like brew's "has been disabled because it ...".
-std::string disable_reason_phrase(const std::string& reason) {
-    static const std::map<std::string, std::string> phrases = {
+/// (DeprecateDisable::FORMULA_DEPRECATE_DISABLE_REASONS and
+/// CASK_DEPRECATE_DISABLE_REASONS in brew's deprecate_disable.rb), so den's
+/// refusal reads like brew's "has been disabled because it ...".
+std::string disable_reason_phrase(const std::string& reason, bool cask) {
+    static const std::map<std::string, std::string> formula_phrases = {
         {"does_not_build", "does not build"},
         {"no_license", "has no license"},
         {"repo_archived", "has an archived upstream repository"},
         {"repo_removed", "has a removed upstream repository"},
         {"unmaintained", "is not maintained upstream"},
+        {"unreachable", "is no longer reliably reachable upstream"},
         {"unsupported", "is not supported upstream"},
         {"deprecated_upstream", "is deprecated upstream"},
         {"versioned_formula", "is a versioned formula"},
         {"checksum_mismatch", "was built from a source file whose checksum has since changed"},
     };
+    static const std::map<std::string, std::string> cask_phrases = {
+        {"discontinued", "is discontinued upstream"},
+        {"moved_to_mas", "is now exclusively distributed on the Mac App Store"},
+        {"no_longer_available", "is no longer available upstream"},
+        {"no_longer_meets_criteria", "no longer meets the criteria for acceptable casks"},
+        {"unmaintained", "is not maintained upstream"},
+        {"fails_gatekeeper_check", "does not pass the macOS Gatekeeper check"},
+        {"unreachable", "is no longer reliably reachable upstream"},
+    };
+    const auto& phrases = cask ? cask_phrases : formula_phrases;
     if (auto it = phrases.find(reason); it != phrases.end())
         return it->second;
     return reason;
 }
 
 std::string refused_count_message(size_t n) {
-    return std::to_string(n) + " requested formula(e) are disabled upstream";
+    return std::to_string(n) + " requested package(s) are disabled upstream";
+}
+
+bool is_cask_package(const Package& pkg) {
+    return pkg.artifact_type == ArtifactType::App || !pkg.cask_artifacts.empty();
+}
+
+/// A named package that is disabled upstream but already installed at the
+/// index version: there is nothing to do, so it is reported as up to date
+/// with a warning instead of being refused.
+void warn_disabled_up_to_date(const Package& pkg, const std::string& name,
+                              const std::string& version) {
+    std::cout << name << " is already up to date (" << version << ").\n";
+    std::cerr << "warning: " << disabled_package_message(pkg) << "\n";
 }
 
 } // namespace
 
-std::string disabled_formula_message(const Package& pkg) {
+std::string disabled_package_message(const Package& pkg) {
     std::string msg = "'" + pkg.name + "' is disabled upstream";
     if (!pkg.disable_reason.empty())
-        msg += ": it " + disable_reason_phrase(pkg.disable_reason);
+        msg += ": it " + disable_reason_phrase(pkg.disable_reason, is_cask_package(pkg));
     std::string details;
     if (!pkg.disable_date.empty())
         details = "disabled on " + pkg.disable_date;
@@ -113,13 +138,13 @@ std::string disabled_formula_message(const Package& pkg) {
     return msg;
 }
 
-std::vector<std::string> refuse_disabled_formulae(const PackageIndex& idx,
+std::vector<std::string> refuse_disabled_packages(const PackageIndex& idx,
                                                   const std::vector<std::string>& names) {
     std::vector<std::string> refused;
     for (const auto& name : names) {
         const auto* pkg = idx.find(name);
-        if (pkg && pkg->disabled && pkg->artifact_type == ArtifactType::Binary) {
-            std::cerr << "error: " << disabled_formula_message(*pkg) << "\n";
+        if (pkg && pkg->disabled) {
+            std::cerr << "error: " << disabled_package_message(*pkg) << "\n";
             refused.push_back(name);
         }
     }
@@ -132,22 +157,45 @@ void install_packages(const Config& config, PackageProvider& provider, const Pac
     auto active = active_env_path(config.den_home);
     auto pname = std::string(provider.provider_name());
 
-    // homebrew-core disabled these formulae (brew refuses to install them
-    // too). The index only describes Homebrew packages, so a name another
-    // provider installs is never matched against it.
+    // A package the index marks disabled (homebrew-core or homebrew-cask
+    // disabled it; brew refuses to install it too) is refused unless it is
+    // already installed here at the index version, when there is nothing to
+    // do: it is reported up to date, with a warning. The index only
+    // describes Homebrew packages, so a name another provider installs is
+    // never matched against it.
+    const auto manifest = read_manifest(config.den_home, active);
+    auto recorded_at = [&](const std::string& name, const std::string& version) {
+        auto b = manifest.packages.find(pname);
+        if (b == manifest.packages.end())
+            return false;
+        auto it = b->second.find(name);
+        return it != b->second.end() && it->second == version;
+    };
     std::vector<std::string> refused;
-    if (pname == "homebrew")
-        refused = refuse_disabled_formulae(idx, requested);
     std::vector<std::string> names;
-    for (const auto& name : requested)
-        if (std::find(refused.begin(), refused.end(), name) == refused.end())
+    for (const auto& name : requested) {
+        const Package* pkg = pname == "homebrew" ? idx.find(name) : nullptr;
+        if (!pkg || !pkg->disabled) {
             names.push_back(name);
-    if (names.empty() && !refused.empty())
-        throw UserError(refused_count_message(refused.size()));
+            continue;
+        }
+        const bool up_to_date = !pkg->version.empty() && recorded_at(name, pkg->version) &&
+                                provider.is_installed(config, name, pkg->version);
+        if (up_to_date) {
+            warn_disabled_up_to_date(*pkg, name, pkg->version);
+        } else {
+            std::cerr << "error: " << disabled_package_message(*pkg) << "\n";
+            refused.push_back(name);
+        }
+    }
+    if (names.empty() && !requested.empty()) {
+        if (!refused.empty())
+            throw UserError(refused_count_message(refused.size()));
+        return;
+    }
 
     // A package already in the manifest moves to the provider's version as a
     // unit: if the new version cannot be linked, it stays where it was.
-    const auto manifest = read_manifest(config.den_home, active);
     std::vector<VersionChange> changes;
     for (const auto& name : names) {
         VersionChange c{name, "", ""};
@@ -179,7 +227,9 @@ void install_from_source(const Config& config, const PackageIndex& idx,
     auto active = active_env_path(config.den_home);
     // A disabled formula is refused before anything is planned or built:
     // building it from source is no way around homebrew-core disabling it.
-    if (auto refused = refuse_disabled_formulae(idx, names); !refused.empty())
+    // -s builds even an installed formula, so an installed one is refused
+    // too.
+    if (auto refused = refuse_disabled_packages(idx, names); !refused.empty())
         throw UserError(refused_count_message(refused.size()));
     // G3: plan the whole chain first. Dependencies pour when their
     // bottle pours into den's Cellar and are built from source when
@@ -293,7 +343,8 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
     const auto pins = read_pins(config.den_home);
     std::vector<UpgradeCandidate> candidates;
     std::vector<std::string> explicitly_pinned;
-    // Named formulae homebrew-core has disabled: refused, as brew does.
+    // Named packages the index marks disabled that the run would upgrade:
+    // refused, as brew does.
     std::vector<std::string> refused_disabled;
     // Index older than installed: an upgrade never downgrades (that takes an
     // explicit `den use <name> <version>`), so these are reported and skipped.
@@ -328,7 +379,9 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
         // A name given explicitly goes through the same select_upgrade
         // comparison, but a cask named here is upgraded: naming it is the
         // manual upgrade the bare form leaves to the user. A disabled
-        // formula is refused even when named (homebrew-core disabled it).
+        // formula or cask is refused when the index version is newer (the
+        // upgrade would install it); otherwise there is nothing to apply,
+        // so it is reported as usual, with a warning that it is disabled.
         for (const auto& name : names) {
             auto it = resolved.find(name);
             if (it == resolved.end()) {
@@ -348,12 +401,19 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
                 std::cerr << "warning: '" << name << "' not in index\n";
                 continue;
             }
-            if (pkg->disabled && pkg->artifact_type == ArtifactType::Binary) {
-                std::cerr << "error: " << disabled_formula_message(*pkg) << "\n";
-                refused_disabled.push_back(name);
-                continue;
-            }
             const auto delta = sel.delta;
+            if (pkg->disabled) {
+                if (delta == VersionDelta::Newer) {
+                    std::cerr << "error: " << disabled_package_message(*pkg) << "\n";
+                    refused_disabled.push_back(name);
+                    continue;
+                }
+                if (delta == VersionDelta::Same) {
+                    warn_disabled_up_to_date(*pkg, name, it->second);
+                    continue;
+                }
+                std::cerr << "warning: " << disabled_package_message(*pkg) << "\n";
+            }
             if (delta == VersionDelta::Newer) {
                 candidates.push_back({name, it->second, pkg->version});
             } else if (delta == VersionDelta::Older) {
