@@ -153,6 +153,14 @@ struct Package {
     // Metadata.
     bool deprecated = false;
     bool disabled = false;
+    // Homebrew's disable! stanza, as the formula API reports it: the date it
+    // took effect ("disable_date", e.g. "2026-08-18"), the reason
+    // ("disable_reason": a symbol such as "unmaintained" or a custom
+    // phrase) and the suggested replacement ("disable_replacement_formula",
+    // else "disable_replacement_cask"). Empty when the index has none.
+    std::string disable_date;
+    std::string disable_reason;
+    std::string disable_replacement;
 
     /// The upstream version without Homebrew's "_<revision>" suffix (what
     /// Homebrew calls versions.stable). Equal to `version` when revision is 0.

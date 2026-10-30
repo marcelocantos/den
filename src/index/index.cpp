@@ -110,6 +110,13 @@ Package transform_formula(const json& f) {
         f.contains("deprecated") && f["deprecated"].is_boolean() && f["deprecated"].get<bool>();
     pkg.disabled =
         f.contains("disabled") && f["disabled"].is_boolean() && f["disabled"].get<bool>();
+    if (pkg.disabled) {
+        pkg.disable_date = json_string(f, "disable_date");
+        pkg.disable_reason = json_string(f, "disable_reason");
+        pkg.disable_replacement = json_string(f, "disable_replacement_formula");
+        if (pkg.disable_replacement.empty())
+            pkg.disable_replacement = json_string(f, "disable_replacement_cask");
+    }
 
     // Stability rating (🎯T30). Prefer an explicit rating if the upstream
     // metadata carries one; otherwise derive a conservative default from the
@@ -397,6 +404,14 @@ Package transform_cask(const json& c) {
         c.contains("deprecated") && c["deprecated"].is_boolean() && c["deprecated"].get<bool>();
     pkg.disabled =
         c.contains("disabled") && c["disabled"].is_boolean() && c["disabled"].get<bool>();
+    if (pkg.disabled) {
+        // The cask API carries the same disable! fields as the formula API.
+        pkg.disable_date = json_string(c, "disable_date");
+        pkg.disable_reason = json_string(c, "disable_reason");
+        pkg.disable_replacement = json_string(c, "disable_replacement_cask");
+        if (pkg.disable_replacement.empty())
+            pkg.disable_replacement = json_string(c, "disable_replacement_formula");
+    }
     pkg.old_names = json_string_array(c, "old_tokens");
 
     if (c.contains("version") && c["version"].is_string()) {
@@ -477,6 +492,12 @@ json package_to_json(const Package& pkg) {
     j["stability"] = sat::stability_label(pkg.stability);
     j["deprecated"] = pkg.deprecated;
     j["disabled"] = pkg.disabled;
+    if (!pkg.disable_date.empty())
+        j["disable_date"] = pkg.disable_date;
+    if (!pkg.disable_reason.empty())
+        j["disable_reason"] = pkg.disable_reason;
+    if (!pkg.disable_replacement.empty())
+        j["disable_replacement"] = pkg.disable_replacement;
 
     j["dependencies"] = pkg.dependencies;
     j["build_dependencies"] = pkg.build_dependencies;
@@ -568,6 +589,9 @@ Package package_from_json(const json& j) {
     pkg.stability = sat::parse_stability(j.value("stability", "stable"));
     pkg.deprecated = j.value("deprecated", false);
     pkg.disabled = j.value("disabled", false);
+    pkg.disable_date = j.value("disable_date", "");
+    pkg.disable_reason = j.value("disable_reason", "");
+    pkg.disable_replacement = j.value("disable_replacement", "");
 
     if (j.contains("dependencies") && j["dependencies"].is_array()) {
         for (const auto& d : j["dependencies"]) {

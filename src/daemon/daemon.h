@@ -111,7 +111,7 @@ enum class UpgradeSkip {
     None,       // selectable: the delta decides
     NotInIndex, // no index entry, or one with no version
     Cask,       // a cask/app: upgrading swaps a live .app bundle, so only by name
-    Disabled,   // homebrew-core disabled the formula
+    Disabled,   // the index marks the formula or cask disabled (checked first)
 };
 
 /// How one installed package compares with its index entry. This is the one

@@ -107,6 +107,13 @@ PackageIndex fixture() {
                    formula("zstd", "1.5.7")}) {
         idx.packages[p.name] = p;
     }
+    auto rye = formula("rye", "0.44.0");
+    rye.disabled = true;
+    rye.stability = Stability::Insecure;
+    rye.disable_date = "2026-08-18";
+    rye.disable_reason = "unmaintained";
+    rye.disable_replacement = "uv";
+    idx.packages[rye.name] = rye;
     auto c = cask("cask/docker");
     idx.packages[c.name] = c;
     auto f = cask("firefox");
@@ -126,6 +133,9 @@ void check_same(const Package& a, const Package& b) {
     CHECK(a.stability == b.stability);
     CHECK(a.deprecated == b.deprecated);
     CHECK(a.disabled == b.disabled);
+    CHECK(a.disable_date == b.disable_date);
+    CHECK(a.disable_reason == b.disable_reason);
+    CHECK(a.disable_replacement == b.disable_replacement);
     CHECK(a.dependencies == b.dependencies);
     CHECK(a.build_dependencies == b.build_dependencies);
     CHECK(a.source_url == b.source_url);
@@ -386,7 +396,7 @@ TEST_SUITE("index_cache") {
         // Pins the on-disk format version: bump this alongside kFormatVersion
         // whenever the record layout changes, so an older den's cache is
         // never decoded with the new layout.
-        constexpr uint32_t kExpectedFormatVersion = 10;
+        constexpr uint32_t kExpectedFormatVersion = 11;
         IndexCacheTmpDir tmp;
         auto json = tmp.path / "index.json";
         save_index(fixture(), json);

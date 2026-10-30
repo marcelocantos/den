@@ -382,10 +382,10 @@ UpgradeSelection select_upgrade(const std::string& name, const std::string& vers
         sel.installed_scheme = installed_scheme ? installed_scheme(name, version) : 0;
         sel.delta = version_delta(version, sel.installed_scheme, pkg->version, pkg->version_scheme);
     }
-    if (pkg->artifact_type == ArtifactType::App || !pkg->cask_artifacts.empty())
+    if (pkg->disabled)
+        sel.skip = UpgradeSkip::Disabled; // formula or cask: never offered
+    else if (pkg->artifact_type == ArtifactType::App || !pkg->cask_artifacts.empty())
         sel.skip = UpgradeSkip::Cask; // cask upgrades stay manual
-    else if (pkg->disabled)
-        sel.skip = UpgradeSkip::Disabled;
     return sel;
 }
 
