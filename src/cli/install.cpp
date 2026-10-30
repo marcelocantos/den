@@ -510,28 +510,11 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
         }
     }
 
-    // --dry-run: report the plan and stop before anything with side effects
-    // (the unattended trust screen writes the trust ledger).
-    if (dry_run) {
-        if (upgrades.empty()) {
-            if (older.empty() && held_lower.empty() && manual_casks.empty() &&
-                explicitly_pinned.empty() && refused_disabled.empty() && needs_disabled == 0)
-                std::cout << "All packages are up to date.\n";
-            else
-                std::cout << "Nothing to upgrade.\n";
-        } else {
-            std::cout << "Would upgrade " << upgrades.size() << " package(s):\n";
-            for (const auto& u : upgrades)
-                std::cout << "  " << u.name << " " << u.installed << " -> " << u.available << "\n";
-        }
-        std::cout << "Dry run: nothing changed.\n";
-        if (!explicitly_pinned.empty())
-            throw UserError(std::to_string(explicitly_pinned.size()) +
-                            " requested package(s) are pinned");
-        throw_if_refused(refused_disabled.size(), needs_disabled);
-        return;
-    }
-
+    // From here a dry run takes the real run's path (the same trust screen,
+    // the same batch planning in apply_version_changes, the same reports and
+    // exit status) and stops short of every side effect: the trust ledger is
+    // not written, nothing is poured, recorded or linked.
+    //
     // `den --unattended upgrade` screens its candidates exactly as the
     // daemon's maintenance cycle does (screen_unattended_upgrades): a formula
     // the trust policy holds back sits this run out with every candidate that
@@ -544,7 +527,8 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
         std::vector<PendingUpgrade> pending;
         for (const auto& u : upgrades)
             pending.push_back({u.name, u.installed, u.available});
-        trust_held = screen_unattended_upgrades(config, idx, pending, policy);
+        trust_held = screen_unattended_upgrades(config, idx, pending, policy,
+                                                /*record_holds=*/!dry_run);
         if (!trust_held.empty()) {
             std::cout << "Held back " << trust_held.size()
                       << " package(s) (unattended trust policy):\n";
@@ -558,6 +542,8 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
     }
     size_t refused_dependents = 0;
     auto fail_if_held = [&] {
+        if (dry_run)
+            std::cout << "Dry run: nothing changed.\n";
         if (!explicitly_pinned.empty())
             throw UserError(std::to_string(explicitly_pinned.size()) +
                             " requested package(s) are pinned");
@@ -572,15 +558,22 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
     };
 
     if (upgrades.empty()) {
+        const bool fails = !explicitly_pinned.empty() || !refused_disabled.empty() ||
+                           needs_disabled != 0 || !trust_held.empty();
+        if (!fails) {
+            if (older.empty() && held_lower.empty() && manual_casks.empty())
+                std::cout << "All packages are up to date.\n";
+            else
+                std::cout << "Nothing to upgrade.\n";
+        }
         fail_if_held();
-        if (older.empty() && held_lower.empty() && manual_casks.empty())
-            std::cout << "All packages are up to date.\n";
-        else
-            std::cout << "Nothing to upgrade.\n";
         return;
     }
 
-    std::cout << upgrades.size() << " package(s) to upgrade:\n";
+    if (dry_run)
+        std::cout << "Would upgrade " << upgrades.size() << " package(s):\n";
+    else
+        std::cout << upgrades.size() << " package(s) to upgrade:\n";
     for (const auto& u : upgrades) {
         std::cout << "  " << u.name << " " << u.installed << " -> " << u.available << "\n";
     }
@@ -594,18 +587,22 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
 
     // Each package moves as a unit: one that cannot be linked at its new
     // version is put back (manifest, links, opt link) and its new keg removed.
-    std::cout << "==> Materialising environment...\n";
+    if (!dry_run)
+        std::cout << "==> Materialising environment...\n";
     // Installed dependents whose index entry is a revision bump (homebrew-core
-    // rebuilt them for the new dependency) join the batch, as with brew.
+    // rebuilt them for the new dependency) join the batch, as with brew. A
+    // dry run plans the same batch (plan_only) and applies none of it.
     VersionChangeOptions opts;
     opts.upgrade_dependents = true;
+    opts.plan_only = dry_run;
     if (policy.unattended) {
         // A dependent pulled into the batch is screened like any candidate.
         opts.screen_dependents = [&](const std::vector<VersionChange>& cs) {
             std::vector<PendingUpgrade> pending;
             for (const auto& c : cs)
                 pending.push_back({c.name, c.from, c.to});
-            return screen_unattended_upgrades(config, idx, pending, policy);
+            return screen_unattended_upgrades(config, idx, pending, policy,
+                                              /*record_holds=*/!dry_run);
         };
     }
     // A revision-bumped dependent that is disabled upstream, or would pour a
@@ -633,7 +630,7 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
         refused_dependents = res.refused_dependents.size();
     }
     if (!res.dependents.empty()) {
-        std::cout << "Also upgraded " << res.dependents.size()
+        std::cout << (dry_run ? "Would also upgrade " : "Also upgraded ") << res.dependents.size()
                   << " dependent(s) rebuilt for the new version:\n";
         for (const auto& d : res.dependents) {
             std::cout << "  " << d.name << " " << d.from << " -> " << d.to << "\n";
@@ -653,6 +650,11 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
             std::cout << "  " << d.name << " " << d.from << " -> " << d.to << ": " << why << "\n";
             trust_held.emplace(d.name, why);
         }
+    }
+
+    if (dry_run) {
+        fail_if_held();
+        return;
     }
 
     if (!res.applied.empty()) {

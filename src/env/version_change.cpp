@@ -396,6 +396,9 @@ VersionChangeResult apply_version_changes(const Config& config, PackageProvider&
             return result;
         }
     }
+    if (opts.plan_only) {
+        return result;
+    }
 
     // Every opt link as the batch found it (installs and materialise both
     // move them forward), so a rollback can put back what it moved.
