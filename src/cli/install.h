@@ -5,6 +5,7 @@
 
 #include "../build/source_plan.h"
 #include "../core/config.h"
+#include "../env/disabled.h"
 #include "../env/environment.h"
 #include "../env/version_change.h"
 #include "../index/package.h"
@@ -39,15 +40,6 @@ std::string empty_index_message();
 /// the CLI prints "error: ..." and exits 1 instead of exiting 0.
 void require_index(const PackageIndex& idx);
 
-/// The refusal (or, for one already up to date, the warning) for a named
-/// formula or cask the index marks disabled, e.g. "'rye' is disabled
-/// upstream: it is not maintained upstream (disabled on 2026-08-18;
-/// replacement: uv)". The reason, date and replacement come from the
-/// index's disable! fields and are left out when it has none. Homebrew's
-/// reason symbols read as brew words them (its formula or cask list, by the
-/// package's kind); a custom reason is quoted as-is.
-std::string disabled_package_message(const Package& pkg);
-
 /// The names in `names` the index marks disabled (formulae and casks; names
 /// not in the index are not). Each is reported on stderr as
 /// "error: <disabled_package_message>". With `force`, a disabled formula is
@@ -56,22 +48,6 @@ std::string disabled_package_message(const Package& pkg);
 std::vector<std::string> refuse_disabled_packages(const PackageIndex& idx,
                                                   const std::vector<std::string>& names,
                                                   bool force = false);
-
-/// Whether the index entry is a cask (an app bundle or cask artifacts).
-bool is_cask_package(const Package& pkg);
-
-/// "'<dependent>' needs '<dep>', which is disabled upstream: it <reason>
-/// (disabled on <date>; replacement: <name>)", from disabled_package_message.
-std::string disabled_dependency_message(const std::string& dependent, const Package& dep);
-
-/// The packages in `name`'s runtime dependency closure (per `idx`, `name`
-/// itself left out) that the index marks disabled and `provider` does not
-/// have installed at the index version, i.e. the disabled packages
-/// installing `name` would pour. One already installed at the index version
-/// is satisfied and not listed, as brew skips it.
-std::vector<const Package*> disabled_dependencies(const Config& config,
-                                                  const PackageProvider& provider,
-                                                  const PackageIndex& idx, const std::string& name);
 
 /// Install packages by name. Dispatches each install through `provider`,
 /// then updates the active env's manifest with the provider-reported

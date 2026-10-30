@@ -549,7 +549,31 @@ void check_held_packages(const Config& config, std::vector<Finding>& findings) {
         warn(findings, std::move(text));
 }
 
+// ---------------------------------------------------------------------------
+// Check: upgrades the daemon blocked because they would pour a disabled package
+// ---------------------------------------------------------------------------
+
+void check_disabled_blocked(const Config& config, std::vector<Finding>& findings) {
+    SPDLOG_DEBUG("check: disabled-blocked upgrades");
+    auto text = format_disabled_blocked(read_daemon_state(config.den_home).disabled_blocked);
+    if (!text.empty())
+        warn(findings, std::move(text));
+}
+
 } // namespace
+
+std::string format_disabled_blocked(const std::vector<DisabledBlocked>& blocked) {
+    if (blocked.empty())
+        return "";
+    std::string text = std::to_string(blocked.size()) +
+                       " upgrade(s) not applied by the daemon: each would pour a package "
+                       "disabled upstream, which den never does unattended:";
+    for (const auto& b : blocked)
+        text += "\n    " + disabled_blocked_message(b);
+    text += "\n  Switch to the replacement, or install it deliberately with `den upgrade "
+            "<name> --force` (formulae only).";
+    return text;
+}
 
 std::vector<DeferredUpgrade> held_packages(const Config& config, const PackageIndex& idx) {
     return outdated_plan(config, idx).held;
@@ -928,6 +952,7 @@ std::vector<Finding> doctor(const Config& config) {
     check_keg_linkage(config, findings, notes);
     check_source_builds(config, findings, notes);
     check_held_packages(config, findings);
+    check_disabled_blocked(config, findings);
     check_daemon_plist_path(config, findings);
     check_file_permissions(config, findings);
     check_host_toolchain(config, findings);

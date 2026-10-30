@@ -1309,6 +1309,7 @@ void Cli::M::setup() {
             for (const auto& h : state.version_held)
                 std::cout << "  " << h.name << " " << h.installed << " (" << h.reason << ")\n";
         }
+        format_disabled_blocked_section(std::cout, state);
 
         if (is_daemon_running(cfg)) {
             std::cout << "Daemon: running\n";
@@ -1595,11 +1596,15 @@ void Cli::M::setup() {
             std::string name, installed, available, note;
             bool upgrade;
         };
+        const auto dstate = read_daemon_state(cfg.den_home);
         std::vector<Row> rows;
         for (const auto& p : plan.pending) {
             std::string note;
             if (auto pin = pins.find(p.name); pin != pins.end())
                 note = "  [pinned at " + pin->second + "]";
+            for (const auto& b : dstate.disabled_blocked)
+                if (b.name == p.name && b.available == p.available)
+                    note += "  [daemon: would pour " + b.disabled + ", disabled upstream]";
             rows.push_back({p.name, p.installed, p.available, note, true});
         }
         // Never offered as upgrades; listed so they are not a surprise.
@@ -1637,7 +1642,6 @@ void Cli::M::setup() {
         // Surface upgrades the daemon has deferred because a managed binary is
         // in use (🎯T51 / 🎯T72), so the user understands why an available
         // upgrade has not yet applied.
-        auto dstate = read_daemon_state(cfg.den_home);
         if (!dstate.deferred.empty()) {
             std::cout << "Deferred (managed binary in use):\n";
             for (const auto& d : dstate.deferred) {
@@ -1645,7 +1649,11 @@ void Cli::M::setup() {
                           << d.name << d.installed << " -> " << d.available << "  ["
                           << (d.reason.empty() ? "in use" : d.reason) << "]\n";
             }
-        } else if (count == 0) {
+        }
+        // Upgrades the daemon will not apply because they would pour a
+        // package disabled upstream (one itself disabled is not a row above).
+        format_disabled_blocked_section(std::cout, dstate);
+        if (dstate.deferred.empty() && dstate.disabled_blocked.empty() && count == 0) {
             std::cout << (plan.untracked.empty() ? "All packages are up to date.\n"
                                                  : "All tracked packages are up to date.\n");
         }
