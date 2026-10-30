@@ -4,6 +4,7 @@
 #pragma once
 
 #include "../core/config.h"
+#include "../core/local_time.h"
 #include "../core/version.h"
 #include "../index/package.h"
 #include "launchd_plist.h"
@@ -76,9 +77,10 @@ struct DisabledBlocker {
 // It is re-checked every cycle and dropped once the upgrade applies or is no
 // longer pending.
 //
-// daemon_state.json keeps `blockers` (and `recorded`); it also writes the
-// first blocker as `disabled` and every reason, joined with "; ", as
-// `reason`, the single-blocker form older den reads. A file in that older
+// daemon_state.json keeps every blocker in `blockers` (and `recorded`); it
+// also writes the first blocker as `disabled` and the message's reasons
+// (each disabled package once), joined with "; ", as `reason`, the
+// single-blocker form older den reads. A file in that older
 // form reads as one blocker, recorded at the file's last_check.
 struct DisabledBlocked {
     std::string name;      // the package whose upgrade is blocked
@@ -117,9 +119,13 @@ struct DaemonState {
     std::vector<DisabledBlocked> disabled_blocked;
 };
 
+/// The blockers of `b` with each disabled package once: the first blocker
+/// naming it (the package's own pour comes before a dependent's).
+std::vector<DisabledBlocker> unique_disabled_blockers(const DisabledBlocked& b);
+
 /// The one-line message for a blocked upgrade, e.g. "jq 1.7.1 -> 1.8.2:
-/// 'jq' needs 'libold', which is disabled upstream: ...", every blocker's
-/// reason joined with "; ". daemon.log uses it as is.
+/// 'jq' needs 'libold', which is disabled upstream: ...", the reasons of
+/// unique_disabled_blockers joined with "; ". daemon.log uses it as is.
 std::string disabled_blocked_message(const DisabledBlocked& b);
 
 /// disabled_blocked_message plus when it was recorded, e.g. "...  [recorded
@@ -309,10 +315,6 @@ void write_daemon_state(const fs::path& den_home, const DaemonState& state);
 
 /// Current Unix timestamp in seconds.
 uint64_t now_secs();
-
-/// `secs` (epoch seconds) in local time as "YYYY-MM-DD HH:MM", the format
-/// `den trust review` and `den history` print; "?" when it cannot be shown.
-std::string format_local_time(uint64_t secs);
 
 /// Parse "HH:MM-HH:MM" and return true if the current local time falls in
 /// that range. Returns true for empty/invalid strings (no restriction).

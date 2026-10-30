@@ -3,12 +3,13 @@
 
 #include "degraded_installs.h"
 
+#include "../core/local_time.h"
+
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
 #include <chrono>
-#include <ctime>
 #include <fstream>
 #include <sstream>
 #include <unistd.h>
@@ -321,12 +322,8 @@ std::string format_trust_ledger(const DegradedInstallSummary& summary) {
     std::string out = std::to_string(summary.refused) + " refused, " +
                       std::to_string(summary.total) + " degraded";
     if (summary.since) {
-        std::time_t t = static_cast<std::time_t>(*summary.since);
-        std::tm tm{};
-        localtime_r(&t, &tm);
-        char buf[32];
-        if (std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", &tm) > 0)
-            out += std::string(" since ") + buf;
+        if (auto at = format_local_time(static_cast<uint64_t>(*summary.since), ""); !at.empty())
+            out += " since " + at;
     }
     return out;
 }
