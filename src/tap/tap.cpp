@@ -158,6 +158,15 @@ void index_formula(PackageIndex& idx, const std::string& tap_name, const fs::pat
         idx.packages[bare] = pkg;
 }
 
+// Remove taps/<user> once its last tap is gone, so untap (or a failed tap add)
+// leaves no empty user directory behind. fs::remove is non-recursive: it fails
+// with ENOTEMPTY while a sibling tap from the same user exists, and that
+// directory is then left alone.
+void prune_empty_user_dir(const fs::path& tap_path) {
+    std::error_code ec;
+    fs::remove(tap_path.parent_path(), ec);
+}
+
 } // namespace
 
 bool is_valid_tap_name(const std::string& name) {
@@ -216,6 +225,7 @@ Tap tap_add(const Config& config, const std::string& raw_name, const std::string
         if (rc != 0) {
             std::error_code ec;
             fs::remove_all(dest, ec);
+            prune_empty_user_dir(dest);
             throw UserError("failed to clone tap '" + name + "': " + out);
         }
     } else {
@@ -224,11 +234,13 @@ Tap tap_add(const Config& config, const std::string& raw_name, const std::string
         std::error_code ec;
         fs::path src_path = fs::absolute(source);
         if (!fs::is_directory(src_path, ec)) {
+            prune_empty_user_dir(dest);
             throw UserError("tap source '" + source + "' is not a directory");
         }
         fs::copy(src_path, dest, fs::copy_options::recursive | fs::copy_options::copy_symlinks, ec);
         if (ec) {
             fs::remove_all(dest, ec);
+            prune_empty_user_dir(dest);
             throw UserError("failed to copy tap '" + name + "' from '" + source +
                             "': " + ec.message());
         }
@@ -268,6 +280,8 @@ void tap_remove(const Config& config, const std::string& raw_name) {
         fs::remove_all(*dir, ec);
         if (ec)
             SPDLOG_WARN("tap: could not remove {}: {}", dir->string(), ec.message());
+        else
+            prune_empty_user_dir(*dir);
     }
 
     settings.taps.taps.erase(it);
