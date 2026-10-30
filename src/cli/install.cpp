@@ -429,4 +429,21 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
     fail_if_held();
 }
 
+void upgrade_all_packages(const Config& config, const ProviderRegistry& registry,
+                          const PackageIndex& idx, bool dry_run) {
+    const auto manifest = read_manifest(config.den_home, active_env_path(config.den_home));
+    for (const auto& [provider_name, pkgs] : manifest.packages) {
+        if (!pkgs.empty() && !registry.find(provider_name)) {
+            std::cerr << "warning: manifest holds entries under provider '" << provider_name
+                      << "' but no provider with that name is registered; skipping them\n";
+        }
+    }
+    PackageProvider* provider = registry.find("homebrew");
+    if (!provider)
+        provider = registry.default_provider();
+    if (!provider)
+        throw InternalError("no package provider registered");
+    upgrade_packages(config, *provider, idx, {}, dry_run);
+}
+
 } // namespace den
