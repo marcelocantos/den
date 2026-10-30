@@ -43,7 +43,9 @@ fails if a workflow or the Makefile brings that path back.
 `scripts/check-release-assets.py` (ctest `script_test_release_assets`)
 fails if a release step's asset globs would also pick up a non-den file
 (such as the RC's `harness-linux-logs-<rc>.tar.gz`) or stop publishing
-one of the seven `den-<v>-*` assets.
+one of the seven `den-<v>-*` assets. Its sample release defaults to the
+CMakeLists.txt version and `v<version>-rc.1` (`--version` / `--rc-tag`
+override them), so a version bump needs no edit to it.
 
 ## Architecture
 
