@@ -9,6 +9,7 @@
 #include "../env/version_change.h"
 #include "../index/package.h"
 #include "../provider/package_provider.h"
+#include "../provider/registry.h"
 
 #include <cstdint>
 #include <string>
@@ -67,5 +68,17 @@ void uninstall_packages(const Config& config, PackageProvider& provider,
 /// the same plan is printed and nothing is installed, linked or recorded.
 void upgrade_packages(const Config& config, PackageProvider& provider, const PackageIndex& idx,
                       const std::vector<std::string>& names, bool dry_run = false);
+
+/// `den upgrade` with no names: exactly one upgrade_packages pass over
+/// every installed package. That pass already scans the whole resolved
+/// environment, so it runs once, not once per manifest provider bucket
+/// (which planned, printed and dispatched the same upgrades again for each
+/// further bucket, through that bucket's provider). Upgrade candidates come
+/// from the package index, which is Homebrew's, so the pass dispatches
+/// through the "homebrew" provider, or the registry's default when none is
+/// registered under that name. Buckets under an unregistered provider are
+/// reported, as before.
+void upgrade_all_packages(const Config& config, const ProviderRegistry& registry,
+                          const PackageIndex& idx, bool dry_run = false);
 
 } // namespace den

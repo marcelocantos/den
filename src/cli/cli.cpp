@@ -465,19 +465,7 @@ void Cli::M::setup() {
         auto manifest = read_manifest(cfg.den_home, active);
 
         if (upgrade_names.empty()) {
-            // Upgrade-all: dispatch one batch per provider whose bucket is non-empty.
-            for (auto& [provider_name, pkgs] : manifest.packages) {
-                if (pkgs.empty())
-                    continue;
-                auto* provider = registry.find(provider_name);
-                if (!provider) {
-                    SPDLOG_WARN("manifest holds entries under provider '{}' but no provider with "
-                                "that name is registered — skipping",
-                                provider_name);
-                    continue;
-                }
-                upgrade_packages(cfg, *provider, idx, {}, upgrade_dry_run);
-            }
+            upgrade_all_packages(cfg, registry, idx, upgrade_dry_run);
             return;
         }
 

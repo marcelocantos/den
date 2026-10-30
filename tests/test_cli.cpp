@@ -672,6 +672,48 @@ TEST_SUITE("cli::integration") {
         CHECK(after.find("\"3.6.3\"") == std::string::npos);
     }
 
+    // -----------------------------------------------------------------------
+    // 19. `den upgrade` with no names makes one pass, however many provider
+    //     buckets the manifest has (it used to make one per bucket).
+    // -----------------------------------------------------------------------
+    TEST_CASE("upgrade-all makes one pass with two provider buckets") {
+        TempDir home;
+        const fs::path cellar = home.path / "pfx" / "Cellar";
+        const auto k363 = cellar / "openssl@3" / "3.6.3";
+        fs::create_directories(k363 / "bin");
+        std::ofstream(k363 / "bin" / "openssl") << "#!/bin/sh\n";
+        std::ofstream(k363 / "INSTALL_RECEIPT.json")
+            << R"({"source":{"versions":{"stable":"3.6.3","version_scheme":0}}})";
+        fs::create_directories(home.path / "manifests" / "ROOT");
+        std::ofstream(home.path / "manifests" / "ROOT" / "manifest.json")
+            << R"({"packages":{"homebrew":{"openssl@3":"3.6.3"},"stub":{"tool":"0.1.0"}}})";
+        fs::create_directories(home.path / "cache");
+        std::ofstream(home.path / "cache" / "index.json") << R"({
+  "packages": [{
+    "name": "openssl@3", "version": "3.5.9", "version_scheme": 1,
+    "description": "TLS", "homepage": "", "license": "", "artifact_type": "binary",
+    "deprecated": false, "disabled": false,
+    "dependencies": [], "build_dependencies": [], "archives": {}
+  }]
+})";
+        auto count = [](const std::string& s, const std::string& needle) {
+            size_t n = 0;
+            for (auto p = s.find(needle); p != std::string::npos; p = s.find(needle, p + 1))
+                ++n;
+            return n;
+        };
+
+        auto dry = run_den_with_cellar("upgrade --dry-run", home.path.string(), cellar.string());
+        CHECK(dry.exit_code == 0);
+        CHECK(count(dry.output, "Holding 1 package(s)") == 1);
+        CHECK(count(dry.output, "Dry run: nothing changed.") == 1);
+
+        auto up = run_den_with_cellar("upgrade", home.path.string(), cellar.string());
+        CHECK(up.exit_code == 0);
+        CHECK(count(up.output, "Holding 1 package(s)") == 1);
+        CHECK(count(up.output, "Nothing to upgrade.") == 1);
+    }
+
 } // TEST_SUITE cli::integration
 
 } // namespace cli_test
