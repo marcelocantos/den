@@ -7,7 +7,8 @@
 // directory, regression checker, a committed baseline snapshot, and the CI
 // workflow — and that compare-results.sh is host-aware (cross-host
 // regression must not fail T68), gates on den/brew ratios rather than raw
-// den ms, and ignores sub-floor hyperfine `list` noise. The live hyperfine run itself is not executed here (needs brew
+// den ms, and ignores sub-floor hyperfine `list` noise. The live hyperfine run itself is not
+// executed here (needs brew
 // + a network).
 
 #include <doctest.h>
@@ -30,7 +31,7 @@ namespace {
 
 // True iff the owner-execute bit is set on `p`.
 bool is_executable(const fs::path& p) {
-    struct stat st{};
+    struct stat st {};
     if (::stat(p.c_str(), &st) != 0)
         return false;
     return (st.st_mode & S_IXUSR) != 0;
@@ -66,9 +67,9 @@ std::string bench_pair_json(const std::string& host, double den_s, double brew_s
     const std::string host_field = host.empty() ? "" : "\"host\":\"" + host + "\",";
     auto row = [&](const char* tool, double mean) {
         return std::string("  {\"timestamp\":\"t\",") + host_field + "\"op\":\"list\",\"tool\":\"" +
-               tool + "\",\"mean_s\":" + std::to_string(mean) + ",\"stddev_s\":0,\"min_s\":" +
-               std::to_string(mean) + ",\"max_s\":" + std::to_string(mean) +
-               ",\"status\":\"ok\"}";
+               tool + "\",\"mean_s\":" + std::to_string(mean) +
+               ",\"stddev_s\":0,\"min_s\":" + std::to_string(mean) +
+               ",\"max_s\":" + std::to_string(mean) + ",\"status\":\"ok\"}";
     };
     return "[\n" + row("den-list", den_s) + ",\n" + row("brew-list", brew_s) + "\n]\n";
 }
@@ -84,8 +85,8 @@ bool have_jq() {
 
 // Run compare-results.sh on `snap` against `base`, capturing stdout+stderr.
 CmdResult run_compare(const fs::path& script, const fs::path& snap, const fs::path& base) {
-    return run_cmd(script.string() + " \"" + snap.string() + "\" --baseline \"" +
-                   base.string() + "\" 2>&1");
+    return run_cmd(script.string() + " \"" + snap.string() + "\" --baseline \"" + base.string() +
+                   "\" 2>&1");
 }
 
 // Scratch directory removed on scope exit.
@@ -217,13 +218,13 @@ TEST_SUITE("bench_suite_present") {
         write_file(snap, bench_pair_json("gha-macos14-ARM64", 0.10, 0.40));
         write_file(base, bench_pair_json("Darwin-arm64-local", 0.05, 0.40));
 
-        const std::string cmd = script.string() + " \"" + snap.string() +
-                                "\" --baseline \"" + base.string() + "\" 2>&1";
+        const std::string cmd = script.string() + " \"" + snap.string() + "\" --baseline \"" +
+                                base.string() + "\" 2>&1";
         const auto r = run_cmd(cmd);
         cleanup();
 
-        CHECK_MESSAGE(r.exit_code == 0,
-                      "cross-host regression must be skipped, not fail T68:\n", r.output);
+        CHECK_MESSAGE(r.exit_code == 0, "cross-host regression must be skipped, not fail T68:\n",
+                      r.output);
         const bool skipped = r.output.find("skipping regression") != std::string::npos ||
                              r.output.find("regression check skipped") != std::string::npos;
         CHECK_MESSAGE(skipped, "expected a skip message, got:\n", r.output);
@@ -257,14 +258,13 @@ TEST_SUITE("bench_suite_present") {
         write_file(snap, bench_pair_json("gha-macos14-ARM64", 0.235, 0.403));
         write_file(base, bench_pair_json("", 0.131, 0.779));
 
-        const std::string cmd = script.string() + " \"" + snap.string() +
-                                "\" --baseline \"" + base.string() + "\" 2>&1";
+        const std::string cmd = script.string() + " \"" + snap.string() + "\" --baseline \"" +
+                                base.string() + "\" 2>&1";
         const auto r = run_cmd(cmd);
         cleanup();
 
         CHECK_MESSAGE(r.exit_code == 0,
-                      "untagged local baseline vs CI snapshot must skip regression:\n",
-                      r.output);
+                      "untagged local baseline vs CI snapshot must skip regression:\n", r.output);
         CHECK_MESSAGE(r.output.find("REGRESSED") == std::string::npos,
                       "legacy untagged baseline must not REGRESS a CI run:\n", r.output);
     }
@@ -292,13 +292,13 @@ TEST_SUITE("bench_suite_present") {
         write_file(snap, bench_pair_json("gha-macos14-ARM64", 0.10, 0.40));
         write_file(base, bench_pair_json("gha-macos14-ARM64", 0.05, 0.40));
 
-        const std::string cmd = script.string() + " \"" + snap.string() +
-                                "\" --baseline \"" + base.string() + "\" 2>&1";
+        const std::string cmd = script.string() + " \"" + snap.string() + "\" --baseline \"" +
+                                base.string() + "\" 2>&1";
         const auto r = run_cmd(cmd);
         cleanup();
 
-        CHECK_MESSAGE(r.exit_code != 0,
-                      "same-host +25% regression must still fail T68:\n", r.output);
+        CHECK_MESSAGE(r.exit_code != 0, "same-host +25% regression must still fail T68:\n",
+                      r.output);
         CHECK_MESSAGE(r.output.find("REGRESSED") != std::string::npos,
                       "expected REGRESSED verdict, got:\n", r.output);
     }
@@ -330,8 +330,8 @@ TEST_SUITE("bench_suite_present") {
         write_file(snap, bench_pair_json("gha-macos14-ARM64", 0.006431, 0.023763));
         write_file(base, bench_pair_json("gha-macos14-ARM64", 0.000236, 0.027572));
 
-        const std::string cmd = script.string() + " \"" + snap.string() +
-                                "\" --baseline \"" + base.string() + "\" 2>&1";
+        const std::string cmd = script.string() + " \"" + snap.string() + "\" --baseline \"" +
+                                base.string() + "\" 2>&1";
         const auto r = run_cmd(cmd);
         cleanup();
 
@@ -438,8 +438,8 @@ TEST_SUITE("bench_suite_present") {
         write_file(tmp.path / "base.json", bench_pair_json("gha-macos14-ARM64", 0.005, 0.030));
         const auto r = run_compare(script, tmp.path / "snap.json", tmp.path / "base.json");
         CHECK_MESSAGE(r.exit_code != 0, "list growing past 20 ms must be checked:\n", r.output);
-        CHECK_MESSAGE(r.output.find("REGRESSED") != std::string::npos,
-                      "expected REGRESSED:\n", r.output);
+        CHECK_MESSAGE(r.output.find("REGRESSED") != std::string::npos, "expected REGRESSED:\n",
+                      r.output);
     }
 
     // ---------------------------------------------------------------------
@@ -459,11 +459,11 @@ TEST_SUITE("bench_suite_present") {
         }
         const auto script = repo_root() / "scripts" / "bench" / "compare-results.sh";
         const auto fx = repo_root() / "tests" / "fixtures" / "bench";
-        const auto r = run_compare(script, fx / "noisy-runner-stall.json",
-                                   fx / "noisy-baseline-median.json");
+        const auto r =
+            run_compare(script, fx / "noisy-runner-stall.json", fx / "noisy-baseline-median.json");
         CHECK_MESSAGE(r.exit_code == 0, "runner stalls must not fail T68 on medians:\n", r.output);
-        CHECK_MESSAGE(r.output.find("REGRESSED") == std::string::npos,
-                      "no op may be REGRESSED:\n", r.output);
+        CHECK_MESSAGE(r.output.find("REGRESSED") == std::string::npos, "no op may be REGRESSED:\n",
+                      r.output);
         CHECK_MESSAGE(r.output.find("regression statistic: median") != std::string::npos,
                       "both files carry medians, so the gate must use them:\n", r.output);
         CHECK_MESSAGE(r.output.find("den/brew ratio") != std::string::npos,
@@ -509,8 +509,8 @@ TEST_SUITE("bench_suite_present") {
         }
         const auto script = repo_root() / "scripts" / "bench" / "compare-results.sh";
         const auto fx = repo_root() / "tests" / "fixtures" / "bench";
-        const auto r = run_compare(script, fx / "noisy-den-info-2x.json",
-                                   fx / "noisy-baseline-median.json");
+        const auto r =
+            run_compare(script, fx / "noisy-den-info-2x.json", fx / "noisy-baseline-median.json");
         CHECK_MESSAGE(r.exit_code != 0, "a 2x den info slowdown must fail T68:\n", r.output);
         CHECK_MESSAGE(r.output.find("regression statistic: median") != std::string::npos,
                       "expected the median gate:\n", r.output);
@@ -539,8 +539,7 @@ TEST_SUITE("bench_suite_present") {
                           std::string::npos,
                       "expected a means fallback notice:\n", r.output);
         CHECK_MESSAGE(r.output.find("statistic (den vs brew): median") != std::string::npos,
-                      "the snapshot's own den-vs-brew check should still use medians:\n",
-                      r.output);
+                      "the snapshot's own den-vs-brew check should still use medians:\n", r.output);
     }
 
     TEST_CASE("compare-results.sh passes run 40317054465 vs the 12 Oct baseline") {
@@ -557,8 +556,8 @@ TEST_SUITE("bench_suite_present") {
         const auto r = run_compare(script, fx / "gha-20261026-137984d-run40317054465.json",
                                    fx / "gha-20261012-71b4564-baseline.json");
         CHECK_MESSAGE(r.exit_code == 0, "run 40317054465 must not fail T68:\n", r.output);
-        CHECK_MESSAGE(r.output.find("REGRESSED") == std::string::npos,
-                      "no op may be REGRESSED:\n", r.output);
+        CHECK_MESSAGE(r.output.find("REGRESSED") == std::string::npos, "no op may be REGRESSED:\n",
+                      r.output);
         CHECK_MESSAGE(r.output.find("regression statistic: mean") != std::string::npos,
                       "means-only snapshots must be compared on means:\n", r.output);
     }
@@ -583,15 +582,15 @@ TEST_SUITE("bench_suite_present") {
                    R"({"time_wall_clock":{"value":0.49}},{"time_wall_clock":{"value":0.53}}]},)"
                    R"({"name":"den-info","command":"den info x","measurements":[)"
                    R"({"time_wall_clock":{"value":0.22}},{"time_wall_clock":{"value":0.95}}]}]})");
-        const auto r = run_cmd(script.string() + " info gha-test T \"" +
-                               (tmp.path / "r1.json").string() + "\" \"" +
-                               (tmp.path / "r2.json").string() + "\" 2>&1");
+        const auto r =
+            run_cmd(script.string() + " info gha-test T \"" + (tmp.path / "r1.json").string() +
+                    "\" \"" + (tmp.path / "r2.json").string() + "\" 2>&1");
         REQUIRE_MESSAGE(r.exit_code == 0, r.output);
         write_file(tmp.path / "rows.json", r.output);
         const auto q = [&](const std::string& filter) {
-            auto out = run_cmd("jq -sr '" + filter + "' \"" + (tmp.path / "rows.json").string() +
-                               "\"")
-                           .output;
+            auto out =
+                run_cmd("jq -sr '" + filter + "' \"" + (tmp.path / "rows.json").string() + "\"")
+                    .output;
             while (!out.empty() && (out.back() == '\n' || out.back() == ' '))
                 out.pop_back();
             return out;

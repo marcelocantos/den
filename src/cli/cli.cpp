@@ -1600,10 +1600,10 @@ void Cli::M::setup() {
             rows.push_back({p.name, p.installed, p.available,
                             "  [index older than installed; not upgrading]", false});
         for (const auto& h : plan.held)
-            rows.push_back({h.name, h.installed, h.available,
-                            "  [" + h.reason + "; to downgrade: den use " + h.name + " " +
-                                h.available + "]",
-                            false});
+            rows.push_back(
+                {h.name, h.installed, h.available,
+                 "  [" + h.reason + "; to downgrade: den use " + h.name + " " + h.available + "]",
+                 false});
         std::sort(rows.begin(), rows.end(),
                   [](const Row& a, const Row& b) { return a.name < b.name; });
         size_t count = 0;

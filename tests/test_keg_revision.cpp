@@ -179,8 +179,7 @@ TEST_SUITE("keg_revision") {
     TEST_CASE("index folds the formula revision into the keg version") {
         json formulae = json::array({
             formula_json("libngtcp2", "1.25.0", 1),
-            formula_json("opusfile", "0.12", 3, /*rebuild=*/2),
-            formula_json("jq", "1.8.1", 0),
+            formula_json("opusfile", "0.12", 3, /*rebuild=*/2), formula_json("jq", "1.8.1", 0),
             formula_json("tree", "2.2.1", -1), // no revision key at all
         });
         auto idx = transform_homebrew(formulae.dump(), "[]");

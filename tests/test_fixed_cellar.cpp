@@ -278,9 +278,7 @@ TEST_SUITE("bottle::fixed_cellar") {
         auto stage = tmp / "stage";
         auto lib = stage / "padprobe" / "1.0" / "lib";
         fs::create_directories(lib);
-        {
-            std::ofstream(tmp / "pad.c") << "int padprobe(void) { return 42; }\n";
-        }
+        { std::ofstream(tmp / "pad.c") << "int padprobe(void) { return 42; }\n"; }
         std::vector<std::string> cc = {"clang",
                                        "-dynamiclib",
                                        "-o",

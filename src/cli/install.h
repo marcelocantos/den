@@ -62,8 +62,12 @@ void install_from_source(const Config& config, const PackageIndex& idx,
 void uninstall_packages(const Config& config, PackageProvider& provider,
                         const std::vector<std::string>& names);
 
-/// Upgrade packages. If `names` is empty, upgrades all packages whose
-/// installed version differs from the index's available version. Only the
+/// Upgrade packages. If `names` is empty, upgrades what outdated_plan lists
+/// as pending for `provider`'s bucket, the selection `den outdated`, `den
+/// doctor` and the daemon share: casks and disabled formulae are left out
+/// (newer casks are listed as upgradable by name). A package named in
+/// `names` is compared the same way (select_upgrade) but upgraded even when
+/// it is a cask or a disabled formula. Only the
 /// active environment's bucket for `provider` is considered: a package
 /// another provider manages is never compared against `idx` (the daemon's
 /// maintenance cycle reads the homebrew bucket the same way). Each

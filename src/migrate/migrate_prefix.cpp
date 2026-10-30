@@ -830,7 +830,7 @@ std::optional<uint64_t> free_bytes_at(const fs::path& p, fs::path* at) {
     if (const char* o = std::getenv("DEN_MIGRATE_PREFIX_FREE_BYTES"); o && *o) {
         return std::stoull(o);
     }
-    struct statvfs st{};
+    struct statvfs st {};
     if (::statvfs(probe.c_str(), &st) != 0) {
         return std::nullopt;
     }

@@ -64,9 +64,8 @@ Config make_config(const fs::path& root) {
 void keg(const Config& c, const std::string& name, const std::string& version, int scheme = 0) {
     const auto k = c.store / name / version;
     fs::create_directories(k / "bin");
-    std::ofstream(k / "INSTALL_RECEIPT.json")
-        << R"({"source":{"versions":{"stable":")" << version << R"(","version_scheme":)"
-        << scheme << "}}}";
+    std::ofstream(k / "INSTALL_RECEIPT.json") << R"({"source":{"versions":{"stable":")" << version
+                                              << R"(","version_scheme":)" << scheme << "}}}";
 }
 
 void manifest(const Config& c, const std::string& packages_json) {
@@ -156,7 +155,8 @@ TEST_SUITE("outdated::plan") {
     TEST_CASE("untracked packages from several providers are sorted by name") {
         TempDir t;
         auto c = make_config(t.path);
-        manifest(c, R"({"pip":{"cowsay":"6.1"},"npm":{"prettier":"3.3.3"},"cargo":{"bat":"0.24.0"}})");
+        manifest(c,
+                 R"({"pip":{"cowsay":"6.1"},"npm":{"prettier":"3.3.3"},"cargo":{"bat":"0.24.0"}})");
         PackageIndex idx;
         idx.packages["cowsay"] = formula("cowsay", "3.8.4");
         const auto plan = outdated_plan(c, idx);

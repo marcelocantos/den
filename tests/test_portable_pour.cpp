@@ -75,9 +75,7 @@ TEST_SUITE("relocate::portable_pour") {
 
         // The openjdk@21 dependency is already poured, so only probe is fetched.
         fs::create_directories(store / "openjdk@21" / "21.0.1" / "bin");
-        {
-            std::ofstream(store / "openjdk@21" / "21.0.1" / "bin" / "java") << "x";
-        }
+        { std::ofstream(store / "openjdk@21" / "21.0.1" / "bin" / "java") << "x"; }
 
         PackageIndex idx;
         idx.packages["probe"] = portable_formula(
