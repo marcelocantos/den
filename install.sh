@@ -227,16 +227,26 @@ main() {
 }
 
 latest_version() {
-    # Use the GitHub releases redirect to avoid API rate limits.
+    # GitHub redirects releases/latest to releases/tag/<tag>; read the tag
+    # from where that lands instead of the rate-limited API. With curl -L,
+    # %{redirect_url} is empty (it is only set when the redirect is NOT
+    # followed), so use %{url_effective}: the URL curl ended up at.
+    _latest_url="https://github.com/marcelocantos/den/releases/latest"
     if check_cmd curl; then
-        curl -fsSL -o /dev/null -w '%{redirect_url}' \
-            "https://github.com/marcelocantos/den/releases/latest" 2>/dev/null \
-            | sed 's|.*/v||'
+        curl -fsSL -o /dev/null -w '%{url_effective}' "$_latest_url" 2>/dev/null \
+            | release_tag_version
     elif check_cmd wget; then
-        wget --spider -S -O /dev/null \
-            "https://github.com/marcelocantos/den/releases/latest" 2>&1 \
-            | grep -i 'Location:' | sed 's|.*/v||' | tr -d '[:space:]'
+        # -S prints each response's headers; wget also echoes the redirect
+        # as "Location: URL [following]", so take the last tag URL only.
+        wget --spider -S -O /dev/null "$_latest_url" 2>&1 \
+            | grep -i '^[[:space:]]*Location:' | release_tag_version
     fi
+}
+
+# release_tag_version: the version (no leading v) from the last
+# .../releases/tag/<tag> URL on stdin; nothing if there is none.
+release_tag_version() {
+    sed -n 's|.*/releases/tag/v\{0,1\}\([0-9][0-9A-Za-z.-]*\).*|\1|p' | tail -n 1
 }
 
 # download URL DEST: fetch, retrying (DEN_DOWNLOAD_ATTEMPTS tries in all,
