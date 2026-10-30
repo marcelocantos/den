@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.24)
 # project(); ignored on other platforms.
 set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS version")
 
-project(den VERSION 0.15.0 LANGUAGES C CXX)
+project(den VERSION 0.16.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
