@@ -584,6 +584,47 @@ TEST_SUITE("cli::integration") {
     }
 
     // -----------------------------------------------------------------------
+    // 16d. `den upgrade` compares a package only against its own provider's
+    //      index. pip's cowsay 6.1 is not homebrew's cowsay 3.8.4; it used to
+    //      be reported as "index older than installed" (with a `den use
+    //      cowsay 3.8.4` hint), while the daemon, which reads only the
+    //      homebrew bucket, reported nothing.
+    // -----------------------------------------------------------------------
+    TEST_CASE("upgrade does not compare a pip package against the homebrew index") {
+        TempDir home;
+        const std::string h = home.path.string();
+        const std::string cellar = (home.path / "brew" / "Cellar").string();
+        fs::create_directories(home.path / "manifests" / "ROOT");
+        std::ofstream(home.path / "manifests" / "ROOT" / "manifest.json")
+            << R"({"packages": {"pip": {"cowsay": "6.1"}}})";
+        fs::create_directories(home.path / "cache");
+        std::ofstream(home.path / "cache" / "index.json") << R"({
+  "packages": [{
+    "name": "cowsay", "version": "3.8.4", "description": "formula",
+    "homepage": "", "license": "", "artifact_type": "binary",
+    "deprecated": false, "disabled": false,
+    "dependencies": [], "build_dependencies": [], "archives": {}
+  }]
+})";
+
+        auto list = run_den_with_cellar("list", h, cellar);
+        REQUIRE(list.output.find("pip") != std::string::npos);
+
+        auto dry = run_den_with_cellar("upgrade --dry-run", h, cellar);
+        CAPTURE(dry.output);
+        CHECK(dry.exit_code == 0);
+        CHECK(dry.output.find("Not downgrading") == std::string::npos);
+        CHECK(dry.output.find("den use cowsay") == std::string::npos);
+        CHECK(dry.output.find("All packages are up to date.") != std::string::npos);
+
+        auto named = run_den_with_cellar("upgrade --dry-run cowsay", h, cellar);
+        CAPTURE(named.output);
+        CHECK(named.exit_code == 0);
+        CHECK(named.output.find("Not downgrading") == std::string::npos);
+        CHECK(named.output.find("managed by the pip provider") != std::string::npos);
+    }
+
+    // -----------------------------------------------------------------------
     // 17. cleanup — shared Cellar. A Homebrew keg must survive; a den-owned
     //     version nothing references is removed. --dry-run deletes nothing.
     // -----------------------------------------------------------------------
