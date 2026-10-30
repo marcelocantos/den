@@ -9,6 +9,8 @@
 #include <cstdlib>
 #include <exception>
 #include <fstream>
+#include <functional>
+#include <optional>
 #include <sstream>
 #include <system_error>
 
@@ -78,16 +80,14 @@ PlistPathRefresh refresh_daemon_plist_path(const Config& cfg, const fs::path& pl
     return refresh_daemon_plist(cfg, plist, out).outcome;
 }
 
-PlistPathRefresh refresh_daemon_plist_at_startup(const Config& cfg,
-                                                 const DaemonStartupPlistEnv& env) {
+namespace {
+
+// refresh_daemon_plist_at_startup without the closing PATH line.
+PlistPathRefresh refresh_at_startup(const Config& cfg, const DaemonStartupPlistEnv& env,
+                                    const std::function<void(const std::string&)>& log) {
     if (!env.plist) {
         return PlistPathRefresh::LeftAlone;
     }
-    const auto log = [&env](const std::string& line) {
-        if (env.log) {
-            env.log(line);
-        }
-    };
     DaemonPlistRefresh r;
     std::ostringstream report;
     try {
@@ -112,6 +112,35 @@ PlistPathRefresh refresh_daemon_plist_at_startup(const Config& cfg,
     return r.outcome;
 }
 
+} // namespace
+
+PlistPathRefresh refresh_daemon_plist_at_startup(const Config& cfg,
+                                                 const DaemonStartupPlistEnv& env) {
+    const auto log = [&env](const std::string& line) {
+        if (env.log) {
+            env.log(line);
+        }
+    };
+    const auto read_path = [&env]() -> std::optional<std::string> {
+        return env.get_path ? env.get_path() : std::nullopt;
+    };
+    const auto was = read_path();
+    const auto outcome = refresh_at_startup(cfg, env, log);
+    // What this run actually uses, read back after any switch, so daemon.log
+    // shows it on every startup whether or not anything was rewritten.
+    const auto now = read_path();
+    const auto show = [](const std::optional<std::string>& p) {
+        return p ? *p : std::string("(unset)");
+    };
+    if (now != was) {
+        log("daemon PATH (corrected in-process): " + show(now) + " (launchd gave " + show(was) +
+            ")");
+    } else {
+        log("daemon PATH: " + show(now));
+    }
+    return outcome;
+}
+
 void refresh_daemon_plist_at_startup(const Config& cfg) {
 #ifdef __APPLE__
     static const std::string kLabel = "dev.den.daemon";
@@ -127,6 +156,10 @@ void refresh_daemon_plist_at_startup(const Config& cfg) {
     env.inside_launchd_job = running_inside_launchd_job(kLabel);
     env.log = [&cfg](const std::string& line) { log_daemon(cfg.den_home, line); };
     env.set_path = [](const std::string& path) { ::setenv("PATH", path.c_str(), 1); };
+    env.get_path = []() -> std::optional<std::string> {
+        const char* p = std::getenv("PATH");
+        return p ? std::optional<std::string>(p) : std::nullopt;
+    };
     refresh_daemon_plist_at_startup(cfg, env);
 #else
     (void)cfg;

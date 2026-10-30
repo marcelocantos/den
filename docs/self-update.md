@@ -75,8 +75,25 @@ process is not running with `DEN_PREFIX`), saves the previous plist to
 A plist that has been edited by hand (keys den does not write, or no `PATH`
 entry) is left alone and reported instead. `den daemon install` regenerates the
 plist, which fixes its `PATH` when a hand-edited plist was skipped.
-`launchctl print` keeps showing the old `PATH` for the running job until its
-next restart; the plist and the daemon's own process are already corrected.
+`launchctl print` (and `ps eww`, which shows the environment a process started
+with) keeps showing the old `PATH` for the running job until launchd next loads
+the plist (`den daemon install`, logout or reboot); the plist and the daemon's
+own process, and everything it spawns, are already corrected.
+
+Every time the daemon starts, after that refresh, it logs the `PATH` it is
+actually running with to `~/.den/daemon.log`, whether or not anything was
+rewritten:
+
+```
+daemon PATH (corrected in-process): <new PATH> (launchd gave <old PATH>)
+daemon PATH: <PATH>
+```
+
+The first form means launchd started the daemon with a stale `PATH` and the
+daemon switched itself to den's layout; the second means it kept the `PATH` it
+was started with. The switch only happens when the daemon is the plist's own
+launchd job; a `den daemon run` started by hand keeps its shell's `PATH` and
+logs the second form.
 
 ## `last exit reason = OS_REASON_CODESIGNING`
 

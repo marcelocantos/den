@@ -4,17 +4,21 @@
 // The daemon refreshes its own LaunchAgent PATH at startup, with the same
 // rules as `den self-update` (daemon/plist_refresh.h), and switches to the
 // corrected PATH for that run. An upgrade from a den that never refreshed the
-// plist is then right in one step.
+// plist is then right in one step. Every startup ends with one daemon.log line
+// giving the PATH the daemon actually runs with.
 
 #include "../src/daemon/plist_refresh.h"
 
 #include <doctest.h>
 
+#include <array>
 #include <cerrno>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -94,8 +98,13 @@ std::string old_plist(const fs::path& den_home, const std::string& path,
 
 const std::string kOldPath = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
 
+bool is_path_line(const std::string& line) {
+    return line.rfind("daemon PATH:", 0) == 0 || line.rfind("daemon PATH (", 0) == 0;
+}
+
 // A daemon started by launchd from `plist`, recording what it logs and the
-// PATH it switches to.
+// PATH it switches to. `path` is its environment's PATH: launchd's (the
+// plist's old one) until set_path changes it.
 struct Startup {
     TempDir t;
     Config cfg;
@@ -103,6 +112,7 @@ struct Startup {
     fs::path bak;
     std::vector<std::string> log;
     std::vector<std::string> set_path;
+    std::optional<std::string> path = kOldPath;
     DaemonStartupPlistEnv env;
 
     Startup() {
@@ -114,7 +124,34 @@ struct Startup {
         env.plist = plist;
         env.inside_launchd_job = true;
         env.log = [this](const std::string& line) { log.push_back(line); };
-        env.set_path = [this](const std::string& p) { set_path.push_back(p); };
+        env.set_path = [this](const std::string& p) {
+            set_path.push_back(p);
+            path = p;
+        };
+        env.get_path = [this]() { return path; };
+    }
+
+    // What startup logged about the plist, without its closing PATH line.
+    std::vector<std::string> plist_log() const {
+        std::vector<std::string> out;
+        for (const auto& line : log) {
+            if (!is_path_line(line)) {
+                out.push_back(line);
+            }
+        }
+        return out;
+    }
+
+    // The closing PATH line: the last line logged, and the only PATH line.
+    std::string path_line() const {
+        int n = 0;
+        for (const auto& line : log) {
+            n += is_path_line(line) ? 1 : 0;
+        }
+        REQUIRE(n == 1);
+        REQUIRE(!log.empty());
+        REQUIRE(is_path_line(log.back()));
+        return log.back();
     }
 
     std::string want() const { return launchd_path(cfg.den_home, cfg.prefix); }
@@ -133,12 +170,12 @@ TEST_SUITE("daemon_plist_startup") {
         CHECK(plist_path_value(slurp(s.plist)) == s.want());
         REQUIRE(fs::exists(s.bak));
         CHECK(slurp(s.bak) == old);
-        REQUIRE(s.log.size() == 1);
-        CHECK(has(s.log[0], "daemon plist PATH refreshed"));
-        CHECK(has(s.log[0], kOldPath));
-        CHECK(has(s.log[0], s.want()));
-        CHECK(has(s.log[0], s.bak.string()));
-        CHECK(!has(s.log[0], "\n"));
+        REQUIRE(s.plist_log().size() == 1);
+        CHECK(has(s.plist_log()[0], "daemon plist PATH refreshed"));
+        CHECK(has(s.plist_log()[0], kOldPath));
+        CHECK(has(s.plist_log()[0], s.want()));
+        CHECK(has(s.plist_log()[0], s.bak.string()));
+        CHECK(!has(s.plist_log()[0], "\n"));
     }
 
     TEST_CASE("startup switches this run to the corrected PATH") {
@@ -166,7 +203,7 @@ TEST_SUITE("daemon_plist_startup") {
         CHECK(s.run() == PlistPathRefresh::LeftAlone);
         CHECK(slurp(s.plist) == other);
         CHECK(!fs::exists(s.bak));
-        CHECK(s.log.empty());
+        CHECK(s.plist_log().empty());
         CHECK(s.set_path.empty());
     }
 
@@ -178,7 +215,7 @@ TEST_SUITE("daemon_plist_startup") {
         CHECK(s.run() == PlistPathRefresh::LeftAlone);
         CHECK(slurp(s.plist) == unpinned);
         CHECK(!fs::exists(s.bak));
-        CHECK(s.log.empty());
+        CHECK(s.plist_log().empty());
         CHECK(s.set_path.empty());
     }
 
@@ -191,10 +228,10 @@ TEST_SUITE("daemon_plist_startup") {
         CHECK(slurp(s.plist) == edited);
         CHECK(!fs::exists(s.bak));
         CHECK(s.set_path.empty()); // the plist is still stale: keep launchd's PATH
-        REQUIRE(s.log.size() == 1);
-        CHECK(has(s.log[0], "Nice"));
-        CHECK(has(s.log[0], "den daemon install"));
-        CHECK(!has(s.log[0], "\n"));
+        REQUIRE(s.plist_log().size() == 1);
+        CHECK(has(s.plist_log()[0], "Nice"));
+        CHECK(has(s.plist_log()[0], "den daemon install"));
+        CHECK(!has(s.plist_log()[0], "\n"));
     }
 
     TEST_CASE("startup is idempotent when the plist is already current") {
@@ -209,7 +246,7 @@ TEST_SUITE("daemon_plist_startup") {
         CHECK(s.run() == PlistPathRefresh::UpToDate);
         CHECK(slurp(s.plist) == after);
         CHECK(!fs::exists(s.bak));
-        CHECK(s.log.empty());
+        CHECK(s.plist_log().empty());
         // Already-current plist: this run's PATH still comes from den's layout.
         CHECK(s.set_path == std::vector<std::string>{s.want()});
     }
@@ -229,7 +266,7 @@ TEST_SUITE("daemon_plist_startup") {
         CHECK(s.run() == PlistPathRefresh::LeftAlone);
         s.env.plist = s.plist; // configured but absent
         CHECK(s.run() == PlistPathRefresh::LeftAlone);
-        CHECK(s.log.empty());
+        CHECK(s.plist_log().empty());
         CHECK(s.set_path.empty());
     }
 
@@ -243,6 +280,102 @@ TEST_SUITE("daemon_plist_startup") {
         put(s.plist, old_plist(s.cfg.den_home, kOldPath));
         CHECK(s.run() == PlistPathRefresh::Rewritten);
         CHECK(slurp(s.plist) == by_self_update);
+    }
+
+    TEST_CASE("startup logs the PATH it corrected in-process") {
+        Startup s;
+        put(s.plist, old_plist(s.cfg.den_home, kOldPath));
+        CHECK(s.run() == PlistPathRefresh::Rewritten);
+        REQUIRE(s.log.size() == 2);
+        CHECK(has(s.log[0], "daemon plist PATH refreshed"));
+        CHECK(s.path_line() == "daemon PATH (corrected in-process): " + s.want() +
+                                   " (launchd gave " + kOldPath + ")");
+    }
+
+    TEST_CASE("startup corrects a stale launchd PATH even when the plist is already current") {
+        // An older den rewrote the plist and restarted the job, but launchd
+        // kept the job's old environment: nothing to rewrite, PATH corrected.
+        Startup s;
+        put(s.plist, old_plist(s.cfg.den_home, s.want()));
+        CHECK(s.run() == PlistPathRefresh::UpToDate);
+        REQUIRE(s.log.size() == 1);
+        CHECK(s.path_line() == "daemon PATH (corrected in-process): " + s.want() +
+                                   " (launchd gave " + kOldPath + ")");
+    }
+
+    TEST_CASE("startup logs an unchanged PATH when launchd's was already right") {
+        Startup s;
+        s.path = s.want();
+        put(s.plist, old_plist(s.cfg.den_home, s.want()));
+        CHECK(s.run() == PlistPathRefresh::UpToDate);
+        REQUIRE(s.log.size() == 1);
+        CHECK(s.path_line() == "daemon PATH: " + s.want());
+        CHECK(s.path == s.want());
+    }
+
+    TEST_CASE("startup logs launchd's PATH when it leaves the plist alone") {
+        Startup s;
+        put(s.plist, old_plist(s.cfg.den_home, kOldPath, {},
+                               "    <key>Nice</key>\n    <integer>5</integer>\n"));
+        CHECK(s.run() == PlistPathRefresh::LeftAlone);
+        CHECK(s.path_line() == "daemon PATH: " + kOldPath);
+
+        Startup other;
+        put(other.plist, old_plist(other.t.path / "other", kOldPath));
+        CHECK(other.run() == PlistPathRefresh::LeftAlone);
+        REQUIRE(other.log.size() == 1);
+        CHECK(other.path_line() == "daemon PATH: " + kOldPath);
+
+        Startup none;
+        none.env.plist.reset();
+        CHECK(none.run() == PlistPathRefresh::LeftAlone);
+        REQUIRE(none.log.size() == 1);
+        CHECK(none.path_line() == "daemon PATH: " + kOldPath);
+    }
+
+    TEST_CASE("a daemon run by hand logs its shell's PATH unchanged") {
+        Startup s;
+        s.env.inside_launchd_job = false;
+        s.path = "/shell/bin:/usr/bin:/bin";
+        put(s.plist, old_plist(s.cfg.den_home, kOldPath));
+        CHECK(s.run() == PlistPathRefresh::Rewritten);
+        CHECK(plist_path_value(slurp(s.plist)) == s.want());
+        CHECK(s.path == "/shell/bin:/usr/bin:/bin");
+        CHECK(s.path_line() == "daemon PATH: /shell/bin:/usr/bin:/bin");
+    }
+
+    TEST_CASE("a subprocess spawned after startup sees the corrected PATH") {
+        // The real setenv/getenv, as the daemon wires them, so what pours
+        // spawn inherits is what the PATH line says.
+        Startup s;
+        const char* saved = std::getenv("PATH");
+        const std::optional<std::string> restore =
+            saved ? std::optional<std::string>(saved) : std::nullopt;
+        ::setenv("PATH", kOldPath.c_str(), 1);
+        s.env.set_path = [](const std::string& p) { ::setenv("PATH", p.c_str(), 1); };
+        s.env.get_path = []() -> std::optional<std::string> {
+            const char* p = std::getenv("PATH");
+            return p ? std::optional<std::string>(p) : std::nullopt;
+        };
+        put(s.plist, old_plist(s.cfg.den_home, kOldPath));
+        s.run();
+
+        std::string child;
+        if (FILE* f = ::popen("printf %s \"$PATH\"", "r")) {
+            std::array<char, 512> buf{};
+            for (size_t n; (n = std::fread(buf.data(), 1, buf.size(), f)) > 0;) {
+                child.append(buf.data(), n);
+            }
+            ::pclose(f);
+        }
+        if (restore) {
+            ::setenv("PATH", restore->c_str(), 1);
+        } else {
+            ::unsetenv("PATH");
+        }
+        CHECK(child == s.want());
+        CHECK(s.path_line() == "daemon PATH (corrected in-process): " + s.want() +
+                                   " (launchd gave " + kOldPath + ")");
     }
 }
 
