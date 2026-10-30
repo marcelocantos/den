@@ -57,6 +57,8 @@ struct DaemonStartupPlistEnv {
     std::function<void(const std::string&)> log;
     /// Sets this process's PATH.
     std::function<void(const std::string&)> set_path;
+    /// Reads this process's PATH (nullopt when unset).
+    std::function<std::optional<std::string>()> get_path;
 };
 
 /// The daemon's startup step: refresh_daemon_plist on env.plist, logging one
@@ -64,12 +66,15 @@ struct DaemonStartupPlistEnv {
 /// one alone (nothing when up to date or not ours). When the plist is ours and
 /// now current and this process is its launchd job, this run switches to the
 /// corrected PATH in-process (launchd started it with the plist's old PATH).
-/// Never throws: a failure is logged and the daemon carries on.
+/// Then, on every startup, it logs the PATH this process is actually using,
+/// read back after any switch: `daemon PATH (corrected in-process): <now>
+/// (launchd gave <was>)` when the switch changed it, else `daemon PATH:
+/// <now>`. Never throws: a failure is logged and the daemon carries on.
 PlistPathRefresh refresh_daemon_plist_at_startup(const Config& cfg,
                                                  const DaemonStartupPlistEnv& env);
 
 /// refresh_daemon_plist_at_startup wired to the real host: the current user's
-/// LaunchAgents plist, XPC_SERVICE_NAME, daemon.log and setenv("PATH").
+/// LaunchAgents plist, XPC_SERVICE_NAME, daemon.log and getenv/setenv("PATH").
 /// A no-op off macOS.
 void refresh_daemon_plist_at_startup(const Config& cfg);
 
