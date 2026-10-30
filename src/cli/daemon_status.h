@@ -17,7 +17,8 @@ namespace den {
 void format_daemon_status(std::ostream& out, const DaemonState& state);
 
 // The "Not upgrading (would pour a package disabled upstream):" section, one
-// disabled_blocked_message per line; nothing when no upgrade is blocked.
+// disabled_blocked_report (message and when it was recorded) per line;
+// nothing when no upgrade is blocked.
 // Shared by `den status`, `den outdated` and `den daemon status`.
 void format_disabled_blocked_section(std::ostream& out, const DaemonState& state);
 

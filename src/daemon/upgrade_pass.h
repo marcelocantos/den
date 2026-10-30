@@ -44,12 +44,20 @@ struct UpgradeDeferred : std::runtime_error {
 
 // Thrown by an `apply` hook when the upgrade would pour a package the index
 // marks disabled (apply_daemon_upgrade, via disabled_pours). Nothing was
-// poured. The pass records it in state.disabled_blocked (reason = what()),
+// poured. The pass records it in state.disabled_blocked (every blocker),
 // keeps the package pending, logs it, and records no error.
 struct UpgradeDisabled : std::runtime_error {
-    UpgradeDisabled(std::string disabled_pkg, const std::string& reason)
-        : std::runtime_error(reason), disabled(std::move(disabled_pkg)) {}
-    std::string disabled; // the disabled package the upgrade would pour
+    explicit UpgradeDisabled(std::vector<DisabledBlocker> in_the_way)
+        : std::runtime_error(joined(in_the_way)), blockers(std::move(in_the_way)) {}
+    std::vector<DisabledBlocker> blockers; // every disabled package the upgrade would pour
+
+  private:
+    static std::string joined(const std::vector<DisabledBlocker>& bs) {
+        std::string s;
+        for (const auto& b : bs)
+            s += (s.empty() ? "" : "; ") + b.reason;
+        return s;
+    }
 };
 
 // Run one upgrade pass over the pending upgrades recorded in `state`.

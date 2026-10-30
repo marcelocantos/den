@@ -130,7 +130,7 @@ UpgradePassResult run_upgrade_pass(const fs::path& cellar, const fs::path& den_h
             try {
                 apply(pu);
             } catch (const UpgradeDisabled& e) {
-                DisabledBlocked b{pu.name, pu.installed, pu.available, e.disabled, e.what()};
+                DisabledBlocked b{pu.name, pu.installed, pu.available, e.blockers, now_secs()};
                 SPDLOG_WARN("upgrade_pass: {}", disabled_blocked_message(b));
                 log_daemon(den_home, "not upgrading " + disabled_blocked_message(b));
                 record_disabled_block(state, b);

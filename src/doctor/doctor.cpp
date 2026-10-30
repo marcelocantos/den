@@ -569,7 +569,7 @@ std::string format_disabled_blocked(const std::vector<DisabledBlocked>& blocked)
                        " upgrade(s) not applied by the daemon: each would pour a package "
                        "disabled upstream, which den never does unattended:";
     for (const auto& b : blocked)
-        text += "\n    " + disabled_blocked_message(b);
+        text += "\n    " + disabled_blocked_report(b);
     text += "\n  Switch to the replacement, or install it deliberately with `den upgrade "
             "<name> --force` (formulae only).";
     return text;

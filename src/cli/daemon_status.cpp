@@ -64,7 +64,7 @@ void format_disabled_blocked_section(std::ostream& out, const DaemonState& state
         return;
     out << "Not upgrading (would pour a package disabled upstream):\n";
     for (const auto& b : state.disabled_blocked)
-        out << "  " << disabled_blocked_message(b) << "\n";
+        out << "  " << disabled_blocked_report(b) << "\n";
 }
 
 void format_degraded_trust(std::ostream& out, const DegradedInstallSummary& summary) {

@@ -7,9 +7,10 @@
 // same check `den install` / `den upgrade` refuse with (disabled_pours,
 // #177/#181) with no --force. A blocked upgrade pours nothing (a refused
 // dependent holds the whole batch), is logged, and is recorded in
-// daemon_state.json's `disabled_blocked` (package, disabled package, reason)
-// until it applies or is no longer pending; `den status`, `den outdated`,
-// `den doctor` and `den daemon status` show it.
+// daemon_state.json's `disabled_blocked` (package, every disabled package in
+// the way with its reason, and when it was recorded) until it applies or is
+// no longer pending; `den status`, `den outdated`, `den doctor` and `den
+// daemon status` show it with the recorded time.
 
 #include <doctest.h>
 
@@ -25,7 +26,10 @@
 #include "index/package.h"
 #include "provider/stub_provider.h"
 
+#include <nlohmann/json.hpp>
+
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -166,13 +170,24 @@ struct Fixture {
 };
 
 void check_block(const DisabledBlocked& b, const std::string& name, const std::string& installed,
-                 const std::string& available, const std::string& disabled,
-                 const std::string& reason) {
+                 const std::string& available, const std::vector<DisabledBlocker>& blockers) {
     CHECK(b.name == name);
     CHECK(b.installed == installed);
     CHECK(b.available == available);
-    CHECK(b.disabled == disabled);
-    CHECK(b.reason == reason);
+    CHECK(b.blockers == blockers);
+}
+
+void check_block(const DisabledBlocked& b, const std::string& name, const std::string& installed,
+                 const std::string& available, const std::string& disabled,
+                 const std::string& reason) {
+    check_block(b, name, installed, available, {{disabled, reason}});
+}
+
+std::string read_file(const fs::path& p) {
+    std::ifstream f(p);
+    std::stringstream ss;
+    ss << f.rdbuf();
+    return ss.str();
 }
 
 } // namespace
@@ -252,7 +267,8 @@ TEST_SUITE("daemon_disabled_blocked") {
             f.settings.auto_upgrade = false; // no pass re-checks it
             f.cycle();
             REQUIRE(f.state.disabled_blocked.size() == 1);
-            CHECK(f.state.disabled_blocked[0].disabled == "libold");
+            CHECK(f.state.disabled_blocked[0].blockers ==
+                  std::vector<DisabledBlocker>{{"libold", kJqNeeds}});
             f.add(pkg("jq", "1.8.3", {"libold"}));
             f.cycle();
             CHECK(f.state.disabled_blocked.empty());
@@ -320,7 +336,7 @@ TEST_SUITE("daemon_disabled_blocked") {
             apply_daemon_upgrade(f.cfg, f.brew, f.idx, {"jq", "1.7.1", "1.8.2"});
             FAIL("expected UpgradeDisabled");
         } catch (const UpgradeDisabled& e) {
-            CHECK(e.disabled == "libold");
+            CHECK(e.blockers == std::vector<DisabledBlocker>{{"libold", kJqNeeds}});
             CHECK(std::string(e.what()) == kJqNeeds);
         }
         CHECK(f.brew.installs.empty());
@@ -329,16 +345,125 @@ TEST_SUITE("daemon_disabled_blocked") {
     TEST_CASE("disabled_blocked round-trips through daemon_state.json") {
         DbTmp t;
         DaemonState s;
-        s.disabled_blocked.push_back({"jq", "1.7.1", "1.8.2", "libold", kJqNeeds});
+        s.disabled_blocked.push_back({"jq",
+                                      "1.7.1",
+                                      "1.8.2",
+                                      {{"libold", kJqNeeds}, {"libolder", "'jq' needs 'libolder'"}},
+                                      1793000000});
         write_daemon_state(t.path, s);
         auto back = read_daemon_state(t.path);
         REQUIRE(back.disabled_blocked.size() == 1);
-        check_block(back.disabled_blocked[0], "jq", "1.7.1", "1.8.2", "libold", kJqNeeds);
-        std::ifstream f(t.path / "daemon_state.json");
-        std::stringstream ss;
-        ss << f.rdbuf();
-        CHECK(has(ss.str(), "\"disabled_blocked\""));
+        check_block(back.disabled_blocked[0], "jq", "1.7.1", "1.8.2",
+                    {{"libold", kJqNeeds}, {"libolder", "'jq' needs 'libolder'"}});
+        CHECK(back.disabled_blocked[0].recorded == 1793000000u);
+        auto json = read_file(t.path / "daemon_state.json");
+        CHECK(has(json, "\"disabled_blocked\""));
+        CHECK(has(json, "\"blockers\""));
+        CHECK(has(json, "\"recorded\": 1793000000"));
+        // The single-blocker form older den reads: the first blocker, every reason.
+        auto entry = nlohmann::json::parse(json)["disabled_blocked"][0];
+        CHECK(entry.value("disabled", std::string()) == "libold");
+        CHECK(entry.value("reason", std::string()) == kJqNeeds + "; 'jq' needs 'libolder'");
         CHECK(read_daemon_state(t.path / "missing").disabled_blocked.empty());
+    }
+
+    TEST_CASE("a state file from an older den reads as one blocker recorded at last_check") {
+        DbTmp t;
+        std::ofstream(t.path / "daemon_state.json")
+            << R"({"last_check": 1793000000, "pending": [], "disabled_blocked": [)"
+               R"({"name": "jq", "installed": "1.7.1", "available": "1.8.2",)"
+               R"( "disabled": "libold", "reason": ")"
+            << kJqNeeds << R"("}]})";
+        auto back = read_daemon_state(t.path);
+        REQUIRE(back.disabled_blocked.size() == 1);
+        check_block(back.disabled_blocked[0], "jq", "1.7.1", "1.8.2", "libold", kJqNeeds);
+        CHECK(back.disabled_blocked[0].recorded == 1793000000u);
+        CHECK(back.last_check == 1793000000u);
+    }
+
+    TEST_CASE("every disabled package in the way is recorded, not just the first") {
+        SUBCASE("two disabled dependencies") {
+            Fixture f;
+            f.add(pkg("jq", "1.8.2", {"libold", "libolder"}));
+            f.add(disabled_formula("libolder", "2.0"));
+            f.cycle();
+            CHECK(f.brew.installs.empty());
+            REQUIRE(f.state.disabled_blocked.size() == 1);
+            const std::string older = "'jq' needs 'libolder', which is " + kTail;
+            check_block(f.state.disabled_blocked[0], "jq", "1.7.1", "1.8.2",
+                        {{"libold", kJqNeeds}, {"libolder", older}});
+            CHECK(disabled_blocker_names(f.state.disabled_blocked[0]) == "libold, libolder");
+            CHECK(has(f.log(), "not upgrading jq 1.7.1 -> 1.8.2: " + kJqNeeds + "; " + older));
+            try {
+                apply_daemon_upgrade(f.cfg, f.brew, f.idx, {"jq", "1.7.1", "1.8.2"});
+                FAIL("expected UpgradeDisabled");
+            } catch (const UpgradeDisabled& e) {
+                CHECK(e.blockers.size() == 2);
+                CHECK(std::string(e.what()) == kJqNeeds + "; " + older);
+            }
+        }
+        SUBCASE("the package's own disabled dependency and a disabled dependent") {
+            Fixture f({{"jqx", "1.0"}});
+            f.add(pkg("jq", "1.8.2", {"libold"}));
+            auto jqx = disabled_formula("jqx", "1.0_1");
+            jqx.revision = 1;
+            jqx.dependencies = {"jq"};
+            f.add(jqx);
+            f.cycle();
+            CHECK(f.brew.installs.empty());
+            CHECK(f.manifest("jq") == "1.7.1");
+            REQUIRE(f.state.disabled_blocked.size() == 2);
+            // jqx 1.0_1 needs jq 1.8.2, so it would pour libold too; the
+            // names list each disabled package once.
+            const std::string dep = "dependent jqx 1.0 (1.0_1 available): ";
+            check_block(f.state.disabled_blocked[0], "jq", "1.7.1", "1.8.2",
+                        {{"libold", kJqNeeds},
+                         {"jqx", dep + "'jqx' is " + kTail},
+                         {"libold", dep + "'jqx' needs 'libold', which is " + kTail}});
+            CHECK(disabled_blocker_names(f.state.disabled_blocked[0]) == "libold, jqx");
+        }
+        SUBCASE("a dependent that is disabled and would pour a disabled dependency") {
+            Fixture f({{"jqx", "1.0"}});
+            auto jqx = disabled_formula("jqx", "1.0_1");
+            jqx.revision = 1;
+            jqx.dependencies = {"jq", "libold"};
+            f.add(jqx);
+            f.cycle();
+            CHECK(f.brew.installs.empty());
+            REQUIRE(f.state.disabled_blocked.size() == 2);
+            const std::string dep = "dependent jqx 1.0 (1.0_1 available): ";
+            check_block(f.state.disabled_blocked[0], "jq", "1.7.1", "1.8.2",
+                        {{"jqx", dep + "'jqx' is " + kTail},
+                         {"libold", dep + "'jqx' needs 'libold', which is " + kTail}});
+        }
+    }
+
+    TEST_CASE("each entry records when the cycle or pass found it") {
+        Fixture f({{"rye", "0.43.0"}});
+        f.add(disabled_formula("rye", "0.44.0"));
+        f.add(pkg("jq", "1.8.2", {"libold"}));
+        const auto before = now_secs();
+        f.cycle();
+        REQUIRE(f.state.disabled_blocked.size() == 2);
+        REQUIRE(f.state.last_check);
+        for (const auto& b : f.state.disabled_blocked) {
+            REQUIRE(b.recorded);
+            CHECK(*b.recorded >= before);
+            CHECK(*b.recorded >= *f.state.last_check);
+        }
+        // The report carries it in den's local "YYYY-MM-DD HH:MM" format.
+        const auto& jq = f.state.disabled_blocked[0];
+        CHECK(disabled_blocked_report(jq) == disabled_blocked_message(jq) + "  [recorded " +
+                                                 format_local_time(*jq.recorded) + "]");
+        std::time_t tt = static_cast<std::time_t>(*jq.recorded);
+        std::tm tm{};
+        localtime_r(&tt, &tm);
+        char buf[32];
+        std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", &tm);
+        CHECK(format_local_time(*jq.recorded) == buf);
+        DisabledBlocked unknown{"jq", "1.7.1", "1.8.2", {{"libold", kJqNeeds}}, std::nullopt};
+        CHECK(disabled_blocked_report(unknown) ==
+              "jq 1.7.1 -> 1.8.2: " + kJqNeeds + "  [recorded ?]");
     }
 }
 
@@ -382,6 +507,10 @@ class StreamCapture {
     std::streambuf* err_;
 };
 
+const uint64_t kAt = 1793000000; // when Home's entries were recorded
+const std::string kOlder = "'jq' needs 'libolder', which is " + kTail;
+const std::string kWhen = "  [recorded " + format_local_time(kAt) + "]";
+
 // A scratch den home whose daemon state records two blocked upgrades; the
 // commands run in-process through Cli::run.
 struct Home {
@@ -401,8 +530,9 @@ struct Home {
         m.packages["homebrew"]["rye"] = "0.43.0";
         write_manifest(dh, active_env_path(dh), m);
         PackageIndex idx;
-        idx.packages["jq"] = pkg("jq", "1.8.2", {"libold"});
+        idx.packages["jq"] = pkg("jq", "1.8.2", {"libold", "libolder"});
         idx.packages["libold"] = disabled_formula("libold", "1.0");
+        idx.packages["libolder"] = disabled_formula("libolder", "2.0");
         auto rye = disabled_formula("rye", "0.44.0");
         idx.packages["rye"] = rye;
         fs::create_directories(dh / "cache");
@@ -410,8 +540,9 @@ struct Home {
         DaemonState s;
         s.pending.push_back({"jq", "1.7.1", "1.8.2"});
         if (blocked) {
-            s.disabled_blocked.push_back({"jq", "1.7.1", "1.8.2", "libold", kJqNeeds});
-            s.disabled_blocked.push_back({"rye", "0.43.0", "0.44.0", "rye", kRye});
+            s.disabled_blocked.push_back(
+                {"jq", "1.7.1", "1.8.2", {{"libold", kJqNeeds}, {"libolder", kOlder}}, kAt});
+            s.disabled_blocked.push_back({"rye", "0.43.0", "0.44.0", {{"rye", kRye}}, kAt});
         }
         write_daemon_state(dh, s);
     }
@@ -431,7 +562,8 @@ struct Home {
 
 const std::string kSection = "Not upgrading (would pour a package disabled upstream):\n"
                              "  jq 1.7.1 -> 1.8.2: " +
-                             kJqNeeds + "\n  rye 0.43.0 -> 0.44.0: " + kRye + "\n";
+                             kJqNeeds + "; " + kOlder + kWhen +
+                             "\n  rye 0.43.0 -> 0.44.0: " + kRye + kWhen + "\n";
 
 } // namespace
 
@@ -446,7 +578,8 @@ TEST_SUITE("daemon_disabled_blocked") {
         auto outdated = h.run({"outdated"});
         CAPTURE(outdated);
         CHECK(
-            has(outdated, "jq  1.7.1 -> 1.8.2  [daemon: would pour libold, disabled upstream]\n"));
+            has(outdated,
+                "jq  1.7.1 -> 1.8.2  [daemon: would pour libold, libolder, disabled upstream]\n"));
         CHECK(has(outdated, kSection));
         CHECK_FALSE(has(outdated, "up to date"));
 
@@ -462,7 +595,8 @@ TEST_SUITE("daemon_disabled_blocked") {
         CHECK(has(out, "[warning] 2 upgrade(s) not applied by the daemon: each would pour a "
                        "package disabled upstream, which den never does unattended:\n"
                        "    jq 1.7.1 -> 1.8.2: " +
-                           kJqNeeds + "\n    rye 0.43.0 -> 0.44.0: " + kRye +
+                           kJqNeeds + "; " + kOlder + kWhen +
+                           "\n    rye 0.43.0 -> 0.44.0: " + kRye + kWhen +
                            "\n  Switch to the replacement, or install it deliberately with "
                            "`den upgrade <name> --force` (formulae only).\n"));
     }

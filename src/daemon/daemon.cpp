@@ -127,6 +127,15 @@ uint64_t now_secs() {
     return static_cast<uint64_t>(std::time(nullptr));
 }
 
+std::string format_local_time(uint64_t secs) {
+    std::time_t t = static_cast<std::time_t>(secs);
+    std::tm tm{};
+    if (!localtime_r(&t, &tm))
+        return "?";
+    char buf[32];
+    return std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", &tm) > 0 ? buf : "?";
+}
+
 bool in_maintenance_window(const std::string& window) {
     if (window.empty())
         return true;
@@ -295,8 +304,20 @@ DaemonState read_daemon_state(const fs::path& den_home) {
                 b.name = d.value("name", std::string());
                 b.installed = d.value("installed", std::string());
                 b.available = d.value("available", std::string());
-                b.disabled = d.value("disabled", std::string());
-                b.reason = d.value("reason", std::string());
+                if (d.contains("blockers") && d["blockers"].is_array()) {
+                    for (const auto& x : d["blockers"])
+                        if (x.is_object())
+                            b.blockers.push_back({x.value("disabled", std::string()),
+                                                  x.value("reason", std::string())});
+                } else if (d.contains("disabled") && d["disabled"].is_string()) {
+                    // The single-blocker form an older den wrote.
+                    b.blockers.push_back(
+                        {d["disabled"].get<std::string>(), d.value("reason", std::string())});
+                }
+                if (d.contains("recorded") && d["recorded"].is_number_unsigned())
+                    b.recorded = d["recorded"].get<uint64_t>();
+                else
+                    b.recorded = state.last_check;
                 state.disabled_blocked.push_back(std::move(b));
             }
         }
@@ -366,11 +387,22 @@ void write_daemon_state(const fs::path& den_home, const DaemonState& state) {
 
     nlohmann::json blocked = nlohmann::json::array();
     for (const auto& b : state.disabled_blocked) {
-        blocked.push_back({{"name", b.name},
-                           {"installed", b.installed},
-                           {"available", b.available},
-                           {"disabled", b.disabled},
-                           {"reason", b.reason}});
+        nlohmann::json blockers = nlohmann::json::array();
+        std::string reasons;
+        for (const auto& x : b.blockers) {
+            blockers.push_back({{"disabled", x.disabled}, {"reason", x.reason}});
+            reasons += (reasons.empty() ? "" : "; ") + x.reason;
+        }
+        nlohmann::json e = {{"name", b.name},
+                            {"installed", b.installed},
+                            {"available", b.available},
+                            {"blockers", blockers},
+                            // The single-blocker form older den reads.
+                            {"disabled", b.blockers.empty() ? "" : b.blockers.front().disabled},
+                            {"reason", reasons}};
+        if (b.recorded)
+            e["recorded"] = *b.recorded;
+        blocked.push_back(std::move(e));
     }
     j["disabled_blocked"] = blocked;
 
@@ -504,7 +536,26 @@ std::string index_older_message(const PendingUpgrade& p) {
 }
 
 std::string disabled_blocked_message(const DisabledBlocked& b) {
-    return b.name + " " + b.installed + " -> " + b.available + ": " + b.reason;
+    std::string reasons;
+    for (const auto& x : b.blockers)
+        reasons += (reasons.empty() ? "" : "; ") + x.reason;
+    return b.name + " " + b.installed + " -> " + b.available + ": " + reasons;
+}
+
+std::string disabled_blocked_report(const DisabledBlocked& b) {
+    return disabled_blocked_message(b) + "  [recorded " +
+           (b.recorded ? format_local_time(*b.recorded) : std::string("?")) + "]";
+}
+
+std::string disabled_blocker_names(const DisabledBlocked& b) {
+    std::vector<std::string> names;
+    for (const auto& x : b.blockers)
+        if (std::find(names.begin(), names.end(), x.disabled) == names.end())
+            names.push_back(x.disabled);
+    std::string out;
+    for (const auto& n : names)
+        out += (out.empty() ? "" : ", ") + n;
+    return out;
 }
 
 std::string version_held_message(const DeferredUpgrade& h) {
@@ -551,15 +602,19 @@ MaintenanceReport run_maintenance_cycle(const fs::path& cellar, const fs::path& 
     // (a disabled dependency or dependent) holds while its upgrade is still
     // pending at the same version; the next pass re-checks it.
     std::erase_if(state.disabled_blocked, [&](const DisabledBlocked& b) {
-        return b.disabled == b.name ||
+        return std::any_of(b.blockers.begin(), b.blockers.end(),
+                           [&](const DisabledBlocker& x) { return x.disabled == b.name; }) ||
                std::none_of(state.pending.begin(), state.pending.end(),
                             [&](const PendingUpgrade& p) {
                                 return p.name == b.name && p.available == b.available;
                             });
     });
     for (const auto& pu : self_disabled) {
-        DisabledBlocked b{pu.name, pu.installed, pu.available, pu.name,
-                          disabled_package_message(*idx.find(pu.name))};
+        DisabledBlocked b{pu.name,
+                          pu.installed,
+                          pu.available,
+                          {{pu.name, disabled_package_message(*idx.find(pu.name))}},
+                          state.last_check};
         log_daemon(den_home, "not upgrading " + disabled_blocked_message(b));
         state.disabled_blocked.push_back(std::move(b));
     }
@@ -704,22 +759,29 @@ void apply_daemon_upgrade(const Config& config, PackageProvider& provider, const
     // would pour, or a revision-bumped dependent that is disabled or would
     // pour one (the check `den upgrade` refuses with, minus --force). A
     // refused dependent holds the whole batch, so the chain is not split.
-    if (auto pours = disabled_pours(config, provider, idx, pu.name, /*include_self=*/true);
-        !pours.empty())
-        throw UpgradeDisabled(pours.front().pkg->name, pours.front().message);
-    std::map<std::string, std::string> refused_by; // dependent -> disabled package
+    // Every disabled package in the way is reported, not just the first: the
+    // package's own pours, then each refused dependent's. When the package's
+    // own pours already block it the batch is only planned (plan_only, no
+    // trust screen), to find the dependents that would block it too.
+    std::vector<DisabledBlocker> blockers;
+    for (const auto& p : disabled_pours(config, provider, idx, pu.name, /*include_self=*/true))
+        blockers.push_back({p.pkg->name, p.message});
+    std::map<std::string, std::vector<DisabledPour>> refused_by; // dependent -> its pours
     VersionChangeOptions opts;
+    opts.plan_only = !blockers.empty();
     opts.refuse_dependent = [&](const VersionChange& c) -> std::optional<std::string> {
         auto pours = disabled_pours(config, provider, idx, c.name, /*include_self=*/true);
         if (pours.empty())
             return std::nullopt;
-        refused_by[c.name] = pours.front().pkg->name;
-        return pours.front().message;
+        auto why = pours.front().message;
+        refused_by[c.name] = std::move(pours);
+        return why;
     };
     opts.refused_dependent_holds_batch = true;
     opts.upgrade_dependents = true;
     opts.keg_in_use = [](const fs::path& keg) { return !files_in_use_under(keg).empty(); };
-    if (const TrustPolicy policy = current_trust_policy(config); policy.unattended) {
+    if (const TrustPolicy policy = current_trust_policy(config);
+        policy.unattended && !opts.plan_only) {
         opts.screen_dependents = [&config, &idx, policy](const std::vector<VersionChange>& cs) {
             std::vector<PendingUpgrade> pending;
             for (const auto& c : cs)
@@ -729,12 +791,14 @@ void apply_daemon_upgrade(const Config& config, PackageProvider& provider, const
     }
     auto res = apply_version_changes(config, provider, &idx,
                                      {{pu.name, pu.installed, pu.available}}, opts);
-    if (!res.refused_dependents.empty()) {
-        const auto& [dependent, why] = res.refused_dependents.front();
-        throw UpgradeDisabled(refused_by[dependent.name], "dependent " + dependent.name + " " +
-                                                              dependent.from + " (" + dependent.to +
-                                                              " available): " + why);
+    for (const auto& [dependent, why] : res.refused_dependents) {
+        const auto prefix = "dependent " + dependent.name + " " + dependent.from + " (" +
+                            dependent.to + " available): ";
+        for (const auto& p : refused_by[dependent.name])
+            blockers.push_back({p.pkg->name, prefix + p.message});
     }
+    if (!blockers.empty())
+        throw UpgradeDisabled(std::move(blockers));
     if (!res.deferred_in_use.empty()) {
         std::string held;
         for (const auto& c : res.deferred_in_use) {
