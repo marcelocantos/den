@@ -536,6 +536,54 @@ TEST_SUITE("cli::integration") {
     }
 
     // -----------------------------------------------------------------------
+    // 16c. `den upgrade` with a missing or empty index exits non-zero. Every
+    //      form (all, named, --dry-run) used to log "package index is empty"
+    //      and exit 0, which reads as "nothing to upgrade".
+    // -----------------------------------------------------------------------
+    TEST_CASE("upgrade with a missing or empty index exits non-zero with a clear message") {
+        TempDir home;
+        const std::string h = home.path.string();
+        const std::string cellar = (home.path / "brew" / "Cellar").string();
+        const std::string msg = "error: the package index is empty; run `den update` first";
+        const std::string forms[] = {"upgrade", "upgrade --dry-run", "upgrade -n",
+                                     "upgrade nosuchpkg", "upgrade --dry-run nosuchpkg"};
+
+        // Missing index (fresh home, no cache/index.json).
+        REQUIRE_FALSE(fs::exists(home.path / "cache" / "index.json"));
+        for (const auto& form : forms) {
+            CAPTURE(form);
+            auto r = run_den_with_cellar(form, h, cellar);
+            CHECK(r.exit_code == 1);
+            CHECK(r.output.find(msg) != std::string::npos);
+        }
+
+        // Present but empty index.
+        fs::create_directories(home.path / "cache");
+        std::ofstream(home.path / "cache" / "index.json") << R"({"packages": []})";
+        for (const auto& form : forms) {
+            CAPTURE(form);
+            auto r = run_den_with_cellar(form, h, cellar);
+            CHECK(r.exit_code == 1);
+            CHECK(r.output.find(msg) != std::string::npos);
+        }
+
+        // A populated index gets past the guard: dry-run with nothing
+        // installed succeeds.
+        std::ofstream(home.path / "cache" / "index.json") << R"({
+  "packages": [{
+    "name": "realpkg", "version": "1.0.0", "description": "present",
+    "homepage": "", "license": "", "artifact_type": "binary",
+    "deprecated": false, "disabled": false,
+    "dependencies": [], "build_dependencies": [], "archives": {}
+  }]
+})";
+        auto ok = run_den_with_cellar("upgrade --dry-run", h, cellar);
+        CAPTURE(ok.output);
+        CHECK(ok.exit_code == 0);
+        CHECK(ok.output.find(msg) == std::string::npos);
+    }
+
+    // -----------------------------------------------------------------------
     // 17. cleanup — shared Cellar. A Homebrew keg must survive; a den-owned
     //     version nothing references is removed. --dry-run deletes nothing.
     // -----------------------------------------------------------------------
