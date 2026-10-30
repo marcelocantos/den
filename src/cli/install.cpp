@@ -17,6 +17,7 @@
 #include "../store/store.h"
 #include "../trust/unattended.h"
 
+#include <algorithm>
 #include <iostream>
 #include <map>
 #include <set>
@@ -67,10 +68,82 @@ void report_version_change_failures(const Config& config, const VersionChangeRes
         throw UserError(msg);
 }
 
+namespace {
+
+/// Homebrew's wording for its disable!/deprecate! reason symbols
+/// (DeprecateDisable::FORMULA_DEPRECATE_DISABLE_REASONS), so den's refusal
+/// reads like brew's "has been disabled because it ...".
+std::string disable_reason_phrase(const std::string& reason) {
+    static const std::map<std::string, std::string> phrases = {
+        {"does_not_build", "does not build"},
+        {"no_license", "has no license"},
+        {"repo_archived", "has an archived upstream repository"},
+        {"repo_removed", "has a removed upstream repository"},
+        {"unmaintained", "is not maintained upstream"},
+        {"unsupported", "is not supported upstream"},
+        {"deprecated_upstream", "is deprecated upstream"},
+        {"versioned_formula", "is a versioned formula"},
+        {"checksum_mismatch", "was built from a source file whose checksum has since changed"},
+    };
+    if (auto it = phrases.find(reason); it != phrases.end())
+        return it->second;
+    return reason;
+}
+
+std::string refused_count_message(size_t n) {
+    return std::to_string(n) + " requested formula(e) are disabled upstream";
+}
+
+} // namespace
+
+std::string disabled_formula_message(const Package& pkg) {
+    std::string msg = "'" + pkg.name + "' is disabled upstream";
+    if (!pkg.disable_reason.empty())
+        msg += ": it " + disable_reason_phrase(pkg.disable_reason);
+    std::string details;
+    if (!pkg.disable_date.empty())
+        details = "disabled on " + pkg.disable_date;
+    if (!pkg.disable_replacement.empty()) {
+        if (!details.empty())
+            details += "; ";
+        details += "replacement: " + pkg.disable_replacement;
+    }
+    if (!details.empty())
+        msg += " (" + details + ")";
+    return msg;
+}
+
+std::vector<std::string> refuse_disabled_formulae(const PackageIndex& idx,
+                                                  const std::vector<std::string>& names) {
+    std::vector<std::string> refused;
+    for (const auto& name : names) {
+        const auto* pkg = idx.find(name);
+        if (pkg && pkg->disabled && pkg->artifact_type == ArtifactType::Binary) {
+            std::cerr << "error: " << disabled_formula_message(*pkg) << "\n";
+            refused.push_back(name);
+        }
+    }
+    return refused;
+}
+
 void install_packages(const Config& config, PackageProvider& provider, const PackageIndex& idx,
-                      const std::vector<std::string>& names, const MaterialiseOptions& link_opts) {
+                      const std::vector<std::string>& requested,
+                      const MaterialiseOptions& link_opts) {
     auto active = active_env_path(config.den_home);
     auto pname = std::string(provider.provider_name());
+
+    // homebrew-core disabled these formulae (brew refuses to install them
+    // too). The index only describes Homebrew packages, so a name another
+    // provider installs is never matched against it.
+    std::vector<std::string> refused;
+    if (pname == "homebrew")
+        refused = refuse_disabled_formulae(idx, requested);
+    std::vector<std::string> names;
+    for (const auto& name : requested)
+        if (std::find(refused.begin(), refused.end(), name) == refused.end())
+            names.push_back(name);
+    if (names.empty() && !refused.empty())
+        throw UserError(refused_count_message(refused.size()));
 
     // A package already in the manifest moves to the provider's version as a
     // unit: if the new version cannot be linked, it stays where it was.
@@ -96,12 +169,18 @@ void install_packages(const Config& config, PackageProvider& provider, const Pac
     if (report_link_count(res.links, cask_only(config, names)))
         std::cout << "  " << res.links << " symlinks\n";
     report_version_change_failures(config, res, "install");
+    if (!refused.empty())
+        throw UserError(refused_count_message(refused.size()));
 }
 
 void install_from_source(const Config& config, const PackageIndex& idx,
                          const std::vector<std::string>& names, const MaterialiseOptions& link_opts,
                          const SourcePlanRunner& runner) {
     auto active = active_env_path(config.den_home);
+    // A disabled formula is refused before anything is planned or built:
+    // building it from source is no way around homebrew-core disabling it.
+    if (auto refused = refuse_disabled_formulae(idx, names); !refused.empty())
+        throw UserError(refused_count_message(refused.size()));
     // G3: plan the whole chain first. Dependencies pour when their
     // bottle pours into den's Cellar and are built from source when
     // it can't (a fixed Cellar such as /opt/homebrew/Cellar); build
@@ -214,6 +293,8 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
     const auto pins = read_pins(config.den_home);
     std::vector<UpgradeCandidate> candidates;
     std::vector<std::string> explicitly_pinned;
+    // Named formulae homebrew-core has disabled: refused, as brew does.
+    std::vector<std::string> refused_disabled;
     // Index older than installed: an upgrade never downgrades (that takes an
     // explicit `den use <name> <version>`), so these are reported and skipped.
     std::vector<UpgradeCandidate> older;
@@ -245,8 +326,9 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
                 resolved = std::move(it->second);
         }
         // A name given explicitly goes through the same select_upgrade
-        // comparison, but a cask or disabled formula named here is upgraded:
-        // naming it is the manual upgrade the bare form leaves to the user.
+        // comparison, but a cask named here is upgraded: naming it is the
+        // manual upgrade the bare form leaves to the user. A disabled
+        // formula is refused even when named (homebrew-core disabled it).
         for (const auto& name : names) {
             auto it = resolved.find(name);
             if (it == resolved.end()) {
@@ -264,6 +346,11 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
             const auto sel = select_upgrade(name, it->second, pkg, installed_scheme);
             if (sel.skip == UpgradeSkip::NotInIndex) {
                 std::cerr << "warning: '" << name << "' not in index\n";
+                continue;
+            }
+            if (pkg->disabled && pkg->artifact_type == ArtifactType::Binary) {
+                std::cerr << "error: " << disabled_formula_message(*pkg) << "\n";
+                refused_disabled.push_back(name);
                 continue;
             }
             const auto delta = sel.delta;
@@ -321,7 +408,8 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
     // (the unattended trust screen writes the trust ledger).
     if (dry_run) {
         if (upgrades.empty()) {
-            if (older.empty() && held_lower.empty() && manual_casks.empty())
+            if (older.empty() && held_lower.empty() && manual_casks.empty() &&
+                explicitly_pinned.empty() && refused_disabled.empty())
                 std::cout << "All packages are up to date.\n";
             else
                 std::cout << "Nothing to upgrade.\n";
@@ -334,6 +422,8 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
         if (!explicitly_pinned.empty())
             throw UserError(std::to_string(explicitly_pinned.size()) +
                             " requested package(s) are pinned");
+        if (!refused_disabled.empty())
+            throw UserError(refused_count_message(refused_disabled.size()));
         return;
     }
 
@@ -365,6 +455,8 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
         if (!explicitly_pinned.empty())
             throw UserError(std::to_string(explicitly_pinned.size()) +
                             " requested package(s) are pinned");
+        if (!refused_disabled.empty())
+            throw UserError(refused_count_message(refused_disabled.size()));
         if (!trust_held.empty())
             throw UserError(std::to_string(trust_held.size()) +
                             " package(s) held back by the unattended trust policy; review with "
