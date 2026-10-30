@@ -5,6 +5,7 @@
 
 #include "../core/config.h"
 #include "../daemon/launchd_plist.h"
+#include "../daemon/plist_refresh.h"
 #include "launchd_restart.h"
 
 #include <filesystem>
@@ -50,16 +51,6 @@ struct DaemonRestartEnv {
     /// reloaded job (or the next login) runs with the current PATH.
     std::function<void(std::ostream&)> refresh_plist;
 };
-
-/// Bring the installed daemon plist `plist`'s PATH up to date with den's own
-/// layout (launchd_path), for a plist that belongs to `cfg`'s den home. The
-/// prefix is the plist's DEN_PREFIX when it sets one, else cfg.prefix. A plist
-/// for another den home, or one installed without DEN_PREFIX while this
-/// process runs with DEN_PREFIX set, is left untouched. Hand-edited plists are
-/// reported, not rewritten (refresh_launchd_plist_path). The previous plist is
-/// saved to <den_home>/dev.den.daemon.plist.bak.
-PlistPathRefresh refresh_daemon_plist_path(const Config& cfg, const std::filesystem::path& plist,
-                                           std::ostream& out);
 
 /// Single-quote `s` for /bin/sh.
 std::string sh_quote(const std::string& s);
