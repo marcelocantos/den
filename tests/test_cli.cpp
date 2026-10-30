@@ -762,6 +762,51 @@ TEST_SUITE("cli::integration") {
         CHECK(count(up.output, "Nothing to upgrade.") == 1);
     }
 
+    // -----------------------------------------------------------------------
+    // 20. `den doctor` warns (not errors) about a held package, listing
+    //     installed vs available, the reason and `den use` to downgrade; the
+    //     warning is absent once the index offers nothing below installed.
+    // -----------------------------------------------------------------------
+    TEST_CASE("doctor warns about a held package, and not otherwise") {
+        TempDir home;
+        const fs::path cellar = home.path / "pfx" / "Cellar";
+        const auto k363 = cellar / "openssl@3" / "3.6.3";
+        fs::create_directories(k363 / "bin");
+        std::ofstream(k363 / "bin" / "openssl") << "#!/bin/sh\n";
+        std::ofstream(k363 / "INSTALL_RECEIPT.json")
+            << R"({"source":{"versions":{"stable":"3.6.3","version_scheme":0}}})";
+        fs::create_directories(home.path / "manifests" / "ROOT");
+        std::ofstream(home.path / "manifests" / "ROOT" / "manifest.json")
+            << R"({"packages":{"homebrew":{"openssl@3":"3.6.3"}}})";
+        fs::create_directories(home.path / "cache");
+        auto write_index = [&](const std::string& version, int scheme) {
+            std::ofstream(home.path / "cache" / "index.json") << R"({
+  "packages": [{
+    "name": "openssl@3", "version": ")" << version << R"(", "version_scheme": )"
+                                                              << scheme << R"(,
+    "description": "TLS", "homepage": "", "license": "", "artifact_type": "binary",
+    "deprecated": false, "disabled": false,
+    "dependencies": [], "build_dependencies": [], "archives": {}
+  }]
+})";
+        };
+        const std::string held_line =
+            "openssl@3: installed 3.6.3, index has 3.5.9 (held: index pins 3.5.9 "
+            "(version_scheme 1), below installed 3.6.3)";
+
+        write_index("3.5.9", 1);
+        auto held = run_den_with_cellar("doctor", home.path.string(), cellar.string());
+        CHECK(held.output.find("[warning] 1 package(s) held") != std::string::npos);
+        CHECK(held.output.find(held_line) != std::string::npos);
+        CHECK(held.output.find("den use openssl@3 3.5.9") != std::string::npos);
+        CHECK(held.output.find("[error] 1 package(s) held") == std::string::npos);
+
+        write_index("3.6.3", 0);
+        auto same = run_den_with_cellar("doctor", home.path.string(), cellar.string());
+        CHECK(same.output.find("package(s) held") == std::string::npos);
+        CHECK(same.output.find("den use openssl@3") == std::string::npos);
+    }
+
 } // TEST_SUITE cli::integration
 
 } // namespace cli_test
