@@ -207,12 +207,9 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
     // cross-provider view would misreport it as index-older, or plan a
     // homebrew "upgrade" over it. This matches the daemon's maintenance
     // cycle, which reads only the homebrew bucket.
-    std::map<std::string, std::string> resolved;
-    {
-        auto per = resolve_per_provider(config.den_home, active);
-        if (auto it = per.find(std::string(provider.provider_name())); it != per.end())
-            resolved = std::move(it->second);
-    }
+    const auto installed_scheme = [&config](const std::string& name, const std::string& version) {
+        return installed_version_scheme(config.store / keg_name(name) / version);
+    };
 
     const auto pins = read_pins(config.den_home);
     std::vector<UpgradeCandidate> candidates;
@@ -223,31 +220,33 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
     // Index version lower but version_scheme higher (VersionDelta::Held):
     // held with a reason, never upgraded, likewise only `den use` moves it.
     std::vector<std::pair<UpgradeCandidate, std::string>> held_lower;
+    // Casks with a newer index version, left out of a bare upgrade: swapping a
+    // live .app bundle is only done when the cask is named.
+    std::vector<UpgradeCandidate> manual_casks;
 
     if (names.empty()) {
-        for (const auto& [name, version] : resolved) {
-            auto* pkg = idx.find(name);
-            if (!pkg || pkg->version.empty() || pkg->version == version)
-                continue;
-            const int have_scheme =
-                installed_version_scheme(config.store / keg_name(name) / version);
-            switch (version_delta(version, have_scheme, pkg->version, pkg->version_scheme)) {
-            case VersionDelta::Newer:
-                candidates.push_back({name, version, pkg->version});
-                break;
-            case VersionDelta::Older:
-                older.push_back({name, version, pkg->version});
-                break;
-            case VersionDelta::Held:
-                held_lower.push_back(
-                    {{name, version, pkg->version},
-                     version_hold_reason(version, pkg->version, pkg->version_scheme)});
-                break;
-            case VersionDelta::Same:
-                break;
-            }
-        }
+        // The same selection `den outdated`, `den doctor` and the daemon use
+        // (outdated_plan -> compute_pending): casks and disabled formulae are
+        // skipped, index-older and held packages reported, never applied.
+        const auto plan = outdated_plan(config, idx, provider.provider_name());
+        for (const auto& p : plan.pending)
+            candidates.push_back({p.name, p.installed, p.available});
+        for (const auto& o : plan.index_older)
+            older.push_back({o.name, o.installed, o.available});
+        for (const auto& h : plan.held)
+            held_lower.push_back({{h.name, h.installed, h.available}, h.reason});
+        for (const auto& c : plan.casks)
+            manual_casks.push_back({c.name, c.installed, c.available});
     } else {
+        std::map<std::string, std::string> resolved;
+        {
+            auto per = resolve_per_provider(config.den_home, active);
+            if (auto it = per.find(std::string(provider.provider_name())); it != per.end())
+                resolved = std::move(it->second);
+        }
+        // A name given explicitly goes through the same select_upgrade
+        // comparison, but a cask or disabled formula named here is upgraded:
+        // naming it is the manual upgrade the bare form leaves to the user.
         for (const auto& name : names) {
             auto it = resolved.find(name);
             if (it == resolved.end()) {
@@ -262,16 +261,12 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
                 continue;
             }
             auto* pkg = idx.find(name);
-            if (!pkg) {
+            const auto sel = select_upgrade(name, it->second, pkg, installed_scheme);
+            if (sel.skip == UpgradeSkip::NotInIndex) {
                 std::cerr << "warning: '" << name << "' not in index\n";
                 continue;
             }
-            const int have_scheme =
-                installed_version_scheme(config.store / keg_name(name) / it->second);
-            const auto delta =
-                pkg->version == it->second
-                    ? VersionDelta::Same
-                    : version_delta(it->second, have_scheme, pkg->version, pkg->version_scheme);
+            const auto delta = sel.delta;
             if (delta == VersionDelta::Newer) {
                 candidates.push_back({name, it->second, pkg->version});
             } else if (delta == VersionDelta::Older) {
@@ -304,6 +299,14 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
         }
     }
 
+    if (!manual_casks.empty()) {
+        std::cout << "Not upgrading " << manual_casks.size()
+                  << " cask(s) (upgrade a cask by naming it: den upgrade <name>):\n";
+        for (const auto& c : manual_casks)
+            std::cout << "  " << c.name << " " << c.installed << " (" << c.available
+                      << " available)\n";
+    }
+
     auto split = partition_pinned(candidates, pins);
     std::vector<UpgradeCandidate> upgrades = split.upgrade;
     if (!split.held.empty()) {
@@ -318,7 +321,7 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
     // (the unattended trust screen writes the trust ledger).
     if (dry_run) {
         if (upgrades.empty()) {
-            if (older.empty() && held_lower.empty())
+            if (older.empty() && held_lower.empty() && manual_casks.empty())
                 std::cout << "All packages are up to date.\n";
             else
                 std::cout << "Nothing to upgrade.\n";
@@ -370,7 +373,7 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
 
     if (upgrades.empty()) {
         fail_if_held();
-        if (older.empty() && held_lower.empty())
+        if (older.empty() && held_lower.empty() && manual_casks.empty())
             std::cout << "All packages are up to date.\n";
         else
             std::cout << "Nothing to upgrade.\n";

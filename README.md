@@ -34,7 +34,7 @@ everything — not just Python, but every package on your system.
   `daemon.upgrade_window`, deferring kegs that are in use (an in-use
   dependent that would move in the same batch defers the whole batch, so a
   dependency chain always moves together). Cask upgrades
-  stay a manual `den upgrade`.
+  stay manual: `den upgrade <cask>`.
 - **Source-first architecture** — embedded Ruby VM for evaluating
   Homebrew formula build recipes. Pre-built archives as an optimisation,
   not a requirement.
@@ -338,7 +338,7 @@ Run `den --help` for the full list. Key commands:
 | `den install <pkg> [--provider <p>]` | Install a package (with dependency resolution); `--provider` routes to a specific provider |
 | `den uninstall <pkg> [--provider <p>] [--ignore-dependencies]` | Remove from the active environment. Refuses (listing them) while installed packages in any environment need it at runtime; `--ignore-dependencies` overrides. The keg stays until `den cleanup`; if no environment still uses it, den hands its `opt/<name>` link to another installed version den manages, or removes it |
 | `den use <pkg> <version>` | Switch active version |
-| `den upgrade [pkg] [-n\|--dry-run]` | Upgrade outdated packages (`--dry-run` prints the plan and changes nothing). Never lowers a version: an index version below the installed one is reported as held or older, and only `den use <pkg> <version>` moves down |
+| `den upgrade [pkg] [-n\|--dry-run]` | Upgrade outdated packages (`--dry-run` prints the plan and changes nothing). Never lowers a version: an index version below the installed one is reported as held or older, and only `den use <pkg> <version>` moves down. With no `pkg` it upgrades what `den outdated` lists; a cask is upgraded only when named |
 | `den list` | List packages in the active environment |
 | `den search <text>` | Search packages by name or description |
 | `den info <pkg>` | Show package details |

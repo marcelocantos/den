@@ -468,27 +468,49 @@ void write_daemon_state(const fs::path& den_home, const DaemonState& state) {
 
 // ---- Maintenance cycle (🎯T13) ---------------------------------------------
 
-std::vector<PendingUpgrade> compute_pending(const std::map<std::string, std::string>& installed,
-                                            const PackageIndex& idx,
-                                            std::vector<PendingUpgrade>* index_older,
-                                            const InstalledSchemeFn& installed_scheme,
-                                            std::vector<DeferredUpgrade>* version_held) {
+UpgradeSelection select_upgrade(const std::string& name, const std::string& version,
+                                const Package* pkg, const InstalledSchemeFn& installed_scheme) {
+    UpgradeSelection sel;
+    if (!pkg || pkg->version.empty()) {
+        sel.skip = UpgradeSkip::NotInIndex;
+        return sel;
+    }
+    if (pkg->version != version) {
+        sel.installed_scheme = installed_scheme ? installed_scheme(name, version) : 0;
+        sel.delta = version_delta(version, sel.installed_scheme, pkg->version, pkg->version_scheme);
+    }
+    if (pkg->artifact_type == ArtifactType::App || !pkg->cask_artifacts.empty())
+        sel.skip = UpgradeSkip::Cask; // cask upgrades stay manual
+    else if (pkg->disabled)
+        sel.skip = UpgradeSkip::Disabled;
+    return sel;
+}
+
+std::vector<PendingUpgrade>
+compute_pending(const std::map<std::string, std::string>& installed, const PackageIndex& idx,
+                std::vector<PendingUpgrade>* index_older, const InstalledSchemeFn& installed_scheme,
+                std::vector<DeferredUpgrade>* version_held, std::vector<PendingUpgrade>* casks) {
     std::vector<PendingUpgrade> out;
     if (index_older)
         index_older->clear();
     if (version_held)
         version_held->clear();
+    if (casks)
+        casks->clear();
     for (const auto& [name, version] : installed) {
         const Package* pkg = idx.find(name);
-        if (!pkg || pkg->version.empty() || pkg->version == version)
+        const auto sel = select_upgrade(name, version, pkg, installed_scheme);
+        if (sel.skip == UpgradeSkip::NotInIndex || sel.skip == UpgradeSkip::Disabled ||
+            sel.delta == VersionDelta::Same)
             continue;
-        if (pkg->artifact_type == ArtifactType::App || !pkg->cask_artifacts.empty())
-            continue; // cask upgrades stay manual
-        if (pkg->disabled)
+        const PendingUpgrade pu{name, version, pkg->version, sel.installed_scheme,
+                                pkg->version_scheme};
+        if (sel.skip == UpgradeSkip::Cask) {
+            if (casks && sel.delta == VersionDelta::Newer)
+                casks->push_back(pu);
             continue;
-        const int have_scheme = installed_scheme ? installed_scheme(name, version) : 0;
-        const PendingUpgrade pu{name, version, pkg->version, have_scheme, pkg->version_scheme};
-        switch (version_delta(version, have_scheme, pkg->version, pkg->version_scheme)) {
+        }
+        switch (sel.delta) {
         case VersionDelta::Newer:
             out.push_back(pu);
             break;
@@ -514,18 +536,19 @@ std::vector<PendingUpgrade> compute_pending(const std::map<std::string, std::str
     return out; // std::map iteration → already sorted by name
 }
 
-OutdatedPlan outdated_plan(const Config& config, const PackageIndex& idx) {
+OutdatedPlan outdated_plan(const Config& config, const PackageIndex& idx,
+                           std::string_view tracked) {
     OutdatedPlan plan;
     const auto per = resolve_per_provider(config.den_home, active_env_path(config.den_home));
     for (const auto& [provider, pkgs] : per) {
-        if (provider == "homebrew") {
+        if (provider == tracked) {
             plan.homebrew = pkgs.size();
             plan.pending = compute_pending(
                 pkgs, idx, &plan.index_older,
                 [&config](const std::string& name, const std::string& version) {
                     return installed_version_scheme(config.store / keg_name(name) / version);
                 },
-                &plan.held);
+                &plan.held, &plan.casks);
             continue;
         }
         for (const auto& [name, version] : pkgs)

@@ -4,6 +4,7 @@
 #pragma once
 
 #include "../core/config.h"
+#include "../core/version.h"
 #include "../index/package.h"
 
 #include <cstddef>
@@ -12,6 +13,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace den {
@@ -102,6 +104,31 @@ bool is_daemon_running(const Config& config);
 
 // ---- Maintenance cycle (🎯T13) ---------------------------------------------
 
+/// Why the upgrade selection leaves an installed package out regardless of
+/// its version delta.
+enum class UpgradeSkip {
+    None,       // selectable: the delta decides
+    NotInIndex, // no index entry, or one with no version
+    Cask,       // a cask/app: upgrading swaps a live .app bundle, so only by name
+    Disabled,   // homebrew-core disabled the formula
+};
+
+/// How one installed package compares with its index entry. This is the one
+/// selection rule behind compute_pending, and so behind `den upgrade`, `den
+/// outdated`, `den doctor` and the daemon's maintenance cycle.
+struct UpgradeSelection {
+    UpgradeSkip skip = UpgradeSkip::None;
+    VersionDelta delta = VersionDelta::Same; // meaningless when NotInIndex
+    int installed_scheme = 0;                // as read for the delta (0 when not read)
+};
+
+/// Classify installed `name` `version` against `pkg` (idx.find(name), may
+/// be null). An index version equal to the installed one is Same without
+/// asking `installed_scheme`; otherwise the delta is version_delta with the
+/// installed keg's scheme from `installed_scheme` (0 when empty).
+UpgradeSelection select_upgrade(const std::string& name, const std::string& version,
+                                const Package* pkg, const InstalledSchemeFn& installed_scheme = {});
+
 /// Outdated detection: for each den-managed package (`installed`: name →
 /// version, from the active env's resolved homebrew bucket) whose index
 /// (version_scheme, version, revision) tuple is newer, produce a
@@ -112,12 +139,15 @@ bool is_daemon_running(const Config& config);
 /// missing from the index are skipped: cask upgrades swap live .app bundles and stay a manual `den
 /// upgrade`. Sorted by name. `installed_scheme` gives each installed keg's
 /// version_scheme (from its receipt); when empty every keg counts as 0. The
-/// index side's scheme is Package::version_scheme.
+/// index side's scheme is Package::version_scheme. The selection is
+/// select_upgrade's. A skipped cask whose index is newer goes to `casks`
+/// when given, so a caller can say that it was left for an explicit upgrade.
 std::vector<PendingUpgrade> compute_pending(const std::map<std::string, std::string>& installed,
                                             const PackageIndex& idx,
                                             std::vector<PendingUpgrade>* index_older = nullptr,
                                             const InstalledSchemeFn& installed_scheme = {},
-                                            std::vector<DeferredUpgrade>* version_held = nullptr);
+                                            std::vector<DeferredUpgrade>* version_held = nullptr,
+                                            std::vector<PendingUpgrade>* casks = nullptr);
 
 /// The one-line report for a package whose index is older than what is
 /// installed, e.g. "openssl@3 3.6.3: index older than installed (index has
@@ -139,8 +169,9 @@ struct UntrackedPackage {
     std::string provider;
 };
 
-/// What `den outdated` reports: the active environment's manifest, resolved
-/// per provider (resolve_per_provider), with its homebrew bucket run through
+/// What `den outdated` reports and what a bare `den upgrade` applies: the
+/// active environment's manifest, resolved per provider
+/// (resolve_per_provider), with its homebrew bucket run through
 /// compute_pending, the same comparison and hold logic the daemon's
 /// maintenance cycle and `den doctor`'s held-package check use. Kegs in the
 /// store that no manifest records are not part of it (they are for `den
@@ -150,12 +181,17 @@ struct OutdatedPlan {
     std::vector<PendingUpgrade> pending;     // index newer: an upgrade is available
     std::vector<PendingUpgrade> index_older; // index older: never downgraded
     std::vector<DeferredUpgrade> held;       // VersionDelta::Held, with its reason
+    std::vector<PendingUpgrade> casks;       // index newer, but a cask: by name only
     std::vector<UntrackedPackage> untracked; // other providers, sorted by name
 };
 
 /// Build the OutdatedPlan for `config`'s active environment against `idx`.
 /// Installed version_schemes come from each keg's receipt, as in the daemon.
-OutdatedPlan outdated_plan(const Config& config, const PackageIndex& idx);
+/// `provider` names the bucket compared against `idx` (`homebrew`, counted
+/// in OutdatedPlan::homebrew); every other bucket is untracked.
+/// upgrade_packages passes its provider's name.
+OutdatedPlan outdated_plan(const Config& config, const PackageIndex& idx,
+                           std::string_view provider = "homebrew");
 
 struct MaintenanceSettings {
     bool auto_download = true;

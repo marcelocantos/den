@@ -787,6 +787,48 @@ TEST_SUITE("cli::integration") {
     }
 
     // -----------------------------------------------------------------------
+    // 16f. A bare `den upgrade` selects through outdated_plan, as `den
+    //      outdated` and the daemon do, so a cask with a newer index entry is
+    //      no longer planned (its upgrade swaps a live .app bundle and stays
+    //      an explicit `den upgrade <cask>`). It used to be listed beside jq.
+    // -----------------------------------------------------------------------
+    TEST_CASE("bare upgrade does not pick up a cask, matching outdated") {
+        TempDir home;
+        const std::string h = home.path.string();
+        const std::string cellar = (home.path / "pfx" / "Cellar").string();
+        fs::create_directories(home.path / "manifests" / "ROOT");
+        std::ofstream(home.path / "manifests" / "ROOT" / "manifest.json")
+            << R"({"packages":{"homebrew":{"jq":"1.6","firefox":"120.0"}}})";
+        fs::create_directories(home.path / "cache");
+        std::ofstream(home.path / "cache" / "index.json") << R"({
+  "packages": [{
+    "name": "jq", "version": "1.7.1", "description": "json",
+    "homepage": "", "license": "", "artifact_type": "binary",
+    "deprecated": false, "disabled": false,
+    "dependencies": [], "build_dependencies": [], "archives": {}
+  }, {
+    "name": "firefox", "version": "121.0", "description": "browser",
+    "homepage": "", "license": "", "artifact_type": "app",
+    "deprecated": false, "disabled": false,
+    "dependencies": [], "build_dependencies": [], "archives": {}
+  }]
+})";
+        auto out = run_den_with_cellar("outdated", h, cellar);
+        CAPTURE(out.output);
+        CHECK(out.exit_code == 0);
+        CHECK(out.output.find("1.6 -> 1.7.1") != std::string::npos);
+        CHECK(out.output.find("121.0") == std::string::npos);
+
+        auto dry = run_den_with_cellar("upgrade --dry-run", h, cellar);
+        CAPTURE(dry.output);
+        CHECK(dry.exit_code == 0);
+        CHECK(dry.output.find("Would upgrade 1 package(s):") != std::string::npos);
+        CHECK(dry.output.find("jq 1.6 -> 1.7.1") != std::string::npos);
+        CHECK(dry.output.find("firefox 120.0 -> 121.0") == std::string::npos);
+        CHECK(dry.output.find("firefox 120.0 (121.0 available)") != std::string::npos);
+    }
+
+    // -----------------------------------------------------------------------
     // 17. cleanup — shared Cellar. A Homebrew keg must survive; a den-owned
     //     version nothing references is removed. --dry-run deletes nothing.
     // -----------------------------------------------------------------------
