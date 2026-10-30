@@ -525,18 +525,7 @@ void check_held_packages(const Config& config, std::vector<Finding>& findings) {
 } // namespace
 
 std::vector<DeferredUpgrade> held_packages(const Config& config, const PackageIndex& idx) {
-    const auto per = resolve_per_provider(config.den_home, active_env_path(config.den_home));
-    const auto it = per.find("homebrew");
-    if (it == per.end())
-        return {};
-    std::vector<DeferredUpgrade> held;
-    compute_pending(
-        it->second, idx, nullptr,
-        [&config](const std::string& name, const std::string& version) {
-            return installed_version_scheme(config.store / keg_name(name) / version);
-        },
-        &held);
-    return held;
+    return outdated_plan(config, idx).held;
 }
 
 std::string format_held_packages(const std::vector<DeferredUpgrade>& held) {

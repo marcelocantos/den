@@ -1573,46 +1573,50 @@ void Cli::M::setup() {
         // Without the index nothing can be compared; fail rather than exit 0
         // as though everything were up to date (same as `den upgrade`).
         require_index(idx);
-        auto installed = list_installed(cfg.store);
-        if (installed.empty()) {
+        // The installed set is the active environment's manifest, per
+        // provider, not the keg store: the same view `den upgrade`, the
+        // daemon and `den doctor` use (outdated_plan -> compute_pending), so
+        // the lists cannot drift. Kegs no manifest records (a stray or older
+        // keg) are left to `den doctor` / `den cleanup`.
+        const auto plan = outdated_plan(cfg, idx);
+        if (plan.homebrew == 0 && plan.untracked.empty()) {
             std::cout << "No packages installed.\n";
             return;
         }
         const auto pins = read_pins(cfg.den_home);
+        struct Row {
+            std::string name, installed, available, note;
+            bool upgrade;
+        };
+        std::vector<Row> rows;
+        for (const auto& p : plan.pending) {
+            std::string note;
+            if (auto pin = pins.find(p.name); pin != pins.end())
+                note = "  [pinned at " + pin->second + "]";
+            rows.push_back({p.name, p.installed, p.available, note, true});
+        }
+        // Never offered as upgrades; listed so they are not a surprise.
+        for (const auto& p : plan.index_older)
+            rows.push_back({p.name, p.installed, p.available,
+                            "  [index older than installed; not upgrading]", false});
+        for (const auto& h : plan.held)
+            rows.push_back({h.name, h.installed, h.available,
+                            "  [" + h.reason + "; to downgrade: den use " + h.name + " " +
+                                h.available + "]",
+                            false});
+        std::sort(rows.begin(), rows.end(),
+                  [](const Row& a, const Row& b) { return a.name < b.name; });
         size_t count = 0;
         size_t max_name = 0;
-        // Pre-scan for column width.
-        for (const auto& pkg : installed) {
-            max_name = std::max(max_name, pkg.name.size());
-        }
-        for (const auto& pkg : installed) {
-            const auto* index_pkg = idx.find(pkg.name);
-            if (index_pkg && index_pkg->version != pkg.version) {
-                const auto delta = version_delta(pkg.version, installed_version_scheme(pkg.path),
-                                                 index_pkg->version, index_pkg->version_scheme);
-                if (delta == VersionDelta::Same)
-                    continue;
-                std::cout << std::left << std::setw(static_cast<int>(max_name + 2)) << pkg.name
-                          << pkg.version << " -> " << index_pkg->version;
-                if (delta == VersionDelta::Older) {
-                    // Never offered as an upgrade; listed so it is not a surprise.
-                    std::cout << "  [index older than installed; not upgrading]\n";
-                    continue;
-                }
-                if (delta == VersionDelta::Held) {
-                    std::cout << "  ["
-                              << version_hold_reason(pkg.version, index_pkg->version,
-                                                     index_pkg->version_scheme)
-                              << "; to downgrade: den use " << pkg.name << " " << index_pkg->version
-                              << "]\n";
-                    continue;
-                }
-                if (pins.count(pkg.name)) {
-                    std::cout << "  [pinned at " << pins.at(pkg.name) << "]";
-                }
-                std::cout << "\n";
+        for (const auto& r : rows)
+            max_name = std::max(max_name, r.name.size());
+        for (const auto& u : plan.untracked)
+            max_name = std::max(max_name, u.name.size());
+        for (const auto& r : rows) {
+            std::cout << std::left << std::setw(static_cast<int>(max_name + 2)) << r.name
+                      << r.installed << " -> " << r.available << r.note << "\n";
+            if (r.upgrade)
                 ++count;
-            }
         }
         // Check for den self-update.
         auto self = check_for_update(cfg);
@@ -1635,7 +1639,18 @@ void Cli::M::setup() {
                           << (d.reason.empty() ? "in use" : d.reason) << "]\n";
             }
         } else if (count == 0) {
-            std::cout << "All packages are up to date.\n";
+            std::cout << (plan.untracked.empty() ? "All packages are up to date.\n"
+                                                 : "All tracked packages are up to date.\n");
+        }
+
+        // Other providers' packages (pip, cargo, go, npm) are not compared
+        // against the Homebrew index; `den upgrade <name>` warns and skips
+        // them the same way.
+        if (!plan.untracked.empty()) {
+            std::cout << "Not tracked for upgrades (managed by another provider):\n";
+            for (const auto& u : plan.untracked)
+                std::cout << "  " << std::left << std::setw(static_cast<int>(max_name + 2))
+                          << u.name << u.version << "  (" << u.provider << ")\n";
         }
     });
 

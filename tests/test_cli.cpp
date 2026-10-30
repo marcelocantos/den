@@ -20,6 +20,8 @@
 #include <string>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <utility>
+#include <vector>
 
 namespace den {
 namespace cli_test {
@@ -690,6 +692,100 @@ TEST_SUITE("cli::integration") {
         CHECK(named.exit_code == 0);
         CHECK(named.output.find("Not downgrading") == std::string::npos);
         CHECK(named.output.find("managed by the pip provider") != std::string::npos);
+    }
+
+    // -----------------------------------------------------------------------
+    // 16e. `den outdated` reads the active environment's manifest buckets,
+    //      not the keg store (#171). A stray homebrew keg cowsay/3.04_1 used
+    //      to print "cowsay 3.04_1 -> 3.8.4" though the env's cowsay is
+    //      pip's 6.1, and an older jq keg was listed beside the current one.
+    //      Now jq is listed once, cowsay only as pip-managed and not
+    //      tracked, and the list matches `den upgrade --dry-run`.
+    // -----------------------------------------------------------------------
+    TEST_CASE("outdated follows the manifest: stray keg ignored, pip package not tracked") {
+        TempDir home;
+        const std::string h = home.path.string();
+        const fs::path cellar = home.path / "pfx" / "Cellar";
+        for (const auto& [name, version] :
+             std::vector<std::pair<std::string, std::string>>{
+                 {"jq", "1.5"}, {"jq", "1.6"}, {"cowsay", "3.04_1"}}) {
+            const auto k = cellar / name / version;
+            fs::create_directories(k / "bin");
+            std::ofstream(k / "bin" / name) << "#!/bin/sh\n";
+            std::ofstream(k / "INSTALL_RECEIPT.json")
+                << R"({"source":{"versions":{"stable":")" << version
+                << R"(","version_scheme":0}}})";
+        }
+        fs::create_directories(home.path / "manifests" / "ROOT");
+        std::ofstream(home.path / "manifests" / "ROOT" / "manifest.json")
+            << R"({"packages":{"homebrew":{"jq":"1.6"},"pip":{"cowsay":"6.1"}}})";
+        fs::create_directories(home.path / "cache");
+        std::ofstream(home.path / "cache" / "index.json") << R"({
+  "packages": [{
+    "name": "jq", "version": "1.7.1", "description": "json",
+    "homepage": "", "license": "", "artifact_type": "binary",
+    "deprecated": false, "disabled": false,
+    "dependencies": [], "build_dependencies": [], "archives": {}
+  }, {
+    "name": "cowsay", "version": "3.8.4", "description": "formula",
+    "homepage": "", "license": "", "artifact_type": "binary",
+    "deprecated": false, "disabled": false,
+    "dependencies": [], "build_dependencies": [], "archives": {}
+  }]
+})";
+        auto count = [](const std::string& text, const std::string& needle) {
+            size_t n = 0;
+            for (auto pos = text.find(needle); pos != std::string::npos;
+                 pos = text.find(needle, pos + 1))
+                ++n;
+            return n;
+        };
+
+        auto out = run_den_with_cellar("outdated", h, cellar.string());
+        CAPTURE(out.output);
+        CHECK(out.exit_code == 0);
+        CHECK(out.output.find("1.6 -> 1.7.1") != std::string::npos);
+        CHECK(count(out.output, "1.7.1") == 1);           // jq listed once
+        CHECK(out.output.find("1.5 ->") == std::string::npos); // older keg not listed
+        CHECK(out.output.find("3.04_1") == std::string::npos); // stray keg not listed
+        CHECK(out.output.find("3.8.4") == std::string::npos);  // not compared to homebrew
+        CHECK(out.output.find("Not tracked for upgrades") != std::string::npos);
+        CHECK(out.output.find("6.1  (pip)") != std::string::npos);
+
+        // Same plan as `den upgrade --dry-run` for the same state.
+        auto dry = run_den_with_cellar("upgrade --dry-run", h, cellar.string());
+        CAPTURE(dry.output);
+        CHECK(dry.exit_code == 0);
+        CHECK(dry.output.find("Would upgrade 1 package(s):") != std::string::npos);
+        CHECK(dry.output.find("jq 1.6 -> 1.7.1") != std::string::npos);
+        CHECK(dry.output.find("cowsay") == std::string::npos);
+    }
+
+    TEST_CASE("outdated with only a pip package and a stray keg reports nothing to upgrade") {
+        TempDir home;
+        const std::string h = home.path.string();
+        const fs::path cellar = home.path / "pfx" / "Cellar";
+        const auto stray = cellar / "cowsay" / "3.04_1";
+        fs::create_directories(stray / "bin");
+        std::ofstream(stray / "INSTALL_RECEIPT.json") << "{}\n";
+        fs::create_directories(home.path / "manifests" / "ROOT");
+        std::ofstream(home.path / "manifests" / "ROOT" / "manifest.json")
+            << R"({"packages":{"pip":{"cowsay":"6.1"}}})";
+        fs::create_directories(home.path / "cache");
+        std::ofstream(home.path / "cache" / "index.json") << R"({
+  "packages": [{
+    "name": "cowsay", "version": "3.8.4", "description": "formula",
+    "homepage": "", "license": "", "artifact_type": "binary",
+    "deprecated": false, "disabled": false,
+    "dependencies": [], "build_dependencies": [], "archives": {}
+  }]
+})";
+        auto out = run_den_with_cellar("outdated", h, cellar.string());
+        CAPTURE(out.output);
+        CHECK(out.exit_code == 0);
+        CHECK(out.output.find(" -> ") == std::string::npos);
+        CHECK(out.output.find("All tracked packages are up to date.") != std::string::npos);
+        CHECK(out.output.find("6.1  (pip)") != std::string::npos);
     }
 
     // -----------------------------------------------------------------------

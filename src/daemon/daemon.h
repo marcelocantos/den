@@ -129,6 +129,34 @@ std::string index_older_message(const PendingUpgrade& p);
 /// downgrading. To downgrade explicitly: den use openssl@3 3.5.9".
 std::string version_held_message(const DeferredUpgrade& h);
 
+/// A package in the active environment that another provider (pip, cargo,
+/// go, npm) manages. Its versions come from that provider's own source, not
+/// the Homebrew index, so nothing here compares it: `den outdated` lists it
+/// as not tracked and `den upgrade <name>` warns and skips it.
+struct UntrackedPackage {
+    std::string name;
+    std::string version;
+    std::string provider;
+};
+
+/// What `den outdated` reports: the active environment's manifest, resolved
+/// per provider (resolve_per_provider), with its homebrew bucket run through
+/// compute_pending, the same comparison and hold logic the daemon's
+/// maintenance cycle and `den doctor`'s held-package check use. Kegs in the
+/// store that no manifest records are not part of it (they are for `den
+/// doctor` / `den cleanup`), nor are other kegs of a recorded package.
+struct OutdatedPlan {
+    std::size_t homebrew = 0;                 // packages in the homebrew bucket
+    std::vector<PendingUpgrade> pending;      // index newer: an upgrade is available
+    std::vector<PendingUpgrade> index_older;  // index older: never downgraded
+    std::vector<DeferredUpgrade> held;        // VersionDelta::Held, with its reason
+    std::vector<UntrackedPackage> untracked;  // other providers, sorted by name
+};
+
+/// Build the OutdatedPlan for `config`'s active environment against `idx`.
+/// Installed version_schemes come from each keg's receipt, as in the daemon.
+OutdatedPlan outdated_plan(const Config& config, const PackageIndex& idx);
+
 struct MaintenanceSettings {
     bool auto_download = true;
     bool auto_upgrade = false;
