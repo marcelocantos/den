@@ -154,7 +154,7 @@ std::string format_held_packages(const std::vector<DeferredUpgrade>& held);
 
 /// The doctor warning text for upgrades the daemon did not apply because
 /// they would pour a package disabled upstream (DaemonState::disabled_blocked,
-/// one disabled_blocked_message per upgrade, and what to do about it), or an
+/// one disabled_blocked_report per upgrade, and what to do about it), or an
 /// empty string when none.
 std::string format_disabled_blocked(const std::vector<DisabledBlocked>& blocked);
 

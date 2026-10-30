@@ -1604,7 +1604,8 @@ void Cli::M::setup() {
                 note = "  [pinned at " + pin->second + "]";
             for (const auto& b : dstate.disabled_blocked)
                 if (b.name == p.name && b.available == p.available)
-                    note += "  [daemon: would pour " + b.disabled + ", disabled upstream]";
+                    note += "  [daemon: would pour " + disabled_blocker_names(b) +
+                            ", disabled upstream]";
             rows.push_back({p.name, p.installed, p.available, note, true});
         }
         // Never offered as upgrades; listed so they are not a surprise.
