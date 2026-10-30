@@ -492,7 +492,9 @@ fixture_disabled_() {
     return 1
 }
 s_app_cask() {
-    fixture_disabled_ "$VR_APP_CASK" VR_APP_CASK
+    # Explicit return: step runs this subshell on the left of ||, where bash
+    # ignores set -e.
+    fixture_disabled_ "$VR_APP_CASK" VR_APP_CASK || return 1
     den install "$VR_APP_CASK"
     [ -d "$VR_APPDIR/$VR_APP_BUNDLE" ] || { echo "missing $VR_APPDIR/$VR_APP_BUNDLE"; return 1; }
     den uninstall "$VR_APP_CASK"
