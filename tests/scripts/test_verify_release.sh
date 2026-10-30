@@ -16,6 +16,8 @@
 #     the newest earlier tag, RCs included, that can self-update --version.
 #   * release downloads retry transient curl errors, never a 404 or a
 #     checksum mismatch.
+#   * the app-cask step defaults to hex-fiend and fails by name, before any
+#     install, when the index marks its fixture cask disabled (macOS only).
 #   * VR_ONLY / VR_SKIP select steps; install and isolation always run.
 #
 # Run:
@@ -72,6 +74,13 @@ case "\$1" in
         here=\$(cd "\$(dirname "\$0")" && pwd)
         cp "\$FAKE_REL/\$3/x/den" "\$here/den.new" && mv "\$here/den.new" "\$here/den"
         mkdir -p "\$here/../share/den" && cp "\$FAKE_REL/\$3/x/share/den/known_hashes.json" "\$here/../share/den/" ;;
+    update) # FAKE_INDEX stands in for the index den update writes.
+        [ -n "\${FAKE_INDEX:-}" ] || exit 0
+        mkdir -p "\$DEN_HOME/cache" && cp "\$FAKE_INDEX" "\$DEN_HOME/cache/index.json" ;;
+    install|uninstall) # an app cask's bundle is FAKE_APP_BUNDLE
+        echo "den \$1 \$2" >>"\$FAKE_LOG"
+        b="\$DEN_APPDIR/\${FAKE_APP_BUNDLE:-none.app}"
+        if [ "\$1" = install ]; then mkdir -p "\$b"; else rm -rf "\$b"; fi ;;
     *) exit 0 ;;
 esac
 DEN
@@ -282,6 +291,39 @@ sed "s/^[0-9a-f]\{64\}/$(printf '%064d' 0)/" "$_tmp/ck.bak" >"$_tmp/rel/v1.2.0/d
 run "checksum mismatch not retried" 1 VR_ONLY=checksum VR_FETCH_DELAY=0 -- v1.2.0 \
     && { [ "$(grep -c "curl .*$_ck_url\$" "$_tmp/log")" -eq 1 ] && ok "mismatch: one fetch" || bad "mismatch: one fetch"; }
 cp "$_tmp/ck.bak" "$_tmp/rel/v1.2.0/den-1.2.0-checksums.txt"
+
+# --- app-cask fixture ----------------------------------------------------
+# The default app cask is hex-fiend; a fixture cask the index marks disabled
+# fails the step at once, by name, before den is asked to install it.
+cat >"$_tmp/index.json" <<'JSON'
+{"packages": [
+  {"name": "hex-fiend", "artifact_type": "app", "disabled": false},
+  {"name": "macdown", "artifact_type": "app", "disabled": true,
+   "disable_reason": "fails_gatekeeper_check", "disable_date": "2026-09-01"}
+]}
+JSON
+if [ "$OS" = darwin ]; then
+    if run "app-cask: default hex-fiend" 0 VR_ONLY="update app-cask" FAKE_INDEX="$_tmp/index.json" \
+        "FAKE_APP_BUNDLE=Hex Fiend.app" -VR_APP_CASK -VR_APP_BUNDLE -- v1.2.0; then
+        has "app-cask: default passes" 'PASS  app-cask'
+        logged "app-cask: default installs hex-fiend" '^den install hex-fiend$'
+        logged "app-cask: default uninstalls hex-fiend" '^den uninstall hex-fiend$'
+    fi
+    if run "app-cask: disabled fixture fails" 1 VR_ONLY="update app-cask" FAKE_INDEX="$_tmp/index.json" \
+        VR_APP_CASK=macdown VR_APP_BUNDLE=MacDown.app FAKE_APP_BUNDLE=MacDown.app -- v1.2.0; then
+        has "app-cask: disabled fails the step" 'FAIL  app-cask'
+        has "app-cask: disabled names the cask and reason" \
+            "fixture cask 'macdown' is disabled upstream: fails_gatekeeper_check \\(disabled on 2026-09-01\\)"
+        has "app-cask: disabled says what to set" 'set VR_APP_CASK to an enabled app cask'
+        unlogged "app-cask: disabled cask never installed" '^den install macdown'
+    fi
+    # No index (update not run): nothing to check, den decides.
+    run "app-cask: no index" 0 VR_ONLY=app-cask "FAKE_APP_BUNDLE=Hex Fiend.app" \
+        -VR_APP_CASK -VR_APP_BUNDLE -- v1.2.0 \
+        && has "app-cask: no index passes" 'PASS  app-cask'
+else
+    echo "SKIP: app-cask fixture tests (macOS only)"
+fi
 
 # --- step selection ------------------------------------------------------
 run "VR_SKIP" 0 VR_ONLY="version empty-store" VR_SKIP="empty-store" -- v1.2.0 \
