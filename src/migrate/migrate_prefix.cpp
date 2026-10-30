@@ -158,20 +158,6 @@ fs::path daemon_plist_path(const fs::path& home) {
     return home / "Library" / "LaunchAgents" / kDaemonPlist;
 }
 
-std::string plist_path_value(const std::string& plist) {
-    auto key = plist.find("<key>PATH</key>");
-    if (key == std::string::npos) {
-        return {};
-    }
-    auto open = plist.find("<string>", key);
-    auto close = open == std::string::npos ? open : plist.find("</string>", open);
-    if (close == std::string::npos) {
-        return {};
-    }
-    open += std::string_view("<string>").size();
-    return plist.substr(open, close - open);
-}
-
 std::vector<std::string> spec_names(const Config& cfg) {
     std::vector<std::string> names;
     std::error_code ec;
@@ -771,26 +757,9 @@ ServiceSpec rebase_service_spec(const ServiceSpec& spec, const fs::path& from, c
     return out;
 }
 
-std::optional<std::string> plist_with_prefix_path(const std::string& plist, const fs::path& to) {
-    auto key = plist.find("<key>PATH</key>");
-    if (key == std::string::npos) {
-        return std::nullopt;
-    }
-    auto open = plist.find("<string>", key);
-    if (open == std::string::npos) {
-        return std::nullopt;
-    }
-    open += std::string_view("<string>").size();
-    auto close = plist.find("</string>", open);
-    if (close == std::string::npos) {
-        return std::nullopt;
-    }
-    const std::string value = plist.substr(open, close - open);
-    const std::string bin = (to / "bin").string();
-    if (value == bin || value.starts_with(bin + ":")) {
-        return plist;
-    }
-    return plist.substr(0, open) + bin + (value.empty() ? "" : ":" + value) + plist.substr(close);
+std::optional<std::string> plist_with_prefix_path(const std::string& plist,
+                                                  const fs::path& den_home, const fs::path& to) {
+    return plist_with_path_value(plist, launchd_path(den_home, to));
 }
 
 uint64_t bottle_unpacked_size(const fs::path& archive_path) {
@@ -1151,7 +1120,7 @@ MigratePrefixPlan plan_migrate_prefix(const Config& cfg, const PackageIndex& idx
         plan.daemon_plist = plist;
         auto text = read_text(plist);
         plan.daemon_path_before = plist_path_value(text);
-        if (auto after = plist_with_prefix_path(text, to)) {
+        if (auto after = plist_with_prefix_path(text, cfg.den_home, to)) {
             plan.daemon_path_after = plist_path_value(*after);
         }
     }
@@ -1326,7 +1295,7 @@ void finish_after_switch(const Config& cfg_to, const PackageIndex& idx, const fs
     std::error_code ec;
     if (!j.plist_rewritten && fs::is_regular_file(plist, ec)) {
         const auto text = read_text(plist);
-        if (auto updated = plist_with_prefix_path(text, cfg_to.prefix); updated) {
+        if (auto updated = plist_with_prefix_path(text, den_home, cfg_to.prefix); updated) {
             const auto backup = work_dir(den_home) / kDaemonPlist;
             write_text_atomic(backup, text);
             write_text_atomic(plist, *updated);

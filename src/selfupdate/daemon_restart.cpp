@@ -9,6 +9,7 @@
 
 #include <cstdlib>
 #include <exception>
+#include <fstream>
 #include <sstream>
 #include <system_error>
 
@@ -31,7 +32,43 @@ std::string sh_quote(const std::string& s) {
     return q;
 }
 
+PlistPathRefresh refresh_daemon_plist_path(const Config& cfg, const fs::path& plist,
+                                           std::ostream& out) {
+    std::string text;
+    {
+        std::ifstream f(plist, std::ios::binary);
+        if (!f) {
+            return PlistPathRefresh::LeftAlone;
+        }
+        std::stringstream ss;
+        ss << f.rdbuf();
+        text = ss.str();
+    }
+    const auto home = plist_env_value(text, "DEN_HOME");
+    if (!home || fs::path(*home).lexically_normal() != cfg.den_home.lexically_normal()) {
+        return PlistPathRefresh::LeftAlone; // another den home's daemon
+    }
+    fs::path prefix = cfg.prefix;
+    if (auto dp = plist_env_value(text, "DEN_PREFIX"); dp && !dp->empty()) {
+        prefix = *dp;
+    } else if (cfg.prefix_source == PrefixSource::EnvDenPrefix) {
+        // The daemon was installed without DEN_PREFIX; this process's
+        // DEN_PREFIX says nothing about which prefix it maintains.
+        return PlistPathRefresh::LeftAlone;
+    }
+    return refresh_launchd_plist_path(plist, launchd_path(cfg.den_home, prefix),
+                                      cfg.den_home / "dev.den.daemon.plist.bak", out);
+}
+
 DaemonRestartOutcome restart_daemon_after_update(const DaemonRestartEnv& env, std::ostream& out) {
+    if (env.launchd_plist && env.refresh_plist) {
+        try {
+            env.refresh_plist(out);
+        } catch (const std::exception& e) {
+            out << "Could not refresh the den daemon plist's PATH (" << e.what()
+                << "); run `den daemon install` to regenerate it.\n";
+        }
+    }
     if (!env.daemon_running) {
         return DaemonRestartOutcome::NotRunning;
     }
@@ -92,6 +129,9 @@ DaemonRestartOutcome restart_daemon_after_update(const Config& cfg, std::ostream
     env.helper_log = cfg.den_home / "daemon-restart.log";
     if (env.launchd_plist) {
         const auto plist = *env.launchd_plist;
+        env.refresh_plist = [&cfg, plist](std::ostream& o) {
+            refresh_daemon_plist_path(cfg, plist, o);
+        };
         env.restart_launchd = [plist](std::ostream& o) {
             auto ops = real_launchd_ops(kLabel, plist);
             auto before = ops.launchctl({"print", ops.domain + "/" + ops.label});

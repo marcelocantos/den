@@ -189,9 +189,10 @@ std::string rebase_prefix_paths(const std::string& s, const fs::path& from, cons
 /// The spec with every path under `from` rebased onto `to`.
 ServiceSpec rebase_service_spec(const ServiceSpec& spec, const fs::path& from, const fs::path& to);
 
-/// The plist text with `<to>/bin` put at the front of its PATH value, or
-/// nullopt when it has no PATH. Idempotent.
-std::optional<std::string> plist_with_prefix_path(const std::string& plist, const fs::path& to);
+/// The plist text with its PATH value set to the daemon PATH for prefix `to`
+/// (launchd_path(den_home, to)), or nullopt when it has no PATH. Idempotent.
+std::optional<std::string> plist_with_prefix_path(const std::string& plist,
+                                                  const fs::path& den_home, const fs::path& to);
 
 /// Uncompressed size of the regular files in a bottle archive.
 uint64_t bottle_unpacked_size(const fs::path& archive);

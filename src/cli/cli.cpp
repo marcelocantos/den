@@ -1524,11 +1524,9 @@ void Cli::M::setup() {
         auto plist = launchd_plist(exe, cfg.den_home, cfg.prefix);
         auto home = fs::path(std::getenv("HOME") ? std::getenv("HOME") : "/tmp");
         auto plist_path = home / "Library" / "LaunchAgents" / "dev.den.daemon.plist";
-        fs::create_directories(plist_path.parent_path());
-        {
-            std::ofstream f(plist_path);
-            f << plist;
-        }
+        // Regenerating is the explicit fix for a stale plist (den doctor
+        // points here), so a differing plist is replaced, after a backup.
+        write_daemon_plist(plist_path, plist, cfg.den_home / "dev.den.daemon.plist.bak", std::cout);
         // bootout gui/<uid>/<label> + bootstrap gui/<uid> <plist>, launchctl
         // run with a scrubbed environment, then confirm a running pid (see
         // selfupdate/launchd_restart.h).
