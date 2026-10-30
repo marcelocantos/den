@@ -116,7 +116,13 @@ void uninstall_packages(const Config& config, PackageProvider& provider,
 /// version in the same scheme is reported as "index older than installed",
 /// and a lower version with a higher version_scheme as held (with its
 /// reason); `den use <name> <version>` is the only way down. With `dry_run`
-/// the same plan is printed and nothing is installed, linked or recorded.
+/// the run takes the same path and stops short of every side effect: the
+/// trust screen, the batch plan (revision-bumped dependents joined, refused,
+/// pinned or held back, via apply_version_changes' plan_only) and the
+/// reports are the real run's, the headings say "Would", and it throws the
+/// same UserError (so exits with the same status) after "Dry run: nothing
+/// changed."; nothing is installed, linked, recorded or written to the trust
+/// ledger. Rollbacks need a real pour and cannot be predicted.
 void upgrade_packages(const Config& config, PackageProvider& provider, const PackageIndex& idx,
                       const std::vector<std::string>& names, bool dry_run = false,
                       bool force = false);

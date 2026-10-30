@@ -42,11 +42,14 @@ std::vector<std::string> packages_to_install(const Config& config, const Package
 /// (hash mismatch, unreadable snapshot, no hash at all); every pending
 /// upgrade that would install it is held back with it. Every hold goes into
 /// the trust ledger with its reason (hold_reason(), or "depends on <pkg>"
-/// for a dependent), so `den trust review` lists all of them. Returns
-/// pending name → reason, as screen_pending_upgrades().
+/// for a dependent), so `den trust review` lists all of them, unless
+/// `record_holds` is false (`den --unattended upgrade --dry-run`, which
+/// changes nothing). Returns pending name → reason, as
+/// screen_pending_upgrades().
 std::map<std::string, std::string>
 screen_unattended_upgrades(const Config& config, const PackageIndex& idx,
-                           const std::vector<PendingUpgrade>& pending, const TrustPolicy& policy);
+                           const std::vector<PendingUpgrade>& pending, const TrustPolicy& policy,
+                           bool record_holds = true);
 
 /// MaintenanceHooks::trust_screen for the live daemon: screen_unattended_upgrades()
 /// under current_trust_policy(config). `config` and `idx` must outlive it.

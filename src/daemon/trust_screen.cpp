@@ -35,11 +35,13 @@ std::vector<std::string> packages_to_install(const Config& config, const Package
 
 std::map<std::string, std::string>
 screen_unattended_upgrades(const Config& config, const PackageIndex& idx,
-                           const std::vector<PendingUpgrade>& pending, const TrustPolicy& policy) {
+                           const std::vector<PendingUpgrade>& pending, const TrustPolicy& policy,
+                           bool record_holds) {
     auto to_install = [&config, &idx](const std::string& name) {
         return packages_to_install(config, idx, name);
     };
-    auto refusal = [&config, &idx, &policy](const std::string& name) -> std::optional<std::string> {
+    auto refusal = [&config, &idx, &policy,
+                    record_holds](const std::string& name) -> std::optional<std::string> {
         const Package* pkg = idx.find(name);
         if (!pkg)
             return std::nullopt; // the upgrade itself reports the missing package
@@ -55,7 +57,8 @@ screen_unattended_upgrades(const Config& config, const PackageIndex& idx,
         case BottleAction::HoldBack:
         case BottleAction::Refuse: {
             auto entry = trust_hold_entry(*pkg, *trust, pkg->archives.at(trust->bottle_tag).sha256);
-            record_refused_install(config, entry);
+            if (record_holds)
+                record_refused_install(config, entry);
             if (entry.reason == "single-source")
                 return entry.reason + " (" + trust->reason_tag + ")";
             return entry.reason + ": " + trust->message;
@@ -66,7 +69,7 @@ screen_unattended_upgrades(const Config& config, const PackageIndex& idx,
     auto held = screen_pending_upgrades(pending, to_install, refusal);
     // Dependents held back for a dependency's sake go in the ledger too.
     for (const auto& [name, reason] : held) {
-        if (!reason.starts_with("depends on "))
+        if (!record_holds || !reason.starts_with("depends on "))
             continue;
         if (const Package* pkg = idx.find(name)) {
             DegradedInstall dep{pkg->name, pkg->version, reason, {}, {}};

@@ -114,6 +114,11 @@ struct VersionChangeOptions {
     /// daemon, which will not split a chain unattended, as it does for a
     /// dependent in use). Off for `den upgrade`, which moves the rest.
     bool refused_dependent_holds_batch = false;
+    /// Plan the batch and stop: dependents are joined, refused, pinned, held
+    /// back or found in use exactly as for a real run and reported in the
+    /// result, then it returns before anything is poured, recorded or
+    /// linked (`den upgrade --dry-run`). `applied` stays empty.
+    bool plan_only = false;
 };
 
 /// Move packages in the active environment to new versions as one unit per
