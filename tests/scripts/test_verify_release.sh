@@ -16,8 +16,11 @@
 #     the newest earlier tag, RCs included, that can self-update --version.
 #   * release downloads retry transient curl errors, never a 404 or a
 #     checksum mismatch.
+#   * a step fails when any of its commands fails, not just its last one
+#     (set -e stays live inside step functions).
 #   * the app-cask step defaults to hex-fiend and fails by name, before any
-#     install, when the index marks its fixture cask disabled (macOS only).
+#     install, when the index marks its fixture cask disabled; its binary link
+#     (hexf) must appear on install and be gone after uninstall (macOS only).
 #   * VR_ONLY / VR_SKIP select steps; install and isolation always run.
 #
 # Run:
@@ -56,12 +59,14 @@ case "$(uname -m)" in x86_64|amd64) ARCH=x86_64 ;; *) ARCH=aarch64 ;; esac
 # store unless FAKE_DEN_ESCAPE=1; self-update --version copies the release's
 # den (and replica) over itself, as the real one does.
 # With OLD=1 it predates `self-update --version` (help lacks the flag).
+# FAKE_DEN_FAIL lists subcommands that fail (exit 1).
 mkden() { # mkden DIR VERSION [old]
     mkdir -p "$1"
     _help='  --version TEXT  release to install'
     [ "${3:-}" = old ] && _help='  --check  only report'
     cat >"$1/den" <<DEN
 #!/bin/sh
+case " \${FAKE_DEN_FAIL:-} " in *" \$1 "*) echo "den \$1: injected failure" >&2; exit 1 ;; esac
 case "\$1" in
     --version) echo $2 ;;
     config) [ "\${FAKE_DEN_ESCAPE:-0}" = 1 ] && DEN_PREFIX=/opt/elsewhere
@@ -77,10 +82,18 @@ case "\$1" in
     update) # FAKE_INDEX stands in for the index den update writes.
         [ -n "\${FAKE_INDEX:-}" ] || exit 0
         mkdir -p "\$DEN_HOME/cache" && cp "\$FAKE_INDEX" "\$DEN_HOME/cache/index.json" ;;
-    install|uninstall) # an app cask's bundle is FAKE_APP_BUNDLE
+    install|uninstall) # an app cask's bundle is FAKE_APP_BUNDLE, its binary
+        # link FAKE_APP_BINARY (left behind on uninstall if FAKE_KEEP_BINARY=1)
         echo "den \$1 \$2" >>"\$FAKE_LOG"
         b="\$DEN_APPDIR/\${FAKE_APP_BUNDLE:-none.app}"
-        if [ "\$1" = install ]; then mkdir -p "\$b"; else rm -rf "\$b"; fi ;;
+        l="\$DEN_HOME/envs/default/bin/\${FAKE_APP_BINARY:-none}"
+        if [ "\$1" = install ]; then
+            mkdir -p "\$b"
+            [ -z "\${FAKE_APP_BINARY:-}" ] || { mkdir -p "\${l%/*}"; ln -sf "\$b/x" "\$l"; }
+        else
+            rm -rf "\$b"
+            [ "\${FAKE_KEEP_BINARY:-0}" = 1 ] || rm -f "\$l"
+        fi ;;
     *) exit 0 ;;
 esac
 DEN
@@ -292,6 +305,15 @@ run "checksum mismatch not retried" 1 VR_ONLY=checksum VR_FETCH_DELAY=0 -- v1.2.
     && { [ "$(grep -c "curl .*$_ck_url\$" "$_tmp/log")" -eq 1 ] && ok "mismatch: one fetch" || bad "mismatch: one fetch"; }
 cp "$_tmp/ck.bak" "$_tmp/rel/v1.2.0/den-1.2.0-checksums.txt"
 
+# --- errexit inside steps -----------------------------------------------
+# The upgrade step is `den upgrade; den outdated`: a failing `den upgrade`
+# must fail the step even though the final `den outdated` succeeds.
+run "upgrade step passes" 0 VR_ONLY=upgrade -- v1.2.0 \
+    && has "upgrade: passes" 'PASS  upgrade'
+run "non-final command failure fails the step" 1 VR_ONLY=upgrade FAKE_DEN_FAIL=upgrade -- v1.2.0 \
+    && has "errexit: upgrade fails" 'FAIL  upgrade' \
+    && has "errexit: log shows the failing command" 'den upgrade: injected failure'
+
 # --- app-cask fixture ----------------------------------------------------
 # The default app cask is hex-fiend; a fixture cask the index marks disabled
 # fails the step at once, by name, before den is asked to install it.
@@ -304,7 +326,7 @@ cat >"$_tmp/index.json" <<'JSON'
 JSON
 if [ "$OS" = darwin ]; then
     if run "app-cask: default hex-fiend" 0 VR_ONLY="update app-cask" FAKE_INDEX="$_tmp/index.json" \
-        "FAKE_APP_BUNDLE=Hex Fiend.app" -VR_APP_CASK -VR_APP_BUNDLE -- v1.2.0; then
+        "FAKE_APP_BUNDLE=Hex Fiend.app" FAKE_APP_BINARY=hexf -VR_APP_CASK -VR_APP_BUNDLE -VR_APP_BINARY -- v1.2.0; then
         has "app-cask: default passes" 'PASS  app-cask'
         logged "app-cask: default installs hex-fiend" '^den install hex-fiend$'
         logged "app-cask: default uninstalls hex-fiend" '^den uninstall hex-fiend$'
@@ -318,9 +340,19 @@ if [ "$OS" = darwin ]; then
         unlogged "app-cask: disabled cask never installed" '^den install macdown'
     fi
     # No index (update not run): nothing to check, den decides.
-    run "app-cask: no index" 0 VR_ONLY=app-cask "FAKE_APP_BUNDLE=Hex Fiend.app" \
-        -VR_APP_CASK -VR_APP_BUNDLE -- v1.2.0 \
+    run "app-cask: no index" 0 VR_ONLY=app-cask "FAKE_APP_BUNDLE=Hex Fiend.app" FAKE_APP_BINARY=hexf \
+        -VR_APP_CASK -VR_APP_BUNDLE -VR_APP_BINARY -- v1.2.0 \
         && has "app-cask: no index passes" 'PASS  app-cask'
+    # The binary link: required after install, gone after uninstall.
+    run "app-cask: hexf link survives uninstall" 1 VR_ONLY=app-cask "FAKE_APP_BUNDLE=Hex Fiend.app" \
+        FAKE_APP_BINARY=hexf FAKE_KEEP_BINARY=1 -VR_APP_CASK -VR_APP_BUNDLE -VR_APP_BINARY -- v1.2.0 \
+        && has "app-cask: surviving link named" 'hexf link survives uninstall'
+    run "app-cask: no hexf link" 1 VR_ONLY=app-cask "FAKE_APP_BUNDLE=Hex Fiend.app" \
+        -VR_APP_CASK -VR_APP_BUNDLE -VR_APP_BINARY -- v1.2.0 \
+        && has "app-cask: missing link named" 'hex-fiend linked no hexf binary'
+    run "app-cask: VR_APP_BINARY= skips the link check" 0 VR_ONLY=app-cask "FAKE_APP_BUNDLE=Hex Fiend.app" \
+        VR_APP_BINARY= -VR_APP_CASK -VR_APP_BUNDLE -- v1.2.0 \
+        && has "app-cask: no binary check passes" 'PASS  app-cask'
 else
     echo "SKIP: app-cask fixture tests (macOS only)"
 fi
