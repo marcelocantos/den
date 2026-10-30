@@ -36,6 +36,8 @@
 #   VR_FONT_CASK       font cask                      (default: font-hack)
 #   VR_APP_CASK        app cask                       (default: hex-fiend)
 #   VR_APP_BUNDLE      bundle the app cask installs   (default: Hex Fiend.app)
+#   VR_APP_BINARY      binary the app cask links      (default: hexf; empty = no
+#                      binary check)
 #                      The app-cask step fails at once, naming the cask, if
 #                      the index marks VR_APP_CASK disabled upstream.
 #   VR_ONLY            space-separated step names to run (default: all)
@@ -179,6 +181,7 @@ VR_TAP_VERSION=1.0.0
 VR_FONT_CASK=${VR_FONT_CASK:-font-hack}
 VR_APP_CASK=${VR_APP_CASK:-hex-fiend}
 VR_APP_BUNDLE=${VR_APP_BUNDLE:-Hex Fiend.app}
+VR_APP_BINARY=${VR_APP_BINARY-hexf}
 VR_LAUNCHD_SECS=${VR_LAUNCHD_SECS:-60}
 VR_REPLICA_ROOT=${VR_REPLICA_ROOT:-$VR_INSTALL_DIR}
 [ "${VR_SKIP_LAUNCHD:-0}" = 1 ] && VR_SKIP="${VR_SKIP:-} launchd"
@@ -204,9 +207,14 @@ step() {
     fi
     local log; log=$(printf '%s/%02d-%s.log' "$LOGDIR" "$N" "$name")
     local t0=$SECONDS
-    # Not inside `if`: bash ignores set -e in a tested subshell.
-    local rc=0
-    ( set -e; "$@" ) >"$log" 2>&1 || rc=$?
+    # The step runs in a set -e subshell as a plain command, and its status is
+    # read from $? afterwards (this script itself runs without -e). Never test
+    # the subshell (`if`, `!`, `&&`, `||`): bash then ignores set -e throughout
+    # it and in every function it calls, so a step would fail only on its last
+    # command.
+    local rc
+    ( set -e; "$@" ) >"$log" 2>&1
+    rc=$?
     if [ "$rc" -eq "$SKIP_RC" ]; then
         # A step may decline with `skip_because <reason>` (exit $SKIP_RC).
         printf 'SKIP  %-12s (%s)\n' "$name" "$(sed -n 's/^skip-reason: //p' "$log" | tail -1)"
@@ -401,12 +409,12 @@ s_opt_link() {
 }
 s_trust() {
     local doc src arch sha bad
-    doc=$(den doctor 2>&1 || true); echo "$doc" | grep '\[trust\]'
+    doc=$(den doctor 2>&1 || true); echo "$doc" | grep '\[trust\]' || true
     echo "$doc" | grep -q '\[trust\] replica: active' || { echo "trust replica not active"; return 1; }
     src=$(echo "$doc" | sed -n 's/.*\[trust\] replica source: //p' | head -1)
     [ -f "$src" ] || { echo "replica source missing: $src"; return 1; }
     under "$src" "$VR_REPLICA_ROOT" || { echo "replica $src not shipped under $VR_REPLICA_ROOT"; return 1; }
-    arch=$(ls "$VR_DEN_HOME"/cache/archives/*.tar.gz 2>/dev/null | head -1)
+    arch=$(ls "$VR_DEN_HOME"/cache/archives/*.tar.gz 2>/dev/null | head -1 || true)
     [ -n "$arch" ] || { echo "no cached bottle archive"; return 1; }
     sha=$(basename "$arch" .tar.gz)
     den replica-verify --name "$VR_BOTTLE" --version 0 --tag local --sha256 "$sha" --bottle "$arch"
@@ -491,14 +499,25 @@ fixture_disabled_() {
     echo "verify-release: set $2 to an enabled app cask (and VR_APP_BUNDLE to the bundle it installs)."
     return 1
 }
+# app_binary_links_: the VR_APP_BINARY links den made (anywhere under scratch
+# DEN_HOME or the prefix), one per line.
+app_binary_links_() { find "$VR_DEN_HOME" "$VR_PREFIX" -name "$VR_APP_BINARY" -type l 2>/dev/null || true; }
 s_app_cask() {
-    # Explicit return: step runs this subshell on the left of ||, where bash
-    # ignores set -e.
-    fixture_disabled_ "$VR_APP_CASK" VR_APP_CASK || return 1
+    fixture_disabled_ "$VR_APP_CASK" VR_APP_CASK
     den install "$VR_APP_CASK"
     [ -d "$VR_APPDIR/$VR_APP_BUNDLE" ] || { echo "missing $VR_APPDIR/$VR_APP_BUNDLE"; return 1; }
+    local links
+    if [ -n "$VR_APP_BINARY" ]; then
+        links=$(app_binary_links_)
+        [ -n "$links" ] || { echo "$VR_APP_CASK linked no $VR_APP_BINARY binary"; return 1; }
+        echo "binary links: $links"
+    fi
     den uninstall "$VR_APP_CASK"
-    [ ! -e "$VR_APPDIR/$VR_APP_BUNDLE" ]
+    [ ! -e "$VR_APPDIR/$VR_APP_BUNDLE" ] || { echo "$VR_APPDIR/$VR_APP_BUNDLE survives uninstall"; return 1; }
+    if [ -n "$VR_APP_BINARY" ]; then
+        links=$(app_binary_links_)
+        [ -z "$links" ] || { echo "$VR_APP_BINARY link survives uninstall: $links"; return 1; }
+    fi
 }
 s_uninstall() {
     den uninstall "$VR_BOTTLE"
@@ -612,11 +631,11 @@ s_launchd() {
     echo "bootstrapped gui/$uid/$LA_LABEL"
 
     sleep 3
-    pid0=$(launchctl print "gui/$uid/$LA_LABEL" | sed -n 's/^[[:space:]]*pid = //p' | head -1)
+    pid0=$(launchctl print "gui/$uid/$LA_LABEL" | sed -n 's/^[[:space:]]*pid = //p' | head -1 || true)
     [ -n "$pid0" ] || { launchctl print "gui/$uid/$LA_LABEL"; echo "agent not running"; return 1; }
     while [ "$t" -lt "$VR_LAUNCHD_SECS" ]; do
         sleep 5; t=$((t + 5))
-        st=$(launchctl print "gui/$uid/$LA_LABEL")
+        st=$(launchctl print "gui/$uid/$LA_LABEL" || true)
         pid=$(echo "$st" | sed -n 's/^[[:space:]]*pid = //p' | head -1)
         echo "t=${t}s state=$(echo "$st" | sed -n 's/^[[:space:]]*state = //p' | head -1) pid=${pid:-none}"
         [ "$pid" = "$pid0" ] || { echo "agent died or restarted (pid $pid0 -> ${pid:-none})"; tail -20 "$VR_DEN_HOME/daemon.log" 2>/dev/null; return 1; }
