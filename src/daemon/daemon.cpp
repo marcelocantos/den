@@ -127,15 +127,6 @@ uint64_t now_secs() {
     return static_cast<uint64_t>(std::time(nullptr));
 }
 
-std::string format_local_time(uint64_t secs) {
-    std::time_t t = static_cast<std::time_t>(secs);
-    std::tm tm{};
-    if (!localtime_r(&t, &tm))
-        return "?";
-    char buf[32];
-    return std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", &tm) > 0 ? buf : "?";
-}
-
 bool in_maintenance_window(const std::string& window) {
     if (window.empty())
         return true;
@@ -388,11 +379,11 @@ void write_daemon_state(const fs::path& den_home, const DaemonState& state) {
     nlohmann::json blocked = nlohmann::json::array();
     for (const auto& b : state.disabled_blocked) {
         nlohmann::json blockers = nlohmann::json::array();
-        std::string reasons;
-        for (const auto& x : b.blockers) {
+        for (const auto& x : b.blockers)
             blockers.push_back({{"disabled", x.disabled}, {"reason", x.reason}});
+        std::string reasons;
+        for (const auto& x : unique_disabled_blockers(b))
             reasons += (reasons.empty() ? "" : "; ") + x.reason;
-        }
         nlohmann::json e = {{"name", b.name},
                             {"installed", b.installed},
                             {"available", b.available},
@@ -535,9 +526,18 @@ std::string index_older_message(const PendingUpgrade& p) {
            "); not downgrading. To downgrade explicitly: den use " + p.name + " " + p.available;
 }
 
+std::vector<DisabledBlocker> unique_disabled_blockers(const DisabledBlocked& b) {
+    std::vector<DisabledBlocker> out;
+    for (const auto& x : b.blockers)
+        if (std::none_of(out.begin(), out.end(),
+                         [&](const DisabledBlocker& o) { return o.disabled == x.disabled; }))
+            out.push_back(x);
+    return out;
+}
+
 std::string disabled_blocked_message(const DisabledBlocked& b) {
     std::string reasons;
-    for (const auto& x : b.blockers)
+    for (const auto& x : unique_disabled_blockers(b))
         reasons += (reasons.empty() ? "" : "; ") + x.reason;
     return b.name + " " + b.installed + " -> " + b.available + ": " + reasons;
 }
@@ -548,13 +548,9 @@ std::string disabled_blocked_report(const DisabledBlocked& b) {
 }
 
 std::string disabled_blocker_names(const DisabledBlocked& b) {
-    std::vector<std::string> names;
-    for (const auto& x : b.blockers)
-        if (std::find(names.begin(), names.end(), x.disabled) == names.end())
-            names.push_back(x.disabled);
     std::string out;
-    for (const auto& n : names)
-        out += (out.empty() ? "" : ", ") + n;
+    for (const auto& x : unique_disabled_blockers(b))
+        out += (out.empty() ? "" : ", ") + x.disabled;
     return out;
 }
 

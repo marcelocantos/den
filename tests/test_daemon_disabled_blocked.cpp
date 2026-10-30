@@ -360,11 +360,40 @@ TEST_SUITE("daemon_disabled_blocked") {
         CHECK(has(json, "\"disabled_blocked\""));
         CHECK(has(json, "\"blockers\""));
         CHECK(has(json, "\"recorded\": 1793000000"));
-        // The single-blocker form older den reads: the first blocker, every reason.
+        // The single-blocker form older den reads: the first blocker and the
+        // message's reasons.
         auto entry = nlohmann::json::parse(json)["disabled_blocked"][0];
         CHECK(entry.value("disabled", std::string()) == "libold");
         CHECK(entry.value("reason", std::string()) == kJqNeeds + "; 'jq' needs 'libolder'");
         CHECK(read_daemon_state(t.path / "missing").disabled_blocked.empty());
+    }
+
+    TEST_CASE(
+        "a disabled package several blockers name is listed once, but every blocker is kept") {
+        DbTmp t;
+        const std::string dep = "dependent jqx 1.0 (1.0_1 available): ";
+        const std::vector<DisabledBlocker> all{
+            {"libold", kJqNeeds},
+            {"jqx", dep + "'jqx' is " + kTail},
+            {"libold", dep + "'jqx' needs 'libold', which is " + kTail}};
+        DisabledBlocked b{"jq", "1.7.1", "1.8.2", all, 1793000000};
+        const std::string msg = "jq 1.7.1 -> 1.8.2: " + kJqNeeds + "; " + dep + "'jqx' is " + kTail;
+        CHECK(unique_disabled_blockers(b) == std::vector<DisabledBlocker>{all[0], all[1]});
+        CHECK(disabled_blocked_message(b) == msg);
+        CHECK(disabled_blocked_report(b) ==
+              msg + "  [recorded " + format_local_time(1793000000) + "]");
+        CHECK(disabled_blocker_names(b) == "libold, jqx");
+        DaemonState s;
+        s.disabled_blocked.push_back(b);
+        write_daemon_state(t.path, s);
+        auto back = read_daemon_state(t.path);
+        REQUIRE(back.disabled_blocked.size() == 1);
+        CHECK(back.disabled_blocked[0].blockers == all);
+        auto entry =
+            nlohmann::json::parse(read_file(t.path / "daemon_state.json"))["disabled_blocked"][0];
+        CHECK(entry["blockers"].size() == 3);
+        CHECK(entry.value("disabled", std::string()) == "libold");
+        CHECK(entry.value("reason", std::string()) == kJqNeeds + "; " + dep + "'jqx' is " + kTail);
     }
 
     TEST_CASE("a state file from an older den reads as one blocker recorded at last_check") {
@@ -421,6 +450,10 @@ TEST_SUITE("daemon_disabled_blocked") {
                          {"jqx", dep + "'jqx' is " + kTail},
                          {"libold", dep + "'jqx' needs 'libold', which is " + kTail}});
             CHECK(disabled_blocker_names(f.state.disabled_blocked[0]) == "libold, jqx");
+            // The message (and so daemon.log and every report) names libold
+            // once too, with the package's own reason.
+            CHECK(disabled_blocked_message(f.state.disabled_blocked[0]) ==
+                  "jq 1.7.1 -> 1.8.2: " + kJqNeeds + "; " + dep + "'jqx' is " + kTail);
         }
         SUBCASE("a dependent that is disabled and would pour a disabled dependency") {
             Fixture f({{"jqx", "1.0"}});

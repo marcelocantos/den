@@ -3,7 +3,7 @@
 
 #include "trust_review.h"
 
-#include <ctime>
+#include "../core/local_time.h"
 
 namespace den {
 
@@ -12,11 +12,7 @@ namespace {
 std::string local_time(long long ts) {
     if (ts <= 0)
         return "?";
-    std::time_t t = static_cast<std::time_t>(ts);
-    std::tm tm{};
-    localtime_r(&t, &tm);
-    char buf[32];
-    return std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", &tm) > 0 ? buf : "?";
+    return format_local_time(static_cast<uint64_t>(ts));
 }
 
 } // namespace

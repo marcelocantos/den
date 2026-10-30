@@ -14,6 +14,7 @@
 #include "../build/source_plan.h"
 #include "../core/config.h"
 #include "../core/error.h"
+#include "../core/local_time.h"
 #include "../core/version.h"
 #include "../daemon/daemon.h"
 #include "../doctor/doctor.h"
@@ -1698,13 +1699,9 @@ void Cli::M::setup() {
         }
         // Human-readable output.
         for (const auto& e : entries) {
-            std::time_t t = static_cast<std::time_t>(e.timestamp);
-            std::tm* lt = std::localtime(&t);
-            char buf[20] = {};
-            if (lt)
-                std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", lt);
-            std::cout << buf << "  " << std::left << std::setw(24) << e.package << e.from_version
-                      << " -> " << e.to_version << "  (" << e.trigger << ")\n";
+            std::cout << format_local_time(e.timestamp, "") << "  " << std::left << std::setw(24)
+                      << e.package << e.from_version << " -> " << e.to_version << "  (" << e.trigger
+                      << ")\n";
         }
     });
 
