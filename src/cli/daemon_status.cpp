@@ -45,6 +45,8 @@ void format_daemon_status(std::ostream& out, const DaemonState& state) {
         }
     }
 
+    format_disabled_blocked_section(out, state);
+
     if (!state.trust_held.empty()) {
         out << "Held back by the unattended trust policy (see `den trust review`):\n";
         for (const auto& h : state.trust_held)
@@ -55,6 +57,14 @@ void format_daemon_status(std::ostream& out, const DaemonState& state) {
         out << "Last held-back notification: " << (now_secs() - *state.last_trust_notification)
             << "s ago\n";
     }
+}
+
+void format_disabled_blocked_section(std::ostream& out, const DaemonState& state) {
+    if (state.disabled_blocked.empty())
+        return;
+    out << "Not upgrading (would pour a package disabled upstream):\n";
+    for (const auto& b : state.disabled_blocked)
+        out << "  " << disabled_blocked_message(b) << "\n";
 }
 
 void format_degraded_trust(std::ostream& out, const DegradedInstallSummary& summary) {

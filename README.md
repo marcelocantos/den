@@ -33,7 +33,10 @@ everything — not just Python, but every package on your system.
   their bottles; with `daemon.auto_upgrade` on it applies them inside
   `daemon.upgrade_window`, deferring kegs that are in use (an in-use
   dependent that would move in the same batch defers the whole batch, so a
-  dependency chain always moves together). Cask upgrades
+  dependency chain always moves together). It never pours a package
+  disabled upstream: an upgrade that would (the package itself, a new
+  dependency, or a revision-bumped dependent) is skipped, logged, and shown
+  by `den status`, `den outdated` and `den doctor`. Cask upgrades
   stay manual: `den upgrade <cask>`.
 - **Source-first architecture** — embedded Ruby VM for evaluating
   Homebrew formula build recipes. Pre-built archives as an optimisation,

@@ -8,6 +8,8 @@
 #include <filesystem>
 #include <functional>
 #include <stdexcept>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace den {
@@ -28,6 +30,9 @@ struct UpgradePassResult {
     // a stale state file from an older den). Dropped, never applied: an
     // upgrade never downgrades.
     std::vector<PendingUpgrade> not_newer;
+    // Pending upgrades not applied because they would pour a package
+    // disabled upstream (UpgradeDisabled). They stay pending.
+    std::vector<DisabledBlocked> disabled_blocked;
 };
 
 // Thrown by an `apply` hook when the upgrade has to wait rather than fail:
@@ -35,6 +40,16 @@ struct UpgradePassResult {
 // a deferral (reason = what()), keeps the package pending and logs no error.
 struct UpgradeDeferred : std::runtime_error {
     using std::runtime_error::runtime_error;
+};
+
+// Thrown by an `apply` hook when the upgrade would pour a package the index
+// marks disabled (apply_daemon_upgrade, via disabled_pours). Nothing was
+// poured. The pass records it in state.disabled_blocked (reason = what()),
+// keeps the package pending, logs it, and records no error.
+struct UpgradeDisabled : std::runtime_error {
+    UpgradeDisabled(std::string disabled_pkg, const std::string& reason)
+        : std::runtime_error(reason), disabled(std::move(disabled_pkg)) {}
+    std::string disabled; // the disabled package the upgrade would pour
 };
 
 // Run one upgrade pass over the pending upgrades recorded in `state`.

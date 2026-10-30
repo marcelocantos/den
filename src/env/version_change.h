@@ -109,6 +109,11 @@ struct VersionChangeOptions {
     /// dependent stays at its version, like a pinned one, and is listed in
     /// `refused_dependents`.
     std::function<std::optional<std::string>(const VersionChange&)> refuse_dependent;
+    /// A refused dependent holds back the whole batch: nothing is poured or
+    /// recorded and the result lists it in `refused_dependents` (the
+    /// daemon, which will not split a chain unattended, as it does for a
+    /// dependent in use). Off for `den upgrade`, which moves the rest.
+    bool refused_dependent_holds_batch = false;
 };
 
 /// Move packages in the active environment to new versions as one unit per

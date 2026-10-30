@@ -376,6 +376,10 @@ VersionChangeResult apply_version_changes(const Config& config, PackageProvider&
     if (opts.upgrade_dependents && idx) {
         add_revision_bumped_dependents(config, *idx, pname, changes, brought_by, opts, result);
     }
+    if (opts.refused_dependent_holds_batch && !result.refused_dependents.empty()) {
+        SPDLOG_INFO("holding batch: {} dependent(s) refused", result.refused_dependents.size());
+        return result;
+    }
 
     // A dependent that would move under a running process holds back the
     // whole batch: moving the dependency without it would leave the chain

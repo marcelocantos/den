@@ -37,6 +37,24 @@ void record_deferral(DaemonState& state, const DeferredUpgrade& du) {
     state.deferred.push_back(du);
 }
 
+// Drop the disabled-package block for `name` (its upgrade just applied).
+void clear_disabled_block(DaemonState& state, const std::string& name) {
+    std::erase_if(state.disabled_blocked, [&](const DisabledBlocked& b) { return b.name == name; });
+}
+
+// Record (or refresh) the disabled-package block for `b.name`.
+void record_disabled_block(DaemonState& state, const DisabledBlocked& b) {
+    for (auto& existing : state.disabled_blocked) {
+        if (existing.name == b.name) {
+            existing = b;
+            return;
+        }
+    }
+    state.disabled_blocked.push_back(b);
+    std::sort(state.disabled_blocked.begin(), state.disabled_blocked.end(),
+              [](const DisabledBlocked& x, const DisabledBlocked& y) { return x.name < y.name; });
+}
+
 } // namespace
 
 UpgradePassResult run_upgrade_pass(const fs::path& cellar, const fs::path& den_home,
@@ -111,6 +129,14 @@ UpgradePassResult run_upgrade_pass(const fs::path& cellar, const fs::path& den_h
         if (apply) {
             try {
                 apply(pu);
+            } catch (const UpgradeDisabled& e) {
+                DisabledBlocked b{pu.name, pu.installed, pu.available, e.disabled, e.what()};
+                SPDLOG_WARN("upgrade_pass: {}", disabled_blocked_message(b));
+                log_daemon(den_home, "not upgrading " + disabled_blocked_message(b));
+                record_disabled_block(state, b);
+                result.disabled_blocked.push_back(std::move(b));
+                still_pending.push_back(pu);
+                continue;
             } catch (const UpgradeDeferred& e) {
                 DeferredUpgrade du{pu.name, pu.installed, pu.available, e.what()};
                 SPDLOG_INFO("upgrade_pass: deferring {} {} -> {} ({})", pu.name, pu.installed,
@@ -128,6 +154,7 @@ UpgradePassResult run_upgrade_pass(const fs::path& cellar, const fs::path& den_h
             }
         }
         clear_deferral(state, pu.name);
+        clear_disabled_block(state, pu.name);
         result.applied.push_back(pu);
         activity.push_back({now_secs(), pu.name, pu.installed, pu.available, "daemon"});
     }

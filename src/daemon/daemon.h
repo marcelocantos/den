@@ -57,6 +57,23 @@ struct DeferredUpgrade {
 // Signals to tests/consumers that DaemonState carries a `version_held` array.
 #define DAEMON_STATE_HAS_VERSION_HELD 1
 
+// An upgrade the daemon did not apply because it would pour a package the
+// index marks disabled: the package itself, a dependency it would pour, or
+// a revision-bumped dependent that is disabled or would pour one. The same
+// check `den install` / `den upgrade` refuse with (disabled_pours); the
+// daemon has no --force. It is re-checked every cycle and dropped once the
+// upgrade applies or is no longer pending.
+struct DisabledBlocked {
+    std::string name;      // the package whose upgrade is blocked
+    std::string installed; // installed version
+    std::string available; // index version
+    std::string disabled;  // the disabled package it would pour (may be `name`)
+    std::string reason;    // disabled_package_message / disabled_dependency_message
+};
+
+// Signals to tests/consumers that DaemonState carries a `disabled_blocked` array.
+#define DAEMON_STATE_HAS_DISABLED_BLOCKED 1
+
 struct DaemonState {
     std::optional<uint64_t> last_check;
     std::vector<PendingUpgrade> pending;
@@ -77,13 +94,26 @@ struct DaemonState {
     std::vector<DeferredUpgrade> trust_held;
     // When the daemon last posted a held-back notification.
     std::optional<uint64_t> last_trust_notification;
+    // Upgrades not applied because they would pour a package disabled
+    // upstream. One whose dependency or dependent is disabled stays pending
+    // (as trust_held ones do); one that is itself disabled never is.
+    std::vector<DisabledBlocked> disabled_blocked;
 };
+
+/// The one-line report for a blocked upgrade, e.g. "jq 1.7.1 -> 1.8.2:
+/// 'jq' needs 'libold', which is disabled upstream: ...", shared by `den
+/// status`, `den outdated`, `den doctor` and `den daemon status`.
+std::string disabled_blocked_message(const DisabledBlocked& b);
 
 /// Apply one pending upgrade for the daemon's upgrade pass: install it,
 /// record it in the active env and link it, as one unit, together with any
 /// installed dependents the index revision-bumped for it. If the new version
 /// cannot be linked it is rolled back (see apply_version_changes) and a
 /// UserError is thrown, which run_upgrade_pass records as a failed apply.
+/// When the batch would pour a package disabled upstream (disabled_pours on
+/// the package, then on each revision-bumped dependent), nothing is poured
+/// and UpgradeDisabled is thrown, which run_upgrade_pass records in
+/// DaemonState::disabled_blocked. There is no bypass.
 void apply_daemon_upgrade(const Config& config, PackageProvider& provider, const PackageIndex& idx,
                           const PendingUpgrade& pu);
 
@@ -143,12 +173,15 @@ UpgradeSelection select_upgrade(const std::string& name, const std::string& vers
 /// index side's scheme is Package::version_scheme. The selection is
 /// select_upgrade's. A skipped cask whose index is newer goes to `casks`
 /// when given, so a caller can say that it was left for an explicit upgrade.
+/// A skipped disabled formula whose index is newer goes to `disabled` when
+/// given (the daemon records it as blocked).
 std::vector<PendingUpgrade> compute_pending(const std::map<std::string, std::string>& installed,
                                             const PackageIndex& idx,
                                             std::vector<PendingUpgrade>* index_older = nullptr,
                                             const InstalledSchemeFn& installed_scheme = {},
                                             std::vector<DeferredUpgrade>* version_held = nullptr,
-                                            std::vector<PendingUpgrade>* casks = nullptr);
+                                            std::vector<PendingUpgrade>* casks = nullptr,
+                                            std::vector<PendingUpgrade>* disabled = nullptr);
 
 /// The one-line report for a package whose index is older than what is
 /// installed, e.g. "openssl@3 3.6.3: index older than installed (index has
@@ -228,7 +261,8 @@ struct MaintenanceReport {
     std::size_t skipped_pinned = 0; // pending but pinned: not pre-downloaded
     std::size_t applied = 0;
     std::size_t deferred = 0;
-    std::size_t trust_held = 0; // held back by the unattended trust policy
+    std::size_t trust_held = 0;       // held back by the unattended trust policy
+    std::size_t disabled_blocked = 0; // would pour a package disabled upstream
 };
 
 /// One maintenance cycle: refresh the index, recompute `state.pending`

@@ -10,6 +10,7 @@
 #include "../core/version.h"
 #include "../daemon/daemon.h"
 #include "../daemon/trust_screen.h"
+#include "../env/disabled.h"
 #include "../env/environment.h"
 #include "../env/manifest.h"
 #include "../env/version_change.h"
@@ -71,38 +72,6 @@ void report_version_change_failures(const Config& config, const VersionChangeRes
 
 namespace {
 
-/// Homebrew's wording for its disable!/deprecate! reason symbols
-/// (DeprecateDisable::FORMULA_DEPRECATE_DISABLE_REASONS and
-/// CASK_DEPRECATE_DISABLE_REASONS in brew's deprecate_disable.rb), so den's
-/// refusal reads like brew's "has been disabled because it ...".
-std::string disable_reason_phrase(const std::string& reason, bool cask) {
-    static const std::map<std::string, std::string> formula_phrases = {
-        {"does_not_build", "does not build"},
-        {"no_license", "has no license"},
-        {"repo_archived", "has an archived upstream repository"},
-        {"repo_removed", "has a removed upstream repository"},
-        {"unmaintained", "is not maintained upstream"},
-        {"unreachable", "is no longer reliably reachable upstream"},
-        {"unsupported", "is not supported upstream"},
-        {"deprecated_upstream", "is deprecated upstream"},
-        {"versioned_formula", "is a versioned formula"},
-        {"checksum_mismatch", "was built from a source file whose checksum has since changed"},
-    };
-    static const std::map<std::string, std::string> cask_phrases = {
-        {"discontinued", "is discontinued upstream"},
-        {"moved_to_mas", "is now exclusively distributed on the Mac App Store"},
-        {"no_longer_available", "is no longer available upstream"},
-        {"no_longer_meets_criteria", "no longer meets the criteria for acceptable casks"},
-        {"unmaintained", "is not maintained upstream"},
-        {"fails_gatekeeper_check", "does not pass the macOS Gatekeeper check"},
-        {"unreachable", "is no longer reliably reachable upstream"},
-    };
-    const auto& phrases = cask ? cask_phrases : formula_phrases;
-    if (auto it = phrases.find(reason); it != phrases.end())
-        return it->second;
-    return reason;
-}
-
 std::string refused_count_message(size_t n) {
     return std::to_string(n) + " requested package(s) are disabled upstream";
 }
@@ -136,10 +105,9 @@ bool refuse_for_disabled_dependencies(const Config& config, const PackageProvide
                                       const PackageIndex& idx, const std::string& name,
                                       bool force) {
     bool refused = false;
-    for (const auto* dep : disabled_dependencies(config, provider, idx, name)) {
-        const bool bypass = force_bypasses(*dep, force);
-        std::cerr << (bypass ? "warning: " : "error: ") << disabled_dependency_message(name, *dep)
-                  << "\n";
+    for (const auto& pour : disabled_pours(config, provider, idx, name, /*include_self=*/false)) {
+        const bool bypass = force_bypasses(*pour.pkg, force);
+        std::cerr << (bypass ? "warning: " : "error: ") << pour.message << "\n";
         refused = refused || !bypass;
     }
     return refused;
@@ -155,61 +123,6 @@ void warn_disabled_up_to_date(const Package& pkg, const std::string& name,
 }
 
 } // namespace
-
-std::string disabled_package_message(const Package& pkg) {
-    std::string msg = "'" + pkg.name + "' is disabled upstream";
-    if (!pkg.disable_reason.empty())
-        msg += ": it " + disable_reason_phrase(pkg.disable_reason, is_cask_package(pkg));
-    std::string details;
-    if (!pkg.disable_date.empty())
-        details = "disabled on " + pkg.disable_date;
-    if (!pkg.disable_replacement.empty()) {
-        if (!details.empty())
-            details += "; ";
-        details += "replacement: " + pkg.disable_replacement;
-    }
-    if (!details.empty())
-        msg += " (" + details + ")";
-    return msg;
-}
-
-bool is_cask_package(const Package& pkg) {
-    return pkg.artifact_type == ArtifactType::App || !pkg.cask_artifacts.empty();
-}
-
-std::string disabled_dependency_message(const std::string& dependent, const Package& dep) {
-    // "'bar' is disabled upstream: ..." -> "'foo' needs 'bar', which is ..."
-    const auto msg = disabled_package_message(dep);
-    const auto head = "'" + dep.name + "' is ";
-    return "'" + dependent + "' needs '" + dep.name + "', which is " + msg.substr(head.size());
-}
-
-std::vector<const Package*> disabled_dependencies(const Config& config,
-                                                  const PackageProvider& provider,
-                                                  const PackageIndex& idx,
-                                                  const std::string& name) {
-    // Every runtime dependency is poured unless its index version is already
-    // installed (HomebrewProvider::install), and a satisfied one's own
-    // dependencies are still checked, so walk the whole closure.
-    std::vector<const Package*> found;
-    std::set<std::string> seen{keg_name(name)};
-    std::deque<std::string> todo;
-    if (const auto* root = idx.find(name))
-        todo.insert(todo.end(), root->dependencies.begin(), root->dependencies.end());
-    while (!todo.empty()) {
-        auto dep_name = std::move(todo.front());
-        todo.pop_front();
-        if (!seen.insert(keg_name(dep_name)).second)
-            continue;
-        const auto* dep = idx.find(dep_name);
-        if (!dep)
-            continue;
-        todo.insert(todo.end(), dep->dependencies.begin(), dep->dependencies.end());
-        if (dep->disabled && !provider.is_installed(config, keg_name(dep->name), dep->version))
-            found.push_back(dep);
-    }
-    return found;
-}
 
 std::vector<std::string> refuse_disabled_packages(const PackageIndex& idx,
                                                   const std::vector<std::string>& names,
@@ -699,21 +612,13 @@ void upgrade_packages(const Config& config, PackageProvider& provider, const Pac
     // disabled dependency, stays put and fails the run (brew reports such a
     // dependent and upgrades the rest); --force lets a formula through.
     opts.refuse_dependent = [&](const VersionChange& c) -> std::optional<std::string> {
-        const auto* pkg = idx.find(c.name);
-        if (!pkg)
-            return std::nullopt;
-        if (pkg->disabled) {
-            if (!force_bypasses(*pkg, force))
-                return disabled_package_message(*pkg);
-            std::cerr << "warning: " << disabled_package_message(*pkg) << "\n";
-        }
         std::optional<std::string> why;
-        for (const auto* dep : disabled_dependencies(config, provider, idx, c.name)) {
-            const auto msg = disabled_dependency_message(c.name, *dep);
-            if (force_bypasses(*dep, force))
-                std::cerr << "warning: " << msg << "\n";
+        for (const auto& pour :
+             disabled_pours(config, provider, idx, c.name, /*include_self=*/true)) {
+            if (force_bypasses(*pour.pkg, force))
+                std::cerr << "warning: " << pour.message << "\n";
             else if (!why)
-                why = msg;
+                why = pour.message;
         }
         return why;
     };
