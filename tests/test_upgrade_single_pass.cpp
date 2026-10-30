@@ -165,6 +165,12 @@ TEST_SUITE("upgrade_single_pass") {
         Fixture f;
         auto brew = std::make_shared<CountingProvider>("homebrew");
         f.registry.add(brew);
+        // The pass reads the chosen provider's own bucket, so jq is recorded
+        // under homebrew here, as `den install jq` would record it.
+        Manifest m = read_manifest(f.cfg.den_home, active_env_path(f.cfg.den_home));
+        m.packages["homebrew"]["jq"] = m.packages["primary"]["jq"];
+        m.packages["primary"].erase("jq");
+        write_manifest(f.cfg.den_home, active_env_path(f.cfg.den_home), m);
         CoutCapture cap;
         upgrade_all_packages(f.cfg, f.registry, f.idx);
 

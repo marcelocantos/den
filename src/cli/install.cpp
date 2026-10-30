@@ -201,7 +201,18 @@ void uninstall_packages(const Config& config, PackageProvider& provider,
 void upgrade_packages(const Config& config, PackageProvider& provider, const PackageIndex& idx,
                       const std::vector<std::string>& names, bool dry_run) {
     auto active = active_env_path(config.den_home);
-    auto resolved = resolve(config.den_home, active);
+    // Only this provider's own bucket is compared against `idx`. A package
+    // another provider manages (cowsay 6.1 from pip) is not the index's
+    // package of the same name (homebrew cowsay 3.8.4), so the flattened
+    // cross-provider view would misreport it as index-older, or plan a
+    // homebrew "upgrade" over it. This matches the daemon's maintenance
+    // cycle, which reads only the homebrew bucket.
+    std::map<std::string, std::string> resolved;
+    {
+        auto per = resolve_per_provider(config.den_home, active);
+        if (auto it = per.find(std::string(provider.provider_name())); it != per.end())
+            resolved = std::move(it->second);
+    }
 
     const auto pins = read_pins(config.den_home);
     std::vector<UpgradeCandidate> candidates;

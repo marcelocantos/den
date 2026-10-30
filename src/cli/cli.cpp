@@ -469,6 +469,18 @@ void Cli::M::setup() {
             by_provider[&provider].push_back(name);
         }
         for (auto& [provider, names] : by_provider) {
+            // The package index describes Homebrew formulae and casks only. A
+            // package another provider owns (e.g. pip's cowsay) is not that
+            // index entry, so comparing them would report a bogus downgrade
+            // or plan a homebrew install over it. Those providers have no
+            // upgrade source yet; say so rather than misclassify.
+            if (provider->provider_name() != "homebrew") {
+                for (const auto& name : names)
+                    std::cerr << "warning: '" << name << "' is managed by the "
+                              << provider->provider_name()
+                              << " provider; den upgrade does not track its versions yet\n";
+                continue;
+            }
             upgrade_packages(cfg, *provider, idx, names, upgrade_dry_run);
         }
     });

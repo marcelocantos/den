@@ -63,7 +63,10 @@ void uninstall_packages(const Config& config, PackageProvider& provider,
                         const std::vector<std::string>& names);
 
 /// Upgrade packages. If `names` is empty, upgrades all packages whose
-/// installed version differs from the index's available version. Each
+/// installed version differs from the index's available version. Only the
+/// active environment's bucket for `provider` is considered: a package
+/// another provider manages is never compared against `idx` (the daemon's
+/// maintenance cycle reads the homebrew bucket the same way). Each
 /// install is dispatched through `provider`. Installed runtime dependents the
 /// index revision-bumped (same upstream version, higher `_<revision>`) are
 /// upgraded in the same batch; pinned ones are reported and left. An upgrade whose new version
