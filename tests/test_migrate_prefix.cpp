@@ -406,25 +406,30 @@ TEST_SUITE("migrate_prefix") {
         CHECK(r.name == "redis");
     }
 
-    TEST_CASE("plist_with_prefix_path prepends <to>/bin once") {
-        const auto plist = launchd_plist("/x/den", "/x/.den");
-        auto once = plist_with_prefix_path(plist, "/x/.den/prefix");
+    TEST_CASE("plist_with_prefix_path sets the daemon PATH for <to>, idempotently") {
+        const auto plist = launchd_plist("/x/den", "/x/.den", "/opt/homebrew");
+        auto once = plist_with_prefix_path(plist, "/x/.den", "/x/.den/prefix");
         REQUIRE(once);
-        CHECK(has(*once, "<string>/x/.den/prefix/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:"
-                         "/bin</string>"));
-        auto twice = plist_with_prefix_path(*once, "/x/.den/prefix");
+        CHECK(has(*once, "<string>/x/.den/prefix/bin:/x/.den/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+                         "</string>"));
+        CHECK_FALSE(has(*once, "/opt/homebrew"));
+        auto twice = plist_with_prefix_path(*once, "/x/.den", "/x/.den/prefix");
         REQUIRE(twice);
         CHECK(*twice == *once);
-        CHECK_FALSE(plist_with_prefix_path("<plist/>", "/x"));
+        CHECK_FALSE(plist_with_prefix_path("<plist/>", "/x/.den", "/x"));
     }
 
-    TEST_CASE("launchd_plist leads PATH with den's own prefix, not Homebrew's") {
+    TEST_CASE("launchd_plist leads PATH with den's own prefix and never adds Homebrew's") {
         CHECK(has(launchd_plist("/x/den", "/x/.den", "/x/.den/prefix"),
-                  "<string>/x/.den/prefix/bin:/opt/homebrew/bin:"));
+                  "<string>/x/.den/prefix/bin:/x/.den/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>"));
+        CHECK_FALSE(has(launchd_plist("/x/den", "/x/.den", "/x/.den/prefix"), "/opt/homebrew"));
+        CHECK_FALSE(has(launchd_plist("/x/den", "/x/.den", "/x/.den/prefix"), "/usr/local/bin"));
+        // Homebrew's bin is on PATH only when it *is* den's prefix (legacy
+        // shared-prefix installs).
         CHECK(has(launchd_plist("/x/den", "/x/.den", "/opt/homebrew"),
-                  "<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>"));
+                  "<string>/opt/homebrew/bin:/x/.den/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>"));
         CHECK(has(launchd_plist("/x/den", "/x/.den"),
-                  "<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>"));
+                  "<string>/x/.den/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>"));
     }
 
     TEST_CASE("bottle_unpacked_size sums regular file sizes") {
@@ -706,7 +711,8 @@ TEST_SUITE("migrate_prefix") {
         CHECK(f.manifest_version("eee") == "1.0");
         CHECK(has(slurp(spec_path), f.to.string() + "/bin:/usr/bin:/bin"));
         CHECK(has(slurp(spec_path), f.to.string() + "/opt/aaa/bin/aaa"));
-        CHECK(has(slurp(den_plist), "<string>" + f.to.string() + "/bin:/opt/homebrew/bin:"));
+        CHECK(has(slurp(den_plist), "<string>" + launchd_path(f.den_home, f.to) + "</string>"));
+        CHECK_FALSE(has(slurp(den_plist), "/opt/homebrew/bin"));
         CHECK(slurp(brew_plist) == kBrewPlist);
         CHECK(tree_snapshot(f.brew) == brew_before);
         CHECK(has(f.den("migrate-prefix").out, "already uses " + f.to.string()));

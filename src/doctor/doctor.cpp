@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <set>
@@ -501,6 +502,31 @@ void check_source_builds(const Config& config, std::vector<Finding>& findings,
 }
 
 // ---------------------------------------------------------------------------
+// Check: the daemon LaunchAgent's PATH carries Homebrew's bin dirs (#157)
+// ---------------------------------------------------------------------------
+
+void check_daemon_plist_path(const Config& config, std::vector<Finding>& findings) {
+    SPDLOG_DEBUG("check: daemon plist PATH");
+    const char* home = std::getenv("HOME");
+    if (!home || !*home)
+        return;
+    const auto plist = fs::path(home) / "Library" / "LaunchAgents" / "dev.den.daemon.plist";
+    std::ifstream f(plist, std::ios::binary);
+    if (!f)
+        return;
+    std::stringstream ss;
+    ss << f.rdbuf();
+    const auto text = ss.str();
+    // Only this den home's daemon is our concern.
+    const auto den_home = plist_env_value(text, "DEN_HOME");
+    if (!den_home || fs::path(*den_home).lexically_normal() != config.den_home.lexically_normal())
+        return;
+    if (auto problem = stale_daemon_path_problem(plist, text, config.prefix, config.homebrew_prefix);
+        !problem.empty())
+        warn(findings, std::move(problem));
+}
+
+// ---------------------------------------------------------------------------
 // Check: packages held by a version_scheme bump to a lower version
 // ---------------------------------------------------------------------------
 
@@ -901,6 +927,7 @@ std::vector<Finding> doctor(const Config& config) {
     check_keg_linkage(config, findings, notes);
     check_source_builds(config, findings, notes);
     check_held_packages(config, findings);
+    check_daemon_plist_path(config, findings);
     check_file_permissions(config, findings);
     check_host_toolchain(config, findings);
     check_trust_model(config, findings);

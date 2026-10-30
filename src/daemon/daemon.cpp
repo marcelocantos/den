@@ -67,36 +67,6 @@ fs::path log_path(const fs::path& den_home) {
     return den_home / "daemon.log";
 }
 
-// XML-escape a string for interpolation into plist XML attribute values or
-// character data (escapes &, <, >, ", ').
-std::string xml_escape(const std::string& s) {
-    std::string out;
-    out.reserve(s.size());
-    for (char c : s) {
-        switch (c) {
-        case '&':
-            out += "&amp;";
-            break;
-        case '<':
-            out += "&lt;";
-            break;
-        case '>':
-            out += "&gt;";
-            break;
-        case '"':
-            out += "&quot;";
-            break;
-        case '\'':
-            out += "&apos;";
-            break;
-        default:
-            out += c;
-            break;
-        }
-    }
-    return out;
-}
-
 // Read daemon settings from den_home/config.json (falls back to defaults).
 struct DaemonSettings {
     bool auto_download = true;
@@ -191,73 +161,6 @@ bool in_maintenance_window(const std::string& window) {
         // Window wraps midnight.
         return now_mins >= start_mins || now_mins < end_mins;
     }
-}
-
-std::string launchd_plist(const fs::path& den_binary, const fs::path& den_home,
-                          const fs::path& prefix) {
-    std::string bin = xml_escape(den_binary.string());
-    std::string home = xml_escape(den_home.string());
-    // Carry an explicit DEN_PREFIX into the agent so the daemon maintains
-    // the same store as the shell that installed it (store isolation).
-    std::string prefix_env;
-    if (const char* dp = std::getenv("DEN_PREFIX"); dp && *dp) {
-        prefix_env =
-            "        <key>DEN_PREFIX</key>\n        <string>" + xml_escape(dp) + "</string>\n";
-    }
-
-    std::string path = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
-    if (!prefix.empty()) {
-        const auto prefix_bin = (prefix / "bin").lexically_normal().string();
-        if (prefix_bin != "/opt/homebrew/bin" && prefix_bin != "/usr/local/bin") {
-            path = prefix_bin + ":" + path;
-        }
-    }
-
-    std::ostringstream o;
-    o << R"(<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>dev.den.daemon</string>
-
-    <key>ProgramArguments</key>
-    <array>
-        <string>)"
-      << bin << R"(</string>
-        <string>daemon</string>
-        <string>run</string>
-    </array>
-
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>DEN_HOME</key>
-        <string>)"
-      << home << R"(</string>
-)" << prefix_env
-      << R"(        <key>PATH</key>
-        <string>)"
-      << xml_escape(path) << R"(</string>
-    </dict>
-
-    <key>RunAtLoad</key>
-    <true/>
-
-    <key>KeepAlive</key>
-    <true/>
-
-    <key>StandardOutPath</key>
-    <string>)"
-      << home << R"(/daemon.log</string>
-
-    <key>StandardErrorPath</key>
-    <string>)"
-      << home << R"(/daemon.log</string>
-</dict>
-</plist>
-)";
-    return o.str();
 }
 
 void log_daemon(const fs::path& den_home, const std::string& msg) {
