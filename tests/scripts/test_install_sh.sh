@@ -4,7 +4,11 @@
 #
 # Tests for install.sh. Everything external is faked: curl serves canned
 # release assets from a scratch dir (and logs each URL), uname reports a
-# chosen platform, and sudo only logs. PATH holds just those fakes plus
+# chosen platform, and sudo only logs. Like the real tools, the fake curl
+# expands -w variables as real curl does (with -L the releases/latest
+# redirect is followed, so %{redirect_url} is empty and %{url_effective} is
+# the tag URL), and a fake wget (for curl-less hosts) prints -S headers the
+# way wget does, "Location: URL [following]" echo included. PATH holds just those fakes plus
 # symlinks to the plain tools the installer needs, so the real sudo, curl
 # and network are unreachable and a "missing sha256 tool" host can be
 # simulated by leaving shasum/sha256sum out.
@@ -46,9 +50,10 @@ fi
 _tools="$_tmp/tools"     # plain tools, no sha256
 _shabin="$_tmp/shabin"   # just the sha256 tool
 _fake="$_tmp/fake"       # curl, uname, sudo
-mkdir -p "$_tools" "$_shabin" "$_fake"
+_wfake="$_tmp/wfake"     # wget, uname, sudo (no curl)
+mkdir -p "$_tools" "$_shabin" "$_fake" "$_wfake"
 for t in sh tar gzip awk grep sed mktemp rm mv cp chmod mkdir cat dirname \
-    basename id tr head ls env sleep; do
+    basename id tr head tail ls env sleep; do
     _p=$(command -v "$t" 2>/dev/null) || continue
     case "$_p" in /*) ln -s "$_p" "$_tools/$t" ;; esac
 done
@@ -58,16 +63,25 @@ if _p=$(command -v perl 2>/dev/null); then ln -s "$_p" "$_shabin/perl"; fi
 
 cat >"$_fake/curl" <<'TOOL'
 #!/bin/sh
-out=""; url=""; w=""
+out=""; url=""; w=""; follow=no
 while [ $# -gt 0 ]; do
     case "$1" in
         -o) out="$2"; shift 2 ;;
         -w) w="$2"; shift 2 ;;
+        --location) follow=yes; shift ;;
+        --*) shift ;;
+        -*L*) follow=yes; shift ;;
         -*) shift ;;
         *) url="$1"; shift ;;
     esac
 done
 echo "$url" >>"$FAKE_CURL_LOG"
+# wout CODE REDIRECT_URL EFFECTIVE_URL: expand -w the way curl does.
+wout() {
+    [ -n "$w" ] || return 0
+    printf '%s' "$w" | sed -e "s|%{http_code}|$1|g" -e "s|%{redirect_url}|$2|g" \
+        -e "s|%{url_effective}|$3|g"
+}
 # Failure injection: the first FAKE_CURL_FAIL_TIMES requests whose URL
 # contains FAKE_CURL_FAIL_MATCH exit FAKE_CURL_FAIL_CODE (printing
 # FAKE_CURL_FAIL_HTTP for -w), counted in FAKE_CURL_FAIL_STATE.
@@ -84,13 +98,65 @@ if [ -n "${FAKE_CURL_FAIL_CODE:-}" ]; then
 fi
 case "$url" in
     */releases/latest)
-        [ -n "$w" ] && printf 'https://github.com/marcelocantos/den/releases/tag/%s' "$FAKE_LATEST"
+        # GitHub: 302 to releases/tag/<latest>, or (no releases) to releases.
+        if [ -n "$FAKE_LATEST" ]; then
+            loc="${url%/latest}/tag/$FAKE_LATEST"
+        else
+            loc="${url%/latest}"
+        fi
+        if [ "$follow" = yes ]; then
+            wout 200 "" "$loc"
+        else
+            wout 302 "$loc" "$url"
+        fi
         exit 0 ;;
     */releases/download/*)
         f="$FAKE_REL/${url#*/releases/download/}"
-        [ -f "$f" ] || exit 22
+        [ -f "$f" ] || { wout 404 "" "$url"; exit 22; }
+        cp "$f" "$out"
+        wout 200 "" "$url" ;;
+    *) wout 404 "" "$url"; exit 22 ;;
+esac
+TOOL
+# wget, as on a host without curl: --spider -S prints each response's headers
+# (and wget's own "Location: URL [following]") on stderr; -qO DEST URL
+# downloads.
+cat >"$_wfake/wget" <<'TOOL'
+#!/bin/sh
+out=""; url=""; spider=no
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -O|-qO) out="$2"; shift 2 ;;
+        --spider) spider=yes; shift ;;
+        -*) shift ;;
+        *) url="$1"; shift ;;
+    esac
+done
+echo "$url" >>"$FAKE_CURL_LOG"
+case "$url" in
+    */releases/latest)
+        [ "$spider" = yes ] || exit 1
+        if [ -n "$FAKE_LATEST" ]; then
+            loc="${url%/latest}/tag/$FAKE_LATEST"
+        else
+            loc="${url%/latest}"
+        fi
+        {
+            echo "Spider mode enabled. Check if remote file exists."
+            echo "HTTP request sent, awaiting response... "
+            echo "  HTTP/1.1 302 Found"
+            echo "  Location: $loc"
+            echo "Location: $loc [following]"
+            echo "Spider mode enabled. Check if remote file exists."
+            echo "  HTTP/1.1 200 OK"
+            echo "Remote file exists and could contain further links,"
+        } >&2
+        exit 0 ;;
+    */releases/download/*)
+        f="$FAKE_REL/${url#*/releases/download/}"
+        [ -f "$f" ] || exit 8
         cp "$f" "$out" ;;
-    *) exit 22 ;;
+    *) exit 8 ;;
 esac
 TOOL
 cat >"$_fake/uname" <<'TOOL'
@@ -114,7 +180,9 @@ case "$1" in
     *) exit 1 ;;
 esac
 TOOL
-chmod +x "$_fake/curl" "$_fake/uname" "$_fake/sudo"
+chmod +x "$_fake/curl" "$_fake/uname" "$_fake/sudo" "$_wfake/wget"
+ln -s "$_fake/uname" "$_wfake/uname"
+ln -s "$_fake/sudo" "$_wfake/sudo"
 
 # --- canned releases ---------------------------------------------------------
 _real_den="${DEN_TEST_BIN:-}"
@@ -192,7 +260,7 @@ inst() {
     : >"$_tmp/curl.log"
     : >"$_tmp/sudo.log"
     : >"$_tmp/den.log"
-    env -i PATH="$_fake:$_tools:${INST_SHA:-$_shabin}" HOME="$H" SHELL=/bin/sh \
+    env -i PATH="${INST_FAKE:-$_fake}:$_tools:${INST_SHA:-$_shabin}" HOME="$H" SHELL=/bin/sh \
         DEN_NO_MODIFY_PATH=1 DEN_INSTALL_INTERACTIVE=0 \
         FAKE_CURL_LOG="$_tmp/curl.log" FAKE_SUDO_LOG="$_tmp/sudo.log" FAKE_DEN_LOG="$_tmp/den.log" \
         FAKE_REL="$_tmp/rel" FAKE_LATEST=v0.14.0 FAKE_OS=Linux FAKE_ARCH=x86_64 \
@@ -256,6 +324,35 @@ newhome
 inst
 check "latest: resolves via releases/latest" 'curl_has "/releases/latest"'
 check "latest: installs v0.14.0" 'curl_has "/releases/download/v0.14.0/den-0.14.0-linux-x86_64.tar.gz"'
+check "latest: exit 0, v0.14.0 installed" \
+    '[ "$_rc" -eq 0 ] && [ "$("$H/.den/bin/den" --version)" = 0.14.0 ]'
+
+newhome
+inst FAKE_LATEST=v0.15.0-rc.3
+check "latest: an rc tag resolves too" \
+    '[ "$_rc" -eq 0 ] && curl_has "/releases/download/v0.15.0-rc.3/den-0.15.0-linux-x86_64.tar.gz"'
+
+newhome
+inst FAKE_LATEST=
+check "latest: no release to redirect to fails cleanly" \
+    '[ "$_rc" -ne 0 ] && out_has "could not determine latest version" && ! curl_has "/releases/download/"'
+
+# --- default: latest GA, wget only (no curl) ---------------------------------
+# (Set and unset around the call: a prefix assignment on a shell function
+# call persists afterwards in POSIX sh.)
+INST_FAKE="$_wfake"
+newhome
+inst
+check "latest via wget: resolves via releases/latest" 'curl_has "/releases/latest"'
+check "latest via wget: exit 0, v0.14.0 installed" \
+    '[ "$_rc" -eq 0 ] && [ "$("$H/.den/bin/den" --version)" = 0.14.0 ] &&
+     curl_has "/releases/download/v0.14.0/den-0.14.0-linux-x86_64.tar.gz"'
+
+newhome
+inst FAKE_LATEST=
+check "latest via wget: no release fails cleanly" \
+    '[ "$_rc" -ne 0 ] && out_has "could not determine latest version"'
+unset INST_FAKE
 
 # --- invalid versions --------------------------------------------------------
 for v in 0.14 latest 0.14.0-beta.1 1.2.3.4 0.14.0-rc. 0.14.0-rc.x vv0.14.0 '0.14.0;x' 0..14.0; do
