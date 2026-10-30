@@ -331,7 +331,8 @@ TEST_SUITE("cli::integration") {
     // -----------------------------------------------------------------------
     TEST_CASE("search without index reports empty index") {
         const auto out = run_den_fresh("search python");
-        CHECK(out.find("Index is empty") != std::string::npos);
+        CHECK(out.find("error: the package index is empty; run `den update` first") !=
+              std::string::npos);
     }
 
     // -----------------------------------------------------------------------
@@ -581,6 +582,73 @@ TEST_SUITE("cli::integration") {
         CAPTURE(ok.output);
         CHECK(ok.exit_code == 0);
         CHECK(ok.output.find(msg) == std::string::npos);
+    }
+
+    // -----------------------------------------------------------------------
+    // 16c'. `den outdated` and `den search` with a missing, empty or
+    //       unparseable index exit non-zero, like `den upgrade`. They used to
+    //       print "Index is empty" and exit 0, which reads as "nothing
+    //       outdated" / "no matches".
+    // -----------------------------------------------------------------------
+    TEST_CASE("outdated and search with a missing, empty or unparseable index exit non-zero") {
+        TempDir home;
+        const std::string h = home.path.string();
+        const std::string cellar = (home.path / "brew" / "Cellar").string();
+        const std::string msg = "error: the package index is empty; run `den update` first";
+        const std::string forms[] = {"outdated", "search python", "search nosuchpkg",
+                                     "search \"\""};
+
+        auto check_all_refused = [&] {
+            for (const auto& form : forms) {
+                CAPTURE(form);
+                auto r = run_den_with_cellar(form, h, cellar);
+                CAPTURE(r.output);
+                CHECK(r.exit_code == 1);
+                CHECK(r.output.find(msg) != std::string::npos);
+                CHECK(r.output.find("Index is empty") == std::string::npos);
+            }
+        };
+
+        // Missing index (fresh home, no cache/index.json).
+        REQUIRE_FALSE(fs::exists(home.path / "cache" / "index.json"));
+        check_all_refused();
+
+        // Present but empty index.
+        fs::create_directories(home.path / "cache");
+        std::ofstream(home.path / "cache" / "index.json") << R"({"packages": []})";
+        check_all_refused();
+
+        // Unparseable index.
+        std::ofstream(home.path / "cache" / "index.json") << "{not json";
+        check_all_refused();
+
+        // A populated index gets past the guard.
+        std::ofstream(home.path / "cache" / "index.json") << R"({
+  "packages": [{
+    "name": "realpkg", "version": "1.0.0", "description": "present",
+    "homepage": "", "license": "", "artifact_type": "binary",
+    "deprecated": false, "disabled": false,
+    "dependencies": [], "build_dependencies": [], "archives": {}
+  }]
+})";
+        auto out = run_den_with_cellar("outdated", h, cellar);
+        CAPTURE(out.output);
+        CHECK(out.exit_code == 0);
+        CHECK(out.output.find("No packages installed") != std::string::npos);
+        CHECK(out.output.find(msg) == std::string::npos);
+
+        auto hit = run_den_with_cellar("search realpkg", h, cellar);
+        CAPTURE(hit.output);
+        CHECK(hit.exit_code == 0);
+        CHECK(hit.output.find("realpkg") != std::string::npos);
+        CHECK(hit.output.find("1 packages found.") != std::string::npos);
+
+        // No match in a populated index is still success, not an error.
+        auto miss = run_den_with_cellar("search nosuchpkg", h, cellar);
+        CAPTURE(miss.output);
+        CHECK(miss.exit_code == 0);
+        CHECK(miss.output.find("No packages matching 'nosuchpkg'.") != std::string::npos);
+        CHECK(miss.output.find(msg) == std::string::npos);
     }
 
     // -----------------------------------------------------------------------
