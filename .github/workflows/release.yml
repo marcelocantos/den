@@ -86,8 +86,6 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           checksums="den-${version}-checksums.txt"
-          for asset in $(gh release view "$GITHUB_REF_NAME" --json assets -q '.assets[].name' | grep '\.sha256$'); do
-            gh release download "$GITHUB_REF_NAME" -p "$asset" -D /tmp/checksums
-          done
-          cat /tmp/checksums/*.sha256 > "${checksums}"
+          gh release download "$GITHUB_REF_NAME" -p "den-${version}-*.tar.gz.sha256" -D /tmp/checksums
+          cat /tmp/checksums/den-"${version}"-*.tar.gz.sha256 > "${checksums}"
           gh release upload "$GITHUB_REF_NAME" "${checksums}" --clobber

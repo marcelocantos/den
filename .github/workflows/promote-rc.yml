@@ -142,18 +142,24 @@ jobs:
       # -----------------------------------------------------------------------
       # 5. Download all assets from the RC release.
       # -----------------------------------------------------------------------
+      #    Only den's own assets: the RC also carries the Linux harness log
+      #    (harness-linux-logs-<rc>.tar.gz), which stays on the RC and is
+      #    not part of the GA release. scripts/check-release-assets.py
+      #    (ctest script_test_release_assets) guards these patterns.
       - name: Download RC assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           RC_TAG="${{ env.RC_TAG }}"
+          GA_TAG="${{ env.GA_TAG }}"
+          VERSION="${GA_TAG#v}"
           mkdir -p rc-assets
           gh release download "$RC_TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --dir rc-assets \
-            --pattern '*.tar.gz' \
-            --pattern '*.sha256' \
-            --pattern '*-checksums.txt'
+            --pattern "den-${VERSION}-*.tar.gz" \
+            --pattern "den-${VERSION}-*.tar.gz.sha256" \
+            --pattern "den-${VERSION}-checksums.txt"
 
           echo "Downloaded assets:"
           ls -lh rc-assets/
@@ -237,14 +243,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           GA_TAG="${{ env.GA_TAG }}"
+          VERSION="${GA_TAG#v}"
 
           gh release create "$GA_TAG" \
             --target "${{ env.RC_SHA }}" \
             --title "den ${GA_TAG}" \
             --notes-file ga-release-notes.md \
-            rc-assets/*.tar.gz \
-            rc-assets/*.sha256 \
-            rc-assets/*-checksums.txt
+            rc-assets/den-"${VERSION}"-*.tar.gz \
+            rc-assets/den-"${VERSION}"-*.tar.gz.sha256 \
+            "rc-assets/den-${VERSION}-checksums.txt"
 
       # -----------------------------------------------------------------------
       # 8. Print promotion summary.

@@ -40,6 +40,10 @@ den is not distributed through Homebrew: there is no tap formula and
 no den bottles, and nothing in the release path runs tapper.
 `scripts/check-no-brew-release.sh` (ctest `script_test_no_brew_release`)
 fails if a workflow or the Makefile brings that path back.
+`scripts/check-release-assets.py` (ctest `script_test_release_assets`)
+fails if a release step's asset globs would also pick up a non-den file
+(such as the RC's `harness-linux-logs-<rc>.tar.gz`) or stop publishing
+one of the seven `den-<v>-*` assets.
 
 ## Architecture
 
