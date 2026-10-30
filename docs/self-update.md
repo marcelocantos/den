@@ -54,6 +54,30 @@ re-bootstrapping a job drops the launch constraint launchd recorded for the old
 binary — not on a documented guarantee. The real fix is signing den with a
 team identity, so the recorded requirement stays satisfied across updates.
 
+## The daemon's PATH
+
+The daemon's LaunchAgent (`~/Library/LaunchAgents/dev.den.daemon.plist`) sets
+the daemon's `PATH` to den's own layout (den's prefix `bin`, `~/.den/bin`, then
+the system directories), not Homebrew's. When a den release changes that layout,
+the installed plist is brought up to date in two places, by one shared
+implementation:
+
+- `den self-update`, before it restarts the daemon;
+- the daemon itself, each time it starts. An upgrade from a den that predates
+  the refresh is therefore right in one step: the old binary restarts the
+  daemon, and the new daemon corrects its plist and switches to the corrected
+  `PATH` for that run (launchd started it with the plist's old one).
+
+Either way the refresh only touches a plist whose `DEN_HOME` is this den home
+(and whose prefix is known: its own `DEN_PREFIX`, or den's prefix when this
+process is not running with `DEN_PREFIX`), saves the previous plist to
+`~/.den/dev.den.daemon.plist.bak`, and writes one line to `~/.den/daemon.log`.
+A plist that has been edited by hand (keys den does not write, or no `PATH`
+entry) is left alone and reported instead. `den daemon install` regenerates the
+plist, which fixes its `PATH` when a hand-edited plist was skipped.
+`launchctl print` keeps showing the old `PATH` for the running job until its
+next restart; the plist and the daemon's own process are already corrected.
+
 ## `last exit reason = OS_REASON_CODESIGNING`
 
 `launchctl print gui/$(id -u)/dev.den.daemon` may show

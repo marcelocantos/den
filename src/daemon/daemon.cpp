@@ -17,6 +17,7 @@
 #include "../trust/degraded_installs.h"
 #include "../trust/unattended.h"
 #include "inuse.h"
+#include "plist_refresh.h"
 #include "trust_screen.h"
 #include "upgrade_pass.h"
 
@@ -916,6 +917,13 @@ void run_daemon(const Config& config, bool once) {
     SPDLOG_INFO("daemon: started (pid {})", ::getpid());
     log_daemon(den_home, std::string("daemon started (pid ") + std::to_string(::getpid()) +
                              ", den " + DEN_VERSION + ")");
+
+    // ---- LaunchAgent PATH --------------------------------------------------
+    // The same refresh `den self-update` does, so a daemon restarted by an
+    // older den (which never refreshed it) still corrects its plist, and runs
+    // this time with the corrected PATH rather than the stale one launchd
+    // gave it.
+    refresh_daemon_plist_at_startup(config);
 
     // ---- Main loop ---------------------------------------------------------
     while (!g_terminate) {
