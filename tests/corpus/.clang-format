@@ -1,0 +1,4 @@
+# tests/corpus/homebrew-core is a vendored git submodule, not den source.
+# CI formats everything under tests/, so switch formatting off here.
+DisableFormat: true
+SortIncludes: Never

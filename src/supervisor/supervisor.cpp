@@ -403,7 +403,7 @@ int run_supervisor_loop(const Config& config, const ServiceSpec& spec) {
     }
 
     // SIGTERM handler.
-    struct sigaction sa{};
+    struct sigaction sa {};
     sa.sa_handler = supervisor_sigterm;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
@@ -722,7 +722,7 @@ void follow_service_log(const Config& config, const std::string& name) {
 
     // Install interrupt handler so SIGINT/SIGTERM bail out cleanly.
     g_stop = 0;
-    struct sigaction sa{};
+    struct sigaction sa {};
     sa.sa_handler = supervisor_sigterm;
     sigemptyset(&sa.sa_mask);
     ::sigaction(SIGINT, &sa, nullptr);

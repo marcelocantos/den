@@ -52,8 +52,8 @@ void write_manifest(const fs::path& den_home, const std::string& env_path, const
 /// Lock the manifest file, read it, pass to fn for modification, then
 /// write back atomically. Uses flock for concurrency safety.
 template <typename F>
-auto with_manifest(const fs::path& den_home, const std::string& env_path, F&& fn)
-    -> decltype(fn(std::declval<Manifest&>()));
+auto with_manifest(const fs::path& den_home, const std::string& env_path,
+                   F&& fn) -> decltype(fn(std::declval<Manifest&>()));
 
 /// Resolve the effective package set by walking the parent chain (explicit
 /// `origin`, else the path parent; see env_parent).

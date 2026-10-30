@@ -146,11 +146,11 @@ struct UntrackedPackage {
 /// store that no manifest records are not part of it (they are for `den
 /// doctor` / `den cleanup`), nor are other kegs of a recorded package.
 struct OutdatedPlan {
-    std::size_t homebrew = 0;                 // packages in the homebrew bucket
-    std::vector<PendingUpgrade> pending;      // index newer: an upgrade is available
-    std::vector<PendingUpgrade> index_older;  // index older: never downgraded
-    std::vector<DeferredUpgrade> held;        // VersionDelta::Held, with its reason
-    std::vector<UntrackedPackage> untracked;  // other providers, sorted by name
+    std::size_t homebrew = 0;                // packages in the homebrew bucket
+    std::vector<PendingUpgrade> pending;     // index newer: an upgrade is available
+    std::vector<PendingUpgrade> index_older; // index older: never downgraded
+    std::vector<DeferredUpgrade> held;       // VersionDelta::Held, with its reason
+    std::vector<UntrackedPackage> untracked; // other providers, sorted by name
 };
 
 /// Build the OutdatedPlan for `config`'s active environment against `idx`.

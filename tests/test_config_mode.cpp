@@ -50,7 +50,7 @@ struct UmaskGuard {
 };
 
 static unsigned file_mode(const fs::path& p) {
-    struct stat st{};
+    struct stat st {};
     REQUIRE(::stat(p.c_str(), &st) == 0);
     return st.st_mode & 07777u;
 }

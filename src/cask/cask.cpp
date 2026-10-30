@@ -573,7 +573,7 @@ namespace {
 
 /// True when `path` is listed in `field` of any den cask receipt.
 bool listed_in_den_receipt(const Config& config, const fs::path& app_path,
-                           std::vector<fs::path> CaskReceipt::* field) {
+                           std::vector<fs::path> CaskReceipt::*field) {
     const auto room = den_caskroom(config);
     std::error_code ec;
     if (!fs::is_directory(room, ec) || ec) {

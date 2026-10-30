@@ -318,9 +318,7 @@ TEST_SUITE("archive::symlink_policy") {
         Tmp t;
         auto victim_dir = t.path / "victim";
         fs::create_directories(victim_dir);
-        {
-            std::ofstream(victim_dir / "secret") << "s\n";
-        }
+        { std::ofstream(victim_dir / "secret") << "s\n"; }
         auto ar = make_tar(t.path / "a.tar", {
                                                  link("pkg/1.0/v", victim_dir.string()),
                                                  hardlink("pkg/1.0/alias", "pkg/1.0/v/secret"),

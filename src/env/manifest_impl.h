@@ -56,8 +56,8 @@ inline fs::path manifest_dir(const fs::path& den_home, const std::string& env_pa
 } // namespace detail
 
 template <typename F>
-auto with_manifest(const fs::path& den_home, const std::string& env_path, F&& fn)
-    -> decltype(fn(std::declval<Manifest&>())) {
+auto with_manifest(const fs::path& den_home, const std::string& env_path,
+                   F&& fn) -> decltype(fn(std::declval<Manifest&>())) {
     auto dir = detail::manifest_dir(den_home, env_path);
     fs::create_directories(dir);
 

@@ -183,7 +183,7 @@ HostFacts detect_host_facts() {
     facts.sdk_path = macos_sdk_path();
 #else
     read_os_release(facts.os_name, facts.os_version);
-    struct utsname uts{};
+    struct utsname uts {};
     if (uname(&uts) == 0) {
         facts.kernel = std::string(uts.release);
     }
@@ -289,7 +289,7 @@ std::optional<MacOsVersion> detect_macos_version() {
         product = std::string(buf.data(), strnlen(buf.data(), len));
     }
     std::optional<std::string> darwin;
-    struct utsname uts{};
+    struct utsname uts {};
     if (uname(&uts) == 0) {
         darwin = std::string(uts.release);
     }

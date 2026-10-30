@@ -158,7 +158,7 @@ TEST_SUITE("self-update --version") {
         CHECK(a != b);
         CHECK(fs::is_directory(a));
         CHECK(fs::is_directory(b));
-        struct stat st{};
+        struct stat st {};
         REQUIRE(::stat(a.c_str(), &st) == 0);
         CHECK((st.st_mode & 0777) == 0700);
         fs::remove_all(a);
@@ -198,13 +198,13 @@ TEST_SUITE("self-update --version") {
         make_tarball(tarball, {{"den", "new bytes"}});
         auto exe = t.path / "bin" / "den";
         write_file(exe, "old bytes");
-        struct stat before{};
+        struct stat before {};
         REQUIRE(::stat(exe.c_str(), &before) == 0);
         std::ifstream held(exe, std::ios::binary); // stands in for the running process
 
         install_update_tarball(tarball, exe);
 
-        struct stat after{};
+        struct stat after {};
         REQUIRE(::stat(exe.c_str(), &after) == 0);
         CHECK(after.st_ino != before.st_ino);
         CHECK(slurp(exe) == "new bytes");
@@ -279,12 +279,12 @@ TEST_CASE("install_update_tarball skip_if_identical leaves an identical binary a
     make_tarball(tarball, {{"den", "same bytes"}, {"share/den/known_hashes.json", "{}\n"}});
     auto exe = t.path / "bin" / "den";
     write_file(exe, "same bytes");
-    struct stat before{};
+    struct stat before {};
     REQUIRE(::stat(exe.c_str(), &before) == 0);
 
     CHECK_FALSE(install_update_tarball(tarball, exe, /*skip_if_identical=*/true));
 
-    struct stat after{};
+    struct stat after {};
     REQUIRE(::stat(exe.c_str(), &after) == 0);
     CHECK(after.st_ino == before.st_ino); // not replaced
     CHECK(slurp(exe) == "same bytes");
@@ -319,10 +319,10 @@ TEST_CASE("install_update_tarball without skip (--force) reinstalls identical by
     make_tarball(tarball, {{"den", "same bytes"}});
     auto exe = t.path / "bin" / "den";
     write_file(exe, "same bytes");
-    struct stat before{};
+    struct stat before {};
     REQUIRE(::stat(exe.c_str(), &before) == 0);
     CHECK(install_update_tarball(tarball, exe));
-    struct stat after{};
+    struct stat after {};
     REQUIRE(::stat(exe.c_str(), &after) == 0);
     CHECK(after.st_ino != before.st_ino); // fresh inode
     CHECK(slurp(exe) == "same bytes");

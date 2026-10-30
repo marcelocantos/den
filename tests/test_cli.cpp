@@ -706,15 +706,13 @@ TEST_SUITE("cli::integration") {
         TempDir home;
         const std::string h = home.path.string();
         const fs::path cellar = home.path / "pfx" / "Cellar";
-        for (const auto& [name, version] :
-             std::vector<std::pair<std::string, std::string>>{
+        for (const auto& [name, version] : std::vector<std::pair<std::string, std::string>>{
                  {"jq", "1.5"}, {"jq", "1.6"}, {"cowsay", "3.04_1"}}) {
             const auto k = cellar / name / version;
             fs::create_directories(k / "bin");
             std::ofstream(k / "bin" / name) << "#!/bin/sh\n";
-            std::ofstream(k / "INSTALL_RECEIPT.json")
-                << R"({"source":{"versions":{"stable":")" << version
-                << R"(","version_scheme":0}}})";
+            std::ofstream(k / "INSTALL_RECEIPT.json") << R"({"source":{"versions":{"stable":")"
+                                                      << version << R"(","version_scheme":0}}})";
         }
         fs::create_directories(home.path / "manifests" / "ROOT");
         std::ofstream(home.path / "manifests" / "ROOT" / "manifest.json")
@@ -745,7 +743,7 @@ TEST_SUITE("cli::integration") {
         CAPTURE(out.output);
         CHECK(out.exit_code == 0);
         CHECK(out.output.find("1.6 -> 1.7.1") != std::string::npos);
-        CHECK(count(out.output, "1.7.1") == 1);           // jq listed once
+        CHECK(count(out.output, "1.7.1") == 1);                // jq listed once
         CHECK(out.output.find("1.5 ->") == std::string::npos); // older keg not listed
         CHECK(out.output.find("3.04_1") == std::string::npos); // stray keg not listed
         CHECK(out.output.find("3.8.4") == std::string::npos);  // not compared to homebrew
