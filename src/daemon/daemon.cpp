@@ -34,6 +34,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <sys/file.h>
+#include <tuple>
 #include <unistd.h>
 
 namespace den {
@@ -511,6 +512,30 @@ std::vector<PendingUpgrade> compute_pending(const std::map<std::string, std::str
         }
     }
     return out; // std::map iteration → already sorted by name
+}
+
+OutdatedPlan outdated_plan(const Config& config, const PackageIndex& idx) {
+    OutdatedPlan plan;
+    const auto per = resolve_per_provider(config.den_home, active_env_path(config.den_home));
+    for (const auto& [provider, pkgs] : per) {
+        if (provider == "homebrew") {
+            plan.homebrew = pkgs.size();
+            plan.pending = compute_pending(
+                pkgs, idx, &plan.index_older,
+                [&config](const std::string& name, const std::string& version) {
+                    return installed_version_scheme(config.store / keg_name(name) / version);
+                },
+                &plan.held);
+            continue;
+        }
+        for (const auto& [name, version] : pkgs)
+            plan.untracked.push_back({name, version, provider});
+    }
+    std::sort(plan.untracked.begin(), plan.untracked.end(),
+              [](const UntrackedPackage& a, const UntrackedPackage& b) {
+                  return std::tie(a.name, a.provider) < std::tie(b.name, b.provider);
+              });
+    return plan;
 }
 
 std::string index_older_message(const PendingUpgrade& p) {
