@@ -34,8 +34,10 @@
 #   VR_DEP_PARENT      formula with a dependency      (default: jq)
 #   VR_DEP_CHILD       its dependency                 (default: oniguruma)
 #   VR_FONT_CASK       font cask                      (default: font-hack)
-#   VR_APP_CASK        app cask                       (default: macdown)
-#   VR_APP_BUNDLE      bundle the app cask installs   (default: MacDown.app)
+#   VR_APP_CASK        app cask                       (default: hex-fiend)
+#   VR_APP_BUNDLE      bundle the app cask installs   (default: Hex Fiend.app)
+#                      The app-cask step fails at once, naming the cask, if
+#                      the index marks VR_APP_CASK disabled upstream.
 #   VR_ONLY            space-separated step names to run (default: all)
 #   VR_SKIP            space-separated step names to skip
 #   VR_SKIP_LAUNCHD    1 = skip the LaunchAgent step (same as VR_SKIP=launchd)
@@ -175,8 +177,8 @@ VR_TAP=den-fixture/verify-release
 VR_TAP_FORMULA=den-vr-hello
 VR_TAP_VERSION=1.0.0
 VR_FONT_CASK=${VR_FONT_CASK:-font-hack}
-VR_APP_CASK=${VR_APP_CASK:-macdown}
-VR_APP_BUNDLE=${VR_APP_BUNDLE:-MacDown.app}
+VR_APP_CASK=${VR_APP_CASK:-hex-fiend}
+VR_APP_BUNDLE=${VR_APP_BUNDLE:-Hex Fiend.app}
 VR_LAUNCHD_SECS=${VR_LAUNCHD_SECS:-60}
 VR_REPLICA_ROOT=${VR_REPLICA_ROOT:-$VR_INSTALL_DIR}
 [ "${VR_SKIP_LAUNCHD:-0}" = 1 ] && VR_SKIP="${VR_SKIP:-} launchd"
@@ -478,7 +480,19 @@ s_font_cask() {
     n=$(find "$VR_FONTDIR" -type f | wc -l | tr -d ' ')
     echo "fonts after uninstall: $n"; [ "$n" -eq 0 ]
 }
+# fixture_disabled_ NAME KNOB: fail, naming NAME and the knob that picks it,
+# when the index (as `den update` left it) marks NAME disabled upstream; den
+# would refuse it anyway, but that failure says nothing about the fixture.
+fixture_disabled_() {
+    local why rc=0
+    why=$(python3 "$SCRIPT_DIR/index-disabled.py" "$VR_DEN_HOME/cache/index.json" "$1") || rc=$?
+    [ "$rc" -eq 0 ] || return 0
+    echo "verify-release: fixture cask $why."
+    echo "verify-release: set $2 to an enabled app cask (and VR_APP_BUNDLE to the bundle it installs)."
+    return 1
+}
 s_app_cask() {
+    fixture_disabled_ "$VR_APP_CASK" VR_APP_CASK
     den install "$VR_APP_CASK"
     [ -d "$VR_APPDIR/$VR_APP_BUNDLE" ] || { echo "missing $VR_APPDIR/$VR_APP_BUNDLE"; return 1; }
     den uninstall "$VR_APP_CASK"
