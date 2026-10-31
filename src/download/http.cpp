@@ -65,6 +65,8 @@ namespace {
 struct FetchAttempt {
     CURLcode res = CURLE_OK;
     long http_code = 0;
+    /// Retry-After in seconds (either form, parsed by libcurl); 0 if absent.
+    long long retry_after = 0;
     bool size_cap = false;
     std::string body;
     std::string error;
@@ -91,6 +93,9 @@ FetchAttempt fetch_once(const std::string& url) {
 
     a.res = curl_easy_perform(curl);
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &a.http_code);
+    curl_off_t retry_after = 0;
+    if (curl_easy_getinfo(curl, CURLINFO_RETRY_AFTER, &retry_after) == CURLE_OK)
+        a.retry_after = static_cast<long long>(retry_after);
     curl_easy_cleanup(curl);
 
     if (a.res != CURLE_OK) {
@@ -119,21 +124,25 @@ std::string fetch_url(const std::string& url) {
 }
 
 bool is_transient_fetch_failure(int curl_code, long http_code) {
+    // Copied from install.sh's is_transient_download_error(), which retries
+    // curl exit codes 5|6|7|16|18|28|35|52|55|56|92, and HTTP 408|429|5xx
+    // (curl exit 22). The two lists must stay in sync: change both or neither.
     switch (static_cast<CURLcode>(curl_code)) {
     case CURLE_OK:
-        // Transfer completed: only a server error is worth another try.
-        return http_code >= 500 && http_code <= 599;
-    case CURLE_COULDNT_RESOLVE_PROXY:
-    case CURLE_COULDNT_RESOLVE_HOST:
-    case CURLE_COULDNT_CONNECT:
-    case CURLE_HTTP2:
-    case CURLE_PARTIAL_FILE:
-    case CURLE_OPERATION_TIMEDOUT:
-    case CURLE_SSL_CONNECT_ERROR:
-    case CURLE_GOT_NOTHING:
-    case CURLE_SEND_ERROR:
-    case CURLE_RECV_ERROR:
-    case CURLE_HTTP2_STREAM:
+        // Transfer completed: retry a request timeout, a rate limit, or a
+        // server error. Every other status (404, 403, ...) is final.
+        return http_code == 408 || http_code == 429 || (http_code >= 500 && http_code <= 599);
+    case CURLE_COULDNT_RESOLVE_PROXY: // 5
+    case CURLE_COULDNT_RESOLVE_HOST:  // 6
+    case CURLE_COULDNT_CONNECT:       // 7
+    case CURLE_HTTP2:                 // 16
+    case CURLE_PARTIAL_FILE:          // 18
+    case CURLE_OPERATION_TIMEDOUT:    // 28
+    case CURLE_SSL_CONNECT_ERROR:     // 35
+    case CURLE_GOT_NOTHING:           // 52
+    case CURLE_SEND_ERROR:            // 55
+    case CURLE_RECV_ERROR:            // 56
+    case CURLE_HTTP2_STREAM:          // 92
         return true;
     default:
         return false;
@@ -155,14 +164,29 @@ std::string fetch_url_retrying(const std::string& url, const FetchRetryPolicy& p
             throw DownloadError(a.error + " (gave up after " + std::to_string(attempt) +
                                 (attempt == 1 ? " attempt)" : " attempts)"));
         }
-        const auto delay = policy.base_delay * attempt;
+        std::chrono::milliseconds delay = policy.base_delay * attempt;
+        std::string note;
+        if (a.http_code == 429 && a.retry_after > 0) {
+            // Honour the server's Retry-After, within the ceiling. Clamp in
+            // seconds first so a huge value cannot overflow milliseconds.
+            constexpr long long kDay = 24 * 60 * 60;
+            delay = std::chrono::seconds(a.retry_after < kDay ? a.retry_after : kDay);
+            note = " (Retry-After: " + std::to_string(a.retry_after) + " s";
+            note += delay > policy.max_delay ? ", capped)" : ")";
+        }
+        if (delay > policy.max_delay)
+            delay = policy.max_delay;
+        if (delay.count() < 0)
+            delay = std::chrono::milliseconds(0);
         const std::string msg = a.error + "; retrying (" + std::to_string(attempt) + " of " +
                                 std::to_string(max_attempts - 1) + ") in " +
-                                std::to_string(delay.count()) + " ms";
+                                std::to_string(delay.count()) + " ms" + note;
         SPDLOG_WARN("{}", msg);
         if (policy.on_retry)
             policy.on_retry(msg);
-        if (delay.count() > 0)
+        if (policy.sleep)
+            policy.sleep(delay);
+        else if (delay.count() > 0)
             std::this_thread::sleep_for(delay);
     }
 }

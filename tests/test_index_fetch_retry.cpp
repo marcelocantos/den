@@ -22,6 +22,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <ctime>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -36,14 +37,18 @@ enum class FailMode {
     Reset,    ///< read the request, then reset the connection (RST)
     Truncate, ///< promise more body than is sent, then close
     Status503,
+    Status408,
+    Status429, ///< with the server's `retry_after` header, if non-empty
 };
 
 /// Serves `body` (or `status` with no body) on 127.0.0.1, failing the first
 /// `fail_first` connections with `mode`. One connection per request.
 class FlakyServer {
   public:
-    FlakyServer(int fail_first, FailMode mode, std::string body, int status = 200)
-        : fail_first_(fail_first), mode_(mode), body_(std::move(body)), status_(status) {
+    FlakyServer(int fail_first, FailMode mode, std::string body, int status = 200,
+                std::string retry_after = {})
+        : fail_first_(fail_first), mode_(mode), body_(std::move(body)), status_(status),
+          retry_after_(std::move(retry_after)) {
         listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
         REQUIRE(listen_fd_ >= 0);
         int one = 1;
@@ -138,6 +143,16 @@ class FlakyServer {
                 send_all(fd, "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n"
                              "Connection: close\r\n\r\n");
                 break;
+            case FailMode::Status408:
+                send_all(fd, "HTTP/1.1 408 Request Timeout\r\nContent-Length: 0\r\n"
+                             "Connection: close\r\n\r\n");
+                break;
+            case FailMode::Status429:
+                send_all(fd, "HTTP/1.1 429 Too Many Requests\r\nContent-Length: 0\r\n" +
+                                 (retry_after_.empty() ? std::string{}
+                                                       : "Retry-After: " + retry_after_ + "\r\n") +
+                                 "Connection: close\r\n\r\n");
+                break;
             }
             ::close(fd);
             return;
@@ -153,6 +168,7 @@ class FlakyServer {
     FailMode mode_;
     std::string body_;
     int status_;
+    std::string retry_after_;
     int listen_fd_ = -1;
     int port_ = 0;
     std::atomic<bool> stop_{false};
@@ -180,16 +196,33 @@ struct NoProxyForLoopback {
     }
 };
 
-/// No sleeping between tries; records each retry message.
+using std::chrono::milliseconds;
+
+/// Never sleeps: records each retry message and each computed delay instead.
+/// Zero backoff by default; pass real values to check the delay arithmetic.
 struct FastPolicy {
     std::vector<std::string> retries;
+    std::vector<milliseconds> delays;
     FetchRetryPolicy policy;
-    explicit FastPolicy(int max_attempts = 3) {
+    explicit FastPolicy(int max_attempts = 3, milliseconds base = milliseconds(0),
+                        milliseconds max = milliseconds(4000)) {
         policy.max_attempts = max_attempts;
-        policy.base_delay = std::chrono::milliseconds(0);
+        policy.base_delay = base;
+        policy.max_delay = max;
         policy.on_retry = [this](const std::string& m) { retries.push_back(m); };
+        policy.sleep = [this](milliseconds d) { delays.push_back(d); };
     }
 };
+
+/// An RFC 7231 HTTP-date `secs` seconds from now.
+std::string http_date_in(long secs) {
+    std::time_t t = std::time(nullptr) + secs;
+    std::tm tm{};
+    ::gmtime_r(&t, &tm);
+    char buf[64];
+    std::strftime(buf, sizeof buf, "%a, %d %b %Y %H:%M:%S GMT", &tm);
+    return buf;
+}
 
 std::string error_of(auto&& fn) {
     try {
@@ -211,12 +244,15 @@ TEST_SUITE("download::fetch_retry") {
             CAPTURE(c);
             CHECK(is_transient_fetch_failure(c, 0));
         }
-        CHECK(is_transient_fetch_failure(CURLE_OK, 500));
-        CHECK(is_transient_fetch_failure(CURLE_OK, 503));
-        CHECK_FALSE(is_transient_fetch_failure(CURLE_OK, 200));
-        CHECK_FALSE(is_transient_fetch_failure(CURLE_OK, 404));
-        CHECK_FALSE(is_transient_fetch_failure(CURLE_OK, 403));
-        CHECK_FALSE(is_transient_fetch_failure(CURLE_OK, 429));
+        for (long s : {408L, 429L, 500L, 503L, 599L}) {
+            CAPTURE(s);
+            CHECK(is_transient_fetch_failure(CURLE_OK, s));
+        }
+        for (long s :
+             {200L, 304L, 400L, 401L, 403L, 404L, 407L, 409L, 410L, 428L, 430L, 451L, 600L}) {
+            CAPTURE(s);
+            CHECK_FALSE(is_transient_fetch_failure(CURLE_OK, s));
+        }
         CHECK_FALSE(is_transient_fetch_failure(CURLE_FILESIZE_EXCEEDED, 200));
         CHECK_FALSE(is_transient_fetch_failure(CURLE_URL_MALFORMAT, 0));
         CHECK_FALSE(is_transient_fetch_failure(CURLE_PEER_FAILED_VERIFICATION, 0));
@@ -226,6 +262,97 @@ TEST_SUITE("download::fetch_retry") {
         FetchRetryPolicy p;
         CHECK(p.max_attempts == 3);
         CHECK(p.base_delay == std::chrono::milliseconds(2000));
+        CHECK(p.max_delay == std::chrono::milliseconds(4000));
+        CHECK_FALSE(p.sleep);
+    }
+
+    TEST_CASE("the backoff is linear and capped at max_delay") {
+        NoProxyForLoopback np;
+        FlakyServer srv(3, FailMode::Reset, "hello");
+        FastPolicy fp(4, milliseconds(2000), milliseconds(3000));
+        CHECK(fetch_url_retrying(srv.url("/formula.json"), fp.policy) == "hello");
+        CHECK(fp.delays == std::vector<milliseconds>{milliseconds(2000), milliseconds(3000),
+                                                     milliseconds(3000)});
+        REQUIRE(fp.retries.size() == 3);
+        CHECK(fp.retries[0].find("in 2000 ms") != std::string::npos);
+        CHECK(fp.retries[1].find("in 3000 ms") != std::string::npos);
+    }
+
+    TEST_CASE("a 408 is retried") {
+        NoProxyForLoopback np;
+        FlakyServer srv(1, FailMode::Status408, "ok");
+        FastPolicy fp(3);
+        CHECK(fetch_url_retrying(srv.url("/formula.json"), fp.policy) == "ok");
+        CHECK(srv.connections() == 2);
+        REQUIRE(fp.retries.size() == 1);
+        CHECK(fp.retries[0].find("HTTP 408") == 0);
+    }
+
+    TEST_CASE("a 429's Retry-After is honoured, capped at max_delay") {
+        NoProxyForLoopback np;
+        SUBCASE("seconds form, over the cap") {
+            FlakyServer srv(2, FailMode::Status429, "ok", 200, "120");
+            FastPolicy fp(3, milliseconds(2000), milliseconds(4000));
+            CHECK(fetch_url_retrying(srv.url("/formula.json"), fp.policy) == "ok");
+            CHECK(srv.connections() == 3);
+            CHECK(fp.delays == std::vector<milliseconds>{milliseconds(4000), milliseconds(4000)});
+            REQUIRE(fp.retries.size() == 2);
+            CHECK(fp.retries[0].find("HTTP 429") == 0);
+            CHECK(fp.retries[0].find("in 4000 ms (Retry-After: 120 s, capped)") !=
+                  std::string::npos);
+        }
+        SUBCASE("seconds form, under the cap, replaces the backoff") {
+            FlakyServer srv(1, FailMode::Status429, "ok", 200, "1");
+            FastPolicy fp(3, milliseconds(2000), milliseconds(4000));
+            CHECK(fetch_url_retrying(srv.url("/formula.json"), fp.policy) == "ok");
+            CHECK(fp.delays == std::vector<milliseconds>{milliseconds(1000)});
+            REQUIRE(fp.retries.size() == 1);
+            CHECK(fp.retries[0].find("in 1000 ms (Retry-After: 1 s)") != std::string::npos);
+        }
+        SUBCASE("HTTP-date form, over the cap") {
+            FlakyServer srv(1, FailMode::Status429, "ok", 200, http_date_in(3600));
+            FastPolicy fp(3, milliseconds(2000), milliseconds(4000));
+            CHECK(fetch_url_retrying(srv.url("/formula.json"), fp.policy) == "ok");
+            CHECK(fp.delays == std::vector<milliseconds>{milliseconds(4000)});
+            REQUIRE(fp.retries.size() == 1);
+            CHECK(fp.retries[0].find(", capped)") != std::string::npos);
+        }
+    }
+
+    TEST_CASE("a 429 without Retry-After uses the normal backoff") {
+        NoProxyForLoopback np;
+        FlakyServer srv(2, FailMode::Status429, "ok");
+        FastPolicy fp(3, milliseconds(2000), milliseconds(4000));
+        CHECK(fetch_url_retrying(srv.url("/formula.json"), fp.policy) == "ok");
+        CHECK(srv.connections() == 3);
+        CHECK(fp.delays == std::vector<milliseconds>{milliseconds(2000), milliseconds(4000)});
+        REQUIRE(fp.retries.size() == 2);
+        CHECK(fp.retries[0].find("Retry-After") == std::string::npos);
+    }
+
+    TEST_CASE("a 429 that persists gives up after max attempts") {
+        NoProxyForLoopback np;
+        FlakyServer srv(10, FailMode::Status429, "ok", 200, "120");
+        FastPolicy fp(3, milliseconds(2000), milliseconds(4000));
+        const std::string err =
+            error_of([&] { fetch_url_retrying(srv.url("/formula.json"), fp.policy); });
+        CHECK(srv.connections() == 3);
+        CHECK(err ==
+              "HTTP 429 fetching " + srv.url("/formula.json") + " (gave up after 3 attempts)");
+    }
+
+    TEST_CASE("other 4xx statuses are not retried") {
+        NoProxyForLoopback np;
+        for (int s : {400, 403, 410}) {
+            CAPTURE(s);
+            FlakyServer srv(0, FailMode::Reset, "", s);
+            FastPolicy fp(3);
+            const std::string err =
+                error_of([&] { fetch_url_retrying(srv.url("/formula.json"), fp.policy); });
+            CHECK(err == "HTTP " + std::to_string(s) + " fetching " + srv.url("/formula.json"));
+            CHECK(srv.connections() == 1);
+            CHECK(fp.retries.empty());
+        }
     }
 
     TEST_CASE("succeeds when fewer than max attempts fail, logging each retry") {
