@@ -284,6 +284,8 @@ download() {
 }
 
 # is_transient_download_error CURL_EXIT HTTP_CODE
+# Keep in sync with is_transient_fetch_failure() in src/download/http.cpp,
+# which copies this list for den's own index download.
 is_transient_download_error() {
     case "$1" in
         5|6|7|16|18|28|35|52|55|56|92) return 0 ;;
