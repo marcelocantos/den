@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <memory>
+#include <thread>
 
 namespace den {
 
@@ -39,31 +40,46 @@ std::string format_bytes(std::uint64_t n) {
     return std::to_string(n) + " bytes";
 }
 
+/// libcurl reports a CURLOPT_MAXFILESIZE hit as CURLE_FILESIZE_EXCEEDED, or
+/// (over HTTP/2, mid-stream) as a receive error whose detail names it.
+bool is_size_cap_hit(CURLcode code, const std::string& detail) {
+    return code == CURLE_FILESIZE_EXCEEDED ||
+           detail.find("Maximum file size exceeded") != std::string::npos;
+}
+
 } // namespace
 
 std::string describe_transfer_error(const std::string& url, int curl_code,
                                     const std::string& error_buffer, std::uint64_t max_bytes) {
     const auto code = static_cast<CURLcode>(curl_code);
     const std::string detail = error_buffer.empty() ? curl_easy_strerror(code) : error_buffer;
-    const bool size_cap = code == CURLE_FILESIZE_EXCEEDED ||
-                          detail.find("Maximum file size exceeded") != std::string::npos;
-    if (size_cap) {
+    if (is_size_cap_hit(code, detail)) {
         return "download of " + url + " exceeds den's " + format_bytes(max_bytes) + " size limit";
     }
     return "HTTP fetch failed for " + url + ": " + detail;
 }
 
-std::string fetch_url(const std::string& url) {
+namespace {
+
+/// One in-memory fetch. `error` is empty on success.
+struct FetchAttempt {
+    CURLcode res = CURLE_OK;
+    long http_code = 0;
+    bool size_cap = false;
+    std::string body;
+    std::string error;
+};
+
+FetchAttempt fetch_once(const std::string& url) {
+    FetchAttempt a;
     CURL* curl = curl_easy_init();
     if (!curl) {
         throw DownloadError("failed to initialise libcurl");
     }
 
-    std::string response;
-
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &a.body);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "den/" DEN_VERSION);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
@@ -73,25 +89,82 @@ std::string fetch_url(const std::string& url) {
     char errbuf[CURL_ERROR_SIZE] = {0};
     curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, errbuf);
 
-    CURLcode res = curl_easy_perform(curl);
-
-    if (res != CURLE_OK) {
-        curl_easy_cleanup(curl);
-        throw DownloadError(describe_transfer_error(url, res, errbuf, kMaxInMemoryFetchBytes));
-    }
-
-    long http_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+    a.res = curl_easy_perform(curl);
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &a.http_code);
     curl_easy_cleanup(curl);
+
+    if (a.res != CURLE_OK) {
+        a.error = describe_transfer_error(url, a.res, errbuf, kMaxInMemoryFetchBytes);
+        a.size_cap = is_size_cap_hit(a.res, errbuf);
+        return a;
+    }
 
     // file:// URLs (local taps, offline tests) have no HTTP status; a
     // missing file already failed above with CURLE_FILE_COULDNT_READ_FILE.
     const bool is_file = url.starts_with("file://");
-    if (!is_file && (http_code < 200 || http_code >= 300)) {
-        throw DownloadError("HTTP " + std::to_string(http_code) + " fetching " + url);
+    if (!is_file && (a.http_code < 200 || a.http_code >= 300)) {
+        a.error = "HTTP " + std::to_string(a.http_code) + " fetching " + url;
     }
+    return a;
+}
 
-    return response;
+} // namespace
+
+std::string fetch_url(const std::string& url) {
+    FetchAttempt a = fetch_once(url);
+    if (!a.error.empty()) {
+        throw DownloadError(a.error);
+    }
+    return std::move(a.body);
+}
+
+bool is_transient_fetch_failure(int curl_code, long http_code) {
+    switch (static_cast<CURLcode>(curl_code)) {
+    case CURLE_OK:
+        // Transfer completed: only a server error is worth another try.
+        return http_code >= 500 && http_code <= 599;
+    case CURLE_COULDNT_RESOLVE_PROXY:
+    case CURLE_COULDNT_RESOLVE_HOST:
+    case CURLE_COULDNT_CONNECT:
+    case CURLE_HTTP2:
+    case CURLE_PARTIAL_FILE:
+    case CURLE_OPERATION_TIMEDOUT:
+    case CURLE_SSL_CONNECT_ERROR:
+    case CURLE_GOT_NOTHING:
+    case CURLE_SEND_ERROR:
+    case CURLE_RECV_ERROR:
+    case CURLE_HTTP2_STREAM:
+        return true;
+    default:
+        return false;
+    }
+}
+
+std::string fetch_url_retrying(const std::string& url, const FetchRetryPolicy& policy) {
+    const int max_attempts = policy.max_attempts < 1 ? 1 : policy.max_attempts;
+    for (int attempt = 1;; ++attempt) {
+        FetchAttempt a = fetch_once(url);
+        if (a.error.empty()) {
+            return std::move(a.body);
+        }
+        const bool transient = !a.size_cap && is_transient_fetch_failure(a.res, a.http_code);
+        if (!transient) {
+            throw DownloadError(a.error);
+        }
+        if (attempt >= max_attempts) {
+            throw DownloadError(a.error + " (gave up after " + std::to_string(attempt) +
+                                (attempt == 1 ? " attempt)" : " attempts)"));
+        }
+        const auto delay = policy.base_delay * attempt;
+        const std::string msg = a.error + "; retrying (" + std::to_string(attempt) + " of " +
+                                std::to_string(max_attempts - 1) + ") in " +
+                                std::to_string(delay.count()) + " ms";
+        SPDLOG_WARN("{}", msg);
+        if (policy.on_retry)
+            policy.on_retry(msg);
+        if (delay.count() > 0)
+            std::this_thread::sleep_for(delay);
+    }
 }
 
 void download_to_file(const std::string& url, const fs::path& dest, std::uint64_t max_bytes,

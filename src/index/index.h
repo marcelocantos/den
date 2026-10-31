@@ -6,6 +6,7 @@
 #include "package.h"
 
 #include "../core/config.h"
+#include "../download/http.h"
 
 #include <filesystem>
 #include <string>
@@ -53,6 +54,12 @@ void trim_cask_archives(Package& pkg);
 /// Fetch Homebrew's formula.json and cask.json from the API,
 /// transform them into den's unified Package format, and return
 /// the combined index.
+/// Each download is retried on transient network/TLS errors
+/// (fetch_url_retrying with the default policy).
 PackageIndex fetch_and_transform(const Config& config);
+
+/// fetch_and_transform() against the given URLs and retry policy (tests).
+PackageIndex fetch_and_transform_from(const std::string& formula_url, const std::string& cask_url,
+                                      const FetchRetryPolicy& policy = {});
 
 } // namespace den
