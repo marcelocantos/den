@@ -46,6 +46,7 @@ namespace {
 enum class FailMode {
     Reset,     ///< read the request, then reset the connection (RST)
     Truncate,  ///< promise more body than is sent, then close
+    CutOff,    ///< send the right Content-Length but only half the body, then close
     Status503, ///< with the server's `retry_after` header, if non-empty
     Status408,
     Status429, ///< with the server's `retry_after` header, if non-empty
@@ -185,6 +186,10 @@ class FlakyServer {
                          "HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(body.size() + 100) +
                              "\r\nConnection: close\r\n\r\n" + body);
                 break;
+            case FailMode::CutOff:
+                send_all(fd, "HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(body.size()) +
+                                 "\r\nConnection: close\r\n\r\n" + body.substr(0, body.size() / 2));
+                break;
             case FailMode::Status503:
                 send_all(fd, "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n" +
                                  (retry_after_.empty() ? std::string{}
@@ -282,6 +287,50 @@ std::string error_of(auto&& fn) {
         return e.what();
     }
     return {};
+}
+
+/// A loopback port with nothing listening on it (connections are refused).
+int closed_port() {
+    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    REQUIRE(fd >= 0);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    REQUIRE(::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof addr) == 0);
+    socklen_t len = sizeof addr;
+    ::getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &len);
+    ::close(fd);
+    return ntohs(addr.sin_port);
+}
+
+/// A fresh, empty scratch directory, removed with the object.
+struct ScratchDir {
+    std::filesystem::path path;
+    explicit ScratchDir(const std::string& stem) {
+        static int n = 0;
+        path = std::filesystem::temp_directory_path() /
+               (stem + "-" + std::to_string(::getpid()) + "-" + std::to_string(n++));
+        std::filesystem::remove_all(path);
+        std::filesystem::create_directories(path);
+    }
+    ~ScratchDir() {
+        std::error_code ec;
+        std::filesystem::remove_all(path, ec);
+    }
+    /// Every entry under the directory (empty when nothing was left behind).
+    std::vector<std::string> entries() const {
+        std::vector<std::string> out;
+        for (const auto& e : std::filesystem::recursive_directory_iterator(path))
+            out.push_back(e.path().filename().string());
+        return out;
+    }
+};
+
+std::string read_file(const std::filesystem::path& p) {
+    std::ifstream in(p, std::ios::binary);
+    std::stringstream got;
+    got << in.rdbuf();
+    return got.str();
 }
 
 } // namespace
@@ -456,7 +505,7 @@ TEST_SUITE("download::fetch_retry") {
         CHECK(fetch_url_retrying(srv.url("/formula.json"), fp.policy) == "hello");
         CHECK(srv.connections() == 3);
         REQUIRE(fp.retries.size() == 2);
-        CHECK(fp.retries[0].find("HTTP fetch failed for " + srv.url("/formula.json")) == 0);
+        CHECK(fp.retries[0].find("network error fetching " + srv.url("/formula.json")) == 0);
         CHECK(fp.retries[0].find("retrying (1 of 2)") != std::string::npos);
         CHECK(fp.retries[1].find("retrying (2 of 2)") != std::string::npos);
     }
@@ -469,7 +518,7 @@ TEST_SUITE("download::fetch_retry") {
             error_of([&] { fetch_url_retrying(srv.url("/formula.json"), fp.policy); });
         CHECK(srv.connections() == 3);
         CHECK(fp.retries.size() == 2);
-        CHECK(err.find("HTTP fetch failed for " + srv.url("/formula.json")) == 0);
+        CHECK(err.find("network error fetching " + srv.url("/formula.json")) == 0);
         CHECK(err.find("(gave up after 3 attempts)") != std::string::npos);
     }
 
@@ -691,5 +740,229 @@ TEST_SUITE("ghcr::fetch_retry") {
         }
         CHECK(reqs[3].find("Authorization: Bearer tok123\r\n") != std::string::npos);
         std::filesystem::remove_all(cache);
+    }
+}
+
+TEST_SUITE("download::network_errors") {
+    TEST_CASE("DNS and connect failures say they are network errors") {
+        CHECK(describe_transfer_error("https://ghcr.io/token", CURLE_COULDNT_RESOLVE_HOST,
+                                      "Could not resolve host: ghcr.io", 1) ==
+              "network error fetching https://ghcr.io/token: Could not resolve host: ghcr.io");
+        CHECK(describe_transfer_error("u", CURLE_COULDNT_CONNECT, "", 1)
+                  .starts_with("network error fetching u: "));
+        CHECK(describe_transfer_error("u", CURLE_OPERATION_TIMEDOUT, "", 1)
+                  .starts_with("network error fetching u: "));
+        // Not a network failure: keeps the generic wording.
+        CHECK(describe_transfer_error("u", CURLE_URL_MALFORMAT, "", 1)
+                  .starts_with("HTTP fetch failed for u: "));
+        CHECK(describe_transfer_error("u", CURLE_PEER_FAILED_VERIFICATION, "", 1)
+                  .starts_with("HTTP fetch failed for u: "));
+    }
+
+    TEST_CASE("an unreachable server gives up with a network error, in memory and streamed") {
+        NoProxyForLoopback np;
+        const std::string url = "http://127.0.0.1:" + std::to_string(closed_port()) + "/x";
+        SUBCASE("fetch_url_retrying") {
+            FastPolicy fp(3);
+            const std::string err = error_of([&] { fetch_url_retrying(url, fp.policy); });
+            CHECK(err.starts_with("network error fetching " + url + ": "));
+            CHECK(err.ends_with(" (gave up after 3 attempts)"));
+            CHECK(fp.retries.size() == 2);
+        }
+        SUBCASE("download_to_file_retrying") {
+            ScratchDir dir("den-test-offline");
+            FastPolicy fp(3);
+            const std::string err =
+                error_of([&] { download_to_file_retrying(url, dir.path / "x", fp.policy); });
+            CHECK(err.starts_with("network error fetching " + url + ": "));
+            CHECK(err.ends_with(" (gave up after 3 attempts)"));
+            CHECK(fp.retries.size() == 2);
+            CHECK(dir.entries().empty());
+        }
+    }
+}
+
+TEST_SUITE("download::download_to_file_retrying") {
+    TEST_CASE("a body cut off partway is downloaded again from scratch") {
+        NoProxyForLoopback np;
+        std::string body;
+        for (int i = 0; i < 4096; ++i)
+            body += "line " + std::to_string(i) + "\n";
+        FlakyServer srv(2, FailMode::CutOff, body);
+        ScratchDir dir("den-test-stream");
+        const auto dest = dir.path / "out";
+        FastPolicy fp(3);
+        std::vector<bool> left_between;
+        fp.policy.sleep = [&](milliseconds) {
+            left_between.push_back(std::filesystem::exists(dest));
+        };
+        download_to_file_retrying(srv.url("/a.tar.gz"), dest, fp.policy);
+        CHECK(read_file(dest) == body);
+        CHECK(srv.connections() == 3);
+        CHECK(left_between == std::vector<bool>{false, false});
+        for (const auto& r : srv.requests())
+            CHECK(r.find("Range:") == std::string::npos);
+    }
+
+    TEST_CASE("a stale leftover file is overwritten, not appended to") {
+        NoProxyForLoopback np;
+        FlakyServer srv(0, FailMode::Reset, "fresh body");
+        ScratchDir dir("den-test-stream");
+        const auto dest = dir.path / "out";
+        std::ofstream(dest) << "stale bytes from an interrupted run";
+        FastPolicy fp(3);
+        download_to_file_retrying(srv.url("/a.tar.gz"), dest, fp.policy);
+        CHECK(read_file(dest) == "fresh body");
+    }
+
+    TEST_CASE("a size-cap hit is not retried and leaves nothing") {
+        NoProxyForLoopback np;
+        FlakyServer srv(0, FailMode::Reset, std::string(4096, 'x'));
+        ScratchDir dir("den-test-stream");
+        FastPolicy fp(3);
+        const std::string err = error_of(
+            [&] { download_to_file_retrying(srv.url("/big"), dir.path / "out", fp.policy, 1024); });
+        CHECK(err.find("size limit") != std::string::npos);
+        CHECK(srv.connections() == 1);
+        CHECK(fp.retries.empty());
+        CHECK(dir.entries().empty());
+    }
+
+    TEST_CASE("plain download_to_file still makes a single attempt") {
+        NoProxyForLoopback np;
+        FlakyServer srv(1, FailMode::CutOff, "hello world");
+        ScratchDir dir("den-test-stream");
+        CHECK_FALSE(error_of([&] { download_to_file(srv.url("/x"), dir.path / "out"); }).empty());
+        CHECK(srv.connections() == 1);
+        CHECK(dir.entries().empty());
+    }
+}
+
+namespace {
+
+/// A GHCR-shaped server: /token answers with a token, and the blob path
+/// serves `blob`, failing its first `blob_fails` requests with `mode`.
+struct FakeGhcr {
+    std::string repo = "homebrew/core/example";
+    std::string blob;
+    std::string sha;
+    FlakyServer srv;
+    FakeGhcr(std::string b, int blob_fails, FailMode mode, std::string retry_after = {},
+             std::string served_sha = {})
+        : blob(b), sha(served_sha.empty() ? hash_string(b) : served_sha),
+          srv({{"/token", Route{R"({"token":"tok123"})", 0}},
+               {"/v2/homebrew/core/example/blobs/sha256:" + sha, Route{b, blob_fails}}},
+              mode, std::move(retry_after)) {}
+    std::vector<std::string> blob_requests() const {
+        std::vector<std::string> out;
+        for (const auto& r : srv.requests())
+            if (r.starts_with("GET /v2/"))
+                out.push_back(r);
+        return out;
+    }
+    std::vector<std::string> token_requests() const {
+        std::vector<std::string> out;
+        for (const auto& r : srv.requests())
+            if (r.starts_with("GET /token?"))
+                out.push_back(r);
+        return out;
+    }
+};
+
+std::string big_blob() {
+    std::string b;
+    for (int i = 0; i < 8192; ++i)
+        b += "bottle chunk " + std::to_string(i) + "\n";
+    return b;
+}
+
+} // namespace
+
+TEST_SUITE("ghcr::blob_retry") {
+    TEST_CASE("a blob cut off partway is retried fresh, carries the token, and verifies") {
+        NoProxyForLoopback np;
+        FakeGhcr g(big_blob(), 2, FailMode::CutOff);
+        ScratchDir cache("den-test-ghcr");
+        const auto cached = cache.path / (g.sha + ".tar.gz");
+        FastPolicy fp(3, milliseconds(2000), milliseconds(4000));
+        std::vector<std::vector<std::string>> between;
+        fp.policy.sleep = [&](milliseconds d) {
+            fp.delays.push_back(d);
+            between.push_back(cache.entries());
+        };
+        const auto path = fetch_ghcr_blob(g.repo, g.sha, cache.path, fp.policy, g.srv.url(""));
+        CHECK(path == cached);
+        CHECK(read_file(path) == g.blob);
+        CHECK(hash_file(path) == g.sha);
+        CHECK(fp.delays == std::vector<milliseconds>{milliseconds(2000), milliseconds(4000)});
+        // Nothing partial (neither the cache entry nor its .download) between attempts.
+        CHECK(between == std::vector<std::vector<std::string>>{{}, {}});
+        CHECK(cache.entries() == std::vector<std::string>{g.sha + ".tar.gz"});
+        const auto blobs = g.blob_requests();
+        REQUIRE(blobs.size() == 3);
+        for (const auto& r : blobs) {
+            CHECK(r.find("Authorization: Bearer tok123\r\n") != std::string::npos);
+            CHECK(r.find("Range:") == std::string::npos);
+        }
+        const auto tokens = g.token_requests();
+        REQUIRE(tokens.size() == 1);
+        CHECK(tokens[0].find("Authorization:") == std::string::npos);
+    }
+
+    TEST_CASE("a blob that keeps failing leaves no file behind") {
+        NoProxyForLoopback np;
+        FakeGhcr g(big_blob(), 10, FailMode::CutOff);
+        ScratchDir cache("den-test-ghcr");
+        FastPolicy fp(3);
+        const std::string err =
+            error_of([&] { fetch_ghcr_blob(g.repo, g.sha, cache.path, fp.policy, g.srv.url("")); });
+        CHECK(err.starts_with("network error fetching " + g.srv.url("/v2/")));
+        CHECK(err.ends_with(" (gave up after 3 attempts)"));
+        CHECK(g.blob_requests().size() == 3);
+        CHECK(cache.entries().empty());
+    }
+
+    TEST_CASE("a SHA256 mismatch is not retried and leaves no file behind") {
+        NoProxyForLoopback np;
+        const std::string wrong = hash_string("something else");
+        FakeGhcr g(big_blob(), 0, FailMode::CutOff, {}, wrong);
+        ScratchDir cache("den-test-ghcr");
+        FastPolicy fp(3);
+        const std::string err =
+            error_of([&] { fetch_ghcr_blob(g.repo, wrong, cache.path, fp.policy, g.srv.url("")); });
+        CHECK(err.starts_with("SHA256 mismatch for "));
+        CHECK(g.blob_requests().size() == 1);
+        CHECK(fp.retries.empty());
+        CHECK(cache.entries().empty());
+    }
+
+    TEST_CASE("a 503 on the blob honours Retry-After and re-sends the token") {
+        NoProxyForLoopback np;
+        FakeGhcr g("small bottle", 1, FailMode::Status503, "1");
+        ScratchDir cache("den-test-ghcr");
+        FastPolicy fp(3, milliseconds(2000), milliseconds(4000));
+        const auto path = fetch_ghcr_blob(g.repo, g.sha, cache.path, fp.policy, g.srv.url(""));
+        CHECK(read_file(path) == "small bottle");
+        CHECK(fp.delays == std::vector<milliseconds>{milliseconds(1000)});
+        REQUIRE(fp.retries.size() == 1);
+        CHECK(fp.retries[0].find("(Retry-After: 1 s)") != std::string::npos);
+        const auto blobs = g.blob_requests();
+        REQUIRE(blobs.size() == 2);
+        for (const auto& r : blobs)
+            CHECK(r.find("Authorization: Bearer tok123\r\n") != std::string::npos);
+    }
+
+    TEST_CASE("a missing or malformed digest is refused before any request") {
+        NoProxyForLoopback np;
+        FakeGhcr g("x", 0, FailMode::Reset);
+        ScratchDir cache("den-test-ghcr");
+        for (const std::string bad :
+             {std::string{}, std::string("no_check"), std::string(63, 'a'), std::string(64, 'g')}) {
+            CAPTURE(bad);
+            CHECK(error_of([&] {
+                      fetch_ghcr_blob(g.repo, bad, cache.path, FetchRetryPolicy{}, g.srv.url(""));
+                  }).find("has no valid sha256 digest") != std::string::npos);
+        }
+        CHECK(g.srv.connections() == 0);
     }
 }
