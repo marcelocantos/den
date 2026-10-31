@@ -17,16 +17,16 @@ and toggle it on. This enables the SSH server (`sshd`).
 Copy your public key to the test machine so SSH works without a password:
 
 ```sh
-ssh-copy-id marcelo@192.168.1.112
+ssh-copy-id <user>@<test-mac>
 # or, if you prefer:
 ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519   # if not already done
-ssh-copy-id -i ~/.ssh/id_ed25519 marcelo@192.168.1.112
+ssh-copy-id -i ~/.ssh/id_ed25519 <user>@<test-mac>
 ```
 
 Verify it works without a password prompt:
 
 ```sh
-ssh marcelo@192.168.1.112 uname -s   # should print: Darwin
+ssh <user>@<test-mac> uname -s   # should print: Darwin
 ```
 
 ### 3. Add the SSH alias
@@ -35,8 +35,8 @@ Add the following stanza to `~/.ssh/config` on your development machine:
 
 ```
 Host den-test-mac
-    HostName 192.168.1.112
-    User marcelo
+    HostName <test-mac>
+    User <user>
     IdentitiesOnly yes
     IdentityFile ~/.ssh/id_ed25519
     ConnectTimeout 5
@@ -140,7 +140,7 @@ The smoke set's own `uninstall` step cleans up installed packages.
 The test machine's host key changed (e.g., after an OS reinstall). Remove the stale entry:
 
 ```sh
-ssh-keygen -R 192.168.1.112
+ssh-keygen -R <test-mac>
 ssh-keygen -R den-test-mac
 ```
 
@@ -185,7 +185,7 @@ tests/harness/macos/run.sh --reset
 Key-based auth is not set up. Run:
 
 ```sh
-ssh-copy-id -i ~/.ssh/id_ed25519 marcelo@192.168.1.112
+ssh-copy-id -i ~/.ssh/id_ed25519 <user>@<test-mac>
 ```
 
 ## Notes
