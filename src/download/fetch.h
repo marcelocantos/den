@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "http.h"
+
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -32,7 +34,12 @@ void fetch_verified_to(const std::string& url, const std::string& sha256, const 
 ///
 /// repo_path: e.g. "homebrew/core/ffmpeg" (without ghcr.io prefix).
 /// sha256: the expected sha256 digest of the blob.
+/// The token request retries transient failures with `retry`
+/// (fetch_url_retrying); the blob itself streams through
+/// fetch_verified_to(). `registry` is the registry's base URL (tests point it
+/// at a local server).
 fs::path fetch_ghcr_blob(const std::string& repo_path, const std::string& sha256,
-                         const fs::path& cache_dir);
+                         const fs::path& cache_dir, const FetchRetryPolicy& retry = {},
+                         const std::string& registry = "https://ghcr.io");
 
 } // namespace den

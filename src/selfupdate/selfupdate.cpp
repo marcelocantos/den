@@ -251,13 +251,14 @@ std::optional<UpdateInfo> update_info_from_release_json(const std::string& json,
     return info;
 }
 
-UpdateInfo fetch_release_for_version(const Config& cfg, const std::string& version) {
+UpdateInfo fetch_release_for_version(const Config& cfg, const std::string& version,
+                                     const ReleaseSource& source) {
     const std::string tag = normalize_release_tag(version);
-    const std::string url = "https://api.github.com/repos/marcelocantos/den/releases/tags/" + tag;
+    const std::string url = source.api_base + "/releases/tags/" + tag;
     SPDLOG_INFO("fetching release {}...", tag);
     std::string response;
     try {
-        response = fetch_url(url);
+        response = fetch_url_retrying(url, source.retry);
     } catch (const std::exception& e) {
         throw UserError("could not fetch release " + tag + ": " + e.what());
     }
@@ -272,13 +273,13 @@ UpdateInfo fetch_release_for_version(const Config& cfg, const std::string& versi
     return *info;
 }
 
-std::string resolve_latest_version() {
-    std::string url = "https://api.github.com/repos/marcelocantos/den/releases/latest";
+std::string resolve_latest_version(const ReleaseSource& source) {
+    std::string url = source.api_base + "/releases/latest";
 
     SPDLOG_INFO("checking for latest version...");
     std::string response;
     try {
-        response = fetch_url(url);
+        response = fetch_url_retrying(url, source.retry);
     } catch (const std::exception& e) {
         SPDLOG_WARN("failed to fetch latest version: {}", e.what());
         return {};
@@ -294,13 +295,13 @@ std::string resolve_latest_version() {
     return tag.starts_with("v") ? tag.substr(1) : tag;
 }
 
-std::optional<UpdateInfo> check_for_update(const Config& cfg) {
-    std::string url = "https://api.github.com/repos/marcelocantos/den/releases/latest";
+std::optional<UpdateInfo> check_for_update(const Config& cfg, const ReleaseSource& source) {
+    std::string url = source.api_base + "/releases/latest";
 
     SPDLOG_INFO("checking for updates...");
     std::string response;
     try {
-        response = fetch_url(url);
+        response = fetch_url_retrying(url, source.retry);
     } catch (const std::exception& e) {
         SPDLOG_WARN("failed to check for updates: {}", e.what());
         return std::nullopt;
@@ -340,7 +341,8 @@ bool is_same_version_request(const UpdateInfo& info, const std::string& running)
     return !v.empty() && v == running;
 }
 
-bool apply_update(const UpdateInfo& info, const Config& cfg, bool force) {
+bool apply_update(const UpdateInfo& info, const Config& cfg, bool force,
+                  const FetchRetryPolicy& retry) {
     (void)cfg;
     auto exe = self_exe();
     // Defence in depth: the CLI refuses first, before any network access.
@@ -353,7 +355,7 @@ bool apply_update(const UpdateInfo& info, const Config& cfg, bool force) {
             "bytes");
     }
 
-    auto checksum_content = fetch_url(info.checksum_url);
+    auto checksum_content = fetch_url_retrying(info.checksum_url, retry);
     // Format: "<hash>  <filename>\n"
     std::string expected_hash;
     {
@@ -368,7 +370,7 @@ bool apply_update(const UpdateInfo& info, const Config& cfg, bool force) {
     // Download the tarball.
     std::cout << "Downloading den " << (info.tag.empty() ? info.latest_version : info.tag)
               << "...\n";
-    auto tarball_data = fetch_url(info.download_url);
+    auto tarball_data = fetch_url_retrying(info.download_url, retry);
 
     auto actual = hash_string(tarball_data);
     if (actual != expected_hash) {

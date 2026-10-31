@@ -32,8 +32,9 @@ struct FetchRetryPolicy {
     /// Before try n+1, wait base_delay * n (so 2 s, then 4 s, by default).
     std::chrono::milliseconds base_delay{2000};
     /// Ceiling on any single wait (default 4 s, the longest default backoff).
-    /// It caps both the backoff and a server's Retry-After on an HTTP 429, so
-    /// a "Retry-After: 3600" cannot stall `den update` or the daemon.
+    /// It caps both the backoff and a server's Retry-After on an HTTP 429 or
+    /// 503, so a "Retry-After: 3600" cannot stall `den update`, self-update
+    /// or the daemon.
     std::chrono::milliseconds max_delay{4000};
     /// Called with each retry's log message after it is logged (tests).
     std::function<void(const std::string&)> on_retry;
@@ -47,17 +48,19 @@ struct FetchRetryPolicy {
 /// refused), timeouts, TLS handshake and record errors (e.g. LibreSSL's
 /// "bad decrypt"), an empty reply or truncated body, HTTP/2 stream errors,
 /// HTTP 408 (request timeout), 429 (too many requests) and 5xx. Any other
-/// HTTP 4xx, and a size-cap hit, is never transient. The same set as
+/// HTTP 4xx, and a size-cap hit, is never transient. (Whether to retry is
+/// decided here; how long to wait, including Retry-After on a 429 or 503,
+/// is fetch_url_retrying()'s business.) The same set as
 /// install.sh's is_transient_download_error(); keep the two in sync.
 /// `curl_code` is a CURLcode; `http_code` is the response status (0 if none).
 bool is_transient_fetch_failure(int curl_code, long http_code);
 
 /// fetch_url(), retrying transient failures (is_transient_fetch_failure)
 /// with a linear backoff, logging a warning for each retry. On an HTTP 429
-/// a Retry-After header (seconds or HTTP-date) replaces the backoff; every
-/// wait is capped at policy.max_delay. Anything else
-/// fails at once. After the last try it throws a DownloadError naming the
-/// last error and the number of attempts.
+/// or 503 a Retry-After header (seconds or HTTP-date) replaces the backoff;
+/// other statuses ignore it. Every wait is capped at policy.max_delay.
+/// Anything else fails at once. After the last try it throws a
+/// DownloadError naming the last error and the number of attempts.
 std::string fetch_url_retrying(const std::string& url, const FetchRetryPolicy& policy = {});
 
 /// Stream a URL to `dest` without buffering it in memory. Fails if the body

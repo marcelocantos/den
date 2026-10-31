@@ -84,7 +84,8 @@ fs::path fetch_archive(const std::string& url, const std::string& sha256,
 }
 
 fs::path fetch_ghcr_blob(const std::string& repo_path, const std::string& sha256,
-                         const fs::path& cache_dir) {
+                         const fs::path& cache_dir, const FetchRetryPolicy& retry,
+                         const std::string& registry) {
     fs::create_directories(cache_dir);
 
     fs::path cached = cache_dir / (sha256 + ".tar.gz");
@@ -101,10 +102,10 @@ fs::path fetch_ghcr_blob(const std::string& repo_path, const std::string& sha256
 
     // Step 1: Get anonymous bearer token from ghcr.io.
     std::string token_url =
-        "https://ghcr.io/token?scope=repository:" + repo_path + ":pull&service=ghcr.io";
+        registry + "/token?scope=repository:" + repo_path + ":pull&service=ghcr.io";
 
     SPDLOG_INFO("requesting GHCR token for {}", repo_path);
-    std::string token_response = fetch_url(token_url);
+    std::string token_response = fetch_url_retrying(token_url, retry);
 
     auto token_json = nlohmann::json::parse(token_response);
     if (!token_json.contains("token")) {
@@ -114,7 +115,7 @@ fs::path fetch_ghcr_blob(const std::string& repo_path, const std::string& sha256
 
     // Step 2: Fetch the blob using the OCI distribution API.
     // The blob URL uses the sha256 digest.
-    std::string blob_url = "https://ghcr.io/v2/" + repo_path + "/blobs/sha256:" + sha256;
+    std::string blob_url = registry + "/v2/" + repo_path + "/blobs/sha256:" + sha256;
 
     SPDLOG_INFO("fetching GHCR blob sha256:{}", sha256);
     // The registry answers with a redirect to a CDN URL; the bearer token is

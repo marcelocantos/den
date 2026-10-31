@@ -130,7 +130,8 @@ bool is_transient_fetch_failure(int curl_code, long http_code) {
     switch (static_cast<CURLcode>(curl_code)) {
     case CURLE_OK:
         // Transfer completed: retry a request timeout, a rate limit, or a
-        // server error. Every other status (404, 403, ...) is final.
+        // server error. Every other status (404, 403, ...) is final. A 429's
+        // or 503's Retry-After sets the wait (fetch_url_retrying), not this.
         return http_code == 408 || http_code == 429 || (http_code >= 500 && http_code <= 599);
     case CURLE_COULDNT_RESOLVE_PROXY: // 5
     case CURLE_COULDNT_RESOLVE_HOST:  // 6
@@ -166,8 +167,9 @@ std::string fetch_url_retrying(const std::string& url, const FetchRetryPolicy& p
         }
         std::chrono::milliseconds delay = policy.base_delay * attempt;
         std::string note;
-        if (a.http_code == 429 && a.retry_after > 0) {
-            // Honour the server's Retry-After, within the ceiling. Clamp in
+        if ((a.http_code == 429 || a.http_code == 503) && a.retry_after > 0) {
+            // Honour the server's Retry-After (RFC 9110 defines it for 503
+            // as well as 429), within the ceiling. Clamp in
             // seconds first so a huge value cannot overflow milliseconds.
             constexpr long long kDay = 24 * 60 * 60;
             delay = std::chrono::seconds(a.retry_after < kDay ? a.retry_after : kDay);
