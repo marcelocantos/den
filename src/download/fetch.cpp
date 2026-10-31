@@ -58,8 +58,8 @@ bool is_sha256_hex(const std::string& s) {
 
 } // namespace
 
-fs::path fetch_archive(const std::string& url, const std::string& sha256,
-                       const fs::path& cache_dir) {
+fs::path fetch_archive(const std::string& url, const std::string& sha256, const fs::path& cache_dir,
+                       const FetchRetryPolicy& retry) {
     fs::create_directories(cache_dir);
 
     // Content-addressed path: cache_dir/<sha256>[.ext from url].
@@ -101,7 +101,7 @@ fs::path fetch_archive(const std::string& url, const std::string& sha256,
     }
 
     SPDLOG_INFO("downloading {}", url);
-    fetch_verified_to(url, skip_verify ? std::string{} : sha256, cached);
+    fetch_verified_to(url, skip_verify ? std::string{} : sha256, cached, {}, retry);
 
     SPDLOG_INFO("cached {} ({} bytes)", cache_key, fs::file_size(cached));
     return cached;
