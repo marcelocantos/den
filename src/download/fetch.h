@@ -17,8 +17,13 @@ namespace fs = std::filesystem;
 /// Download a URL to a content-addressed cache location, verify its
 /// SHA256 hash, and return the cached file path.  If the file already
 /// exists in the cache with the correct hash, the download is skipped.
-fs::path fetch_archive(const std::string& url, const std::string& sha256,
-                       const fs::path& cache_dir);
+/// An empty or "no_check" sha256 (casks with `sha256 :no_check`) skips
+/// verification, as before. Transient transfer failures are retried with
+/// `retry` (fetch_verified_to): each attempt restarts from scratch, nothing
+/// partial or unverified is left behind, and a SHA256 mismatch, an HTTP
+/// 4xx or a size-cap hit is not retried.
+fs::path fetch_archive(const std::string& url, const std::string& sha256, const fs::path& cache_dir,
+                       const FetchRetryPolicy& retry = {});
 
 /// Stream `url` to `<cached>.download`, verify it against `sha256`, and only
 /// then publish it at `cached`. The body is never held in memory and is

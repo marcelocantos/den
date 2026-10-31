@@ -966,3 +966,89 @@ TEST_SUITE("ghcr::blob_retry") {
         CHECK(g.srv.connections() == 0);
     }
 }
+
+TEST_SUITE("archive::fetch_retry") {
+    TEST_CASE("an archive cut off partway is retried fresh and verifies") {
+        NoProxyForLoopback np;
+        const std::string body = big_blob();
+        const std::string sha = hash_string(body);
+        FlakyServer srv(2, FailMode::CutOff, body);
+        ScratchDir cache("den-test-archive");
+        FastPolicy fp(3, milliseconds(2000), milliseconds(4000));
+        std::vector<std::vector<std::string>> between;
+        fp.policy.sleep = [&](milliseconds d) {
+            fp.delays.push_back(d);
+            between.push_back(cache.entries());
+        };
+        const auto path = fetch_archive(srv.url("/pkg-1.0.tar.gz"), sha, cache.path, fp.policy);
+        CHECK(path == cache.path / (sha + ".tar.gz"));
+        CHECK(read_file(path) == body);
+        CHECK(srv.connections() == 3);
+        CHECK(fp.delays == std::vector<milliseconds>{milliseconds(2000), milliseconds(4000)});
+        CHECK(between == std::vector<std::vector<std::string>>{{}, {}});
+        CHECK(cache.entries() == std::vector<std::string>{sha + ".tar.gz"});
+        for (const auto& r : srv.requests())
+            CHECK(r.find("Range:") == std::string::npos);
+    }
+
+    TEST_CASE("running out of attempts says network error and leaves nothing") {
+        NoProxyForLoopback np;
+        const std::string body = big_blob();
+        FlakyServer srv(10, FailMode::CutOff, body);
+        ScratchDir cache("den-test-archive");
+        FastPolicy fp(3);
+        const std::string url = srv.url("/pkg-1.0.zip");
+        const std::string err =
+            error_of([&] { fetch_archive(url, hash_string(body), cache.path, fp.policy); });
+        CHECK(err.starts_with("network error fetching " + url + ": "));
+        CHECK(err.ends_with(" (gave up after 3 attempts)"));
+        CHECK(srv.connections() == 3);
+        CHECK(cache.entries().empty());
+    }
+
+    TEST_CASE("an HTTP 4xx is not retried and leaves nothing") {
+        NoProxyForLoopback np;
+        for (int status : {403, 404}) {
+            CAPTURE(status);
+            FlakyServer srv(0, FailMode::Reset, "", status);
+            ScratchDir cache("den-test-archive");
+            FastPolicy fp(3);
+            const std::string url = srv.url("/pkg-1.0.dmg");
+            const std::string err =
+                error_of([&] { fetch_archive(url, hash_string("x"), cache.path, fp.policy); });
+            CHECK(err == "HTTP " + std::to_string(status) + " fetching " + url);
+            CHECK(srv.connections() == 1);
+            CHECK(fp.retries.empty());
+            CHECK(cache.entries().empty());
+        }
+    }
+
+    TEST_CASE("a SHA256 mismatch is not retried and leaves nothing") {
+        NoProxyForLoopback np;
+        FlakyServer srv(0, FailMode::Reset, "archive bytes");
+        ScratchDir cache("den-test-archive");
+        FastPolicy fp(3);
+        const std::string wrong = hash_string("other");
+        const std::string err =
+            error_of([&] { fetch_archive(srv.url("/pkg.tar.gz"), wrong, cache.path, fp.policy); });
+        CHECK(err.starts_with("SHA256 mismatch for "));
+        CHECK(srv.connections() == 1);
+        CHECK(cache.entries().empty());
+    }
+
+    TEST_CASE("a no_check cask still skips verification, and still retries") {
+        NoProxyForLoopback np;
+        for (const std::string sha : {std::string{}, std::string("no_check")}) {
+            CAPTURE(sha);
+            FlakyServer srv(1, FailMode::CutOff, "unversioned cask payload");
+            ScratchDir cache("den-test-archive");
+            FastPolicy fp(3);
+            const std::string url = srv.url("/latest/App.dmg");
+            const auto path = fetch_archive(url, sha, cache.path, fp.policy);
+            CHECK(path == cache.path / ("nocheck-" + hash_string(url) + ".dmg"));
+            CHECK(read_file(path) == "unversioned cask payload");
+            CHECK(srv.connections() == 2);
+            CHECK(cache.entries().size() == 1);
+        }
+    }
+}
