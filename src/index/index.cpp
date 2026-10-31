@@ -907,12 +907,17 @@ PackageIndex transform_homebrew(const std::string& formula_data, const std::stri
     return idx;
 }
 
-PackageIndex fetch_and_transform(const Config& /*config*/) {
+PackageIndex fetch_and_transform_from(const std::string& formula_url, const std::string& cask_url,
+                                      const FetchRetryPolicy& policy) {
     SPDLOG_INFO("fetching Homebrew formula index");
-    std::string formula_data = fetch_url(kFormulaUrl);
+    std::string formula_data = fetch_url_retrying(formula_url, policy);
     SPDLOG_INFO("fetching Homebrew cask index");
-    std::string cask_data = fetch_url(kCaskUrl);
+    std::string cask_data = fetch_url_retrying(cask_url, policy);
     return transform_homebrew(formula_data, cask_data);
+}
+
+PackageIndex fetch_and_transform(const Config& /*config*/) {
+    return fetch_and_transform_from(kFormulaUrl, kCaskUrl);
 }
 
 } // namespace den
