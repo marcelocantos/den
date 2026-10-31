@@ -6,6 +6,7 @@
 #include "http.h"
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -24,8 +25,13 @@ fs::path fetch_archive(const std::string& url, const std::string& sha256,
 /// subject to kMaxArchiveDownloadBytes. On a mismatch or transfer error
 /// nothing is left behind. `headers` are extra request headers. An empty or
 /// "no_check" sha256 skips verification. Throws DownloadError.
+/// With `retry`, transient transfer failures are retried
+/// (download_to_file_retrying): each attempt restarts the download from
+/// scratch with the same headers, and no partial file survives between
+/// attempts. A SHA256 mismatch is never retried. Without it, one attempt.
 void fetch_verified_to(const std::string& url, const std::string& sha256, const fs::path& cached,
-                       const std::vector<std::string>& headers = {});
+                       const std::vector<std::string>& headers = {},
+                       const std::optional<FetchRetryPolicy>& retry = std::nullopt);
 
 /// Fetch a blob from GHCR (GitHub Container Registry) using the OCI
 /// distribution API.  Performs anonymous token auth against
@@ -34,10 +40,11 @@ void fetch_verified_to(const std::string& url, const std::string& sha256, const 
 ///
 /// repo_path: e.g. "homebrew/core/ffmpeg" (without ghcr.io prefix).
 /// sha256: the expected sha256 digest of the blob.
-/// The token request retries transient failures with `retry`
-/// (fetch_url_retrying); the blob itself streams through
-/// fetch_verified_to(). `registry` is the registry's base URL (tests point it
-/// at a local server).
+/// `sha256` must be 64 hex digits: the blob is always verified.
+/// The token request (fetch_url_retrying) and the blob download
+/// (fetch_verified_to) both retry transient failures with `retry`; the
+/// bearer token goes on every blob attempt and never on the token request.
+/// `registry` is the registry's base URL (tests point it at a local server).
 fs::path fetch_ghcr_blob(const std::string& repo_path, const std::string& sha256,
                          const fs::path& cache_dir, const FetchRetryPolicy& retry = {},
                          const std::string& registry = "https://ghcr.io");

@@ -72,11 +72,25 @@ void download_to_file(const std::string& url, const fs::path& dest,
                       std::uint64_t max_bytes = kMaxArchiveDownloadBytes,
                       const std::vector<std::string>& headers = {});
 
+/// download_to_file(), retrying transient failures exactly as
+/// fetch_url_retrying() does (same classifier, backoff, Retry-After and
+/// cap). Every attempt starts afresh: `dest` is truncated, there is no
+/// Range resume, and `headers` are sent again. A failed attempt removes
+/// `dest` before the wait, so nothing partial is ever left between
+/// attempts or after the last one. A size-cap hit is never retried.
+void download_to_file_retrying(const std::string& url, const fs::path& dest,
+                               const FetchRetryPolicy& policy = {},
+                               std::uint64_t max_bytes = kMaxArchiveDownloadBytes,
+                               const std::vector<std::string>& headers = {});
+
 /// The message den reports for a failed transfer. libcurl's generic
 /// curl_easy_strerror() text hides the real cause in some cases (a size cap
 /// hit mid-stream over HTTP/2 comes back as CURLE_RECV_ERROR, "Failure when
 /// receiving data from the peer"); prefer the detailed error buffer and name
-/// the size limit when it was the cause.
+/// the size limit when it was the cause. A network failure (any transient
+/// curl code: DNS, connect, timeout, TLS handshake, reset, truncation) reads
+/// "network error fetching <url>: <detail>"; anything else reads
+/// "HTTP fetch failed for <url>: <detail>".
 std::string describe_transfer_error(const std::string& url, int curl_code,
                                     const std::string& error_buffer, std::uint64_t max_bytes);
 
