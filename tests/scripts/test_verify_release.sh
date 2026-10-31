@@ -357,6 +357,50 @@ else
     echo "SKIP: app-cask fixture tests (macOS only)"
 fi
 
+# --- update failure blocks the index-dependent steps ------------------------
+# A failed update (the index fetch) reports the steps that need the index as
+# SKIP (blocked by update) instead of FAIL; the other steps still run, and the
+# update FAIL keeps the exit status non-zero.
+_dep="bottle opt-link trust pin upgrade dependents uninstall"
+_cask="font-cask app-cask"
+_indep="tap doctor cleanup"
+run "update failure blocks index steps" 1 FAKE_DEN_FAIL=update \
+    VR_ONLY="version empty-store update $_dep $_cask $_indep" -- v1.2.0 && {
+    has "blocked: update itself fails" '^FAIL  update '
+    for _s in $_dep; do
+        has "blocked: $_s skipped" "^SKIP  $_s +\(blocked by update\)$"
+    done
+    if [ "$OS" = darwin ]; then
+        for _s in $_cask; do
+            has "blocked: $_s skipped" "^SKIP  $_s +\(blocked by update\)$"
+        done
+    else
+        # Off macOS the cask steps are not wanted at all, so not "blocked".
+        for _s in $_cask; do
+            has "blocked: $_s plain skip off macOS" "^SKIP  $_s *$"
+        done
+    fi
+    has "blocked: step before update runs" '^PASS  empty-store '
+    has "blocked: doctor runs" '^PASS  doctor '
+    has "blocked: cleanup runs" '^PASS  cleanup '
+    has "blocked: tap runs" '^(PASS|FAIL)  tap '
+    lacks "blocked: tap not blocked" 'SKIP  tap'
+    unlogged "blocked: no install attempted" '^den install '
+    unlogged "blocked: no uninstall attempted" '^den uninstall '
+    if [ "$OS" = darwin ]; then _n=9; else _n=7; fi
+    has "blocked: summary counts blocked" "skipped \($_n blocked by update\) \(failed: update"
+    has "blocked: summary names blocked" "^verify-release: not run because update failed: bottle opt-link "
+}
+run "update success does not block" 1 VR_ONLY="update bottle" -- v1.2.0 && {
+    has "unblocked: update passes" '^PASS  update '
+    logged "unblocked: bottle runs" '^den install tree$'
+    lacks "unblocked: nothing blocked" 'blocked by update'
+}
+run "update not selected does not block" 0 VR_ONLY="upgrade" -- v1.2.0 && {
+    has "unselected: upgrade runs" '^PASS  upgrade '
+    lacks "unselected: nothing blocked" 'blocked by update'
+}
+
 # --- step selection ------------------------------------------------------
 run "VR_SKIP" 0 VR_ONLY="version empty-store" VR_SKIP="empty-store" -- v1.2.0 \
     && has "VR_SKIP skips" 'SKIP  empty-store'
