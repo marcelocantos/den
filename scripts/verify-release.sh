@@ -55,6 +55,10 @@
 #        app-cask uninstall doctor cleanup launchd
 # install and isolation can never be skipped; the run aborts before den
 # writes anything if install, version or isolation fails.
+# If the update step (the index fetch) fails, the steps that need the index
+# (INDEX_STEPS below) are reported as SKIP (blocked by update) instead of
+# failing one by one; the rest still run, and the update FAIL keeps the run's
+# exit status non-zero.
 # The tap step taps, installs from and untaps a fixture tap built from
 # tests/fixtures/den-fixture-tap in this checkout (no other repository, no
 # network for the tap itself); it is not configurable.
@@ -188,7 +192,21 @@ VR_REPLICA_ROOT=${VR_REPLICA_ROOT:-$VR_INSTALL_DIR}
 
 # ---- step runner ----------------------------------------------------------
 PASSED=0; FAILED=0; SKIPPED=0; FAILS=""; N=0
+BLOCKED=0; BLOCKS=""
 SKIP_RC=77
+# Steps that need the package index `den update` writes: they install, pin,
+# upgrade or uninstall Homebrew formulae and casks, or check what bottle (an
+# index-driven install) left behind. With no index den refuses them ("the
+# package index is empty"), so after a failed update they cannot say anything
+# about the release. Not listed, and so still run: steps before update; tap
+# (its fixture formula is merged into the index from the local tap); doctor
+# (its index checks are skipped when there is no index); cleanup; launchd.
+INDEX_STEPS="bottle opt-link trust pin upgrade dependents font-cask app-cask uninstall"
+blocked_by_update() {
+    case " $INDEX_STEPS " in *" $1 "*) ;; *) return 1 ;; esac
+    case " $FAILS " in *" update "*) return 0 ;; esac
+    return 1
+}
 skip_because() { echo "skip-reason: $*"; exit "$SKIP_RC"; }
 den() { "$DEN_BIN" "$@"; }
 wanted() {
@@ -204,6 +222,11 @@ step() {
     N=$((N + 1))
     if ! wanted "$name"; then
         printf 'SKIP  %-12s\n' "$name"; SKIPPED=$((SKIPPED + 1)); return 0
+    fi
+    if blocked_by_update "$name"; then
+        printf 'SKIP  %-12s (blocked by update)\n' "$name"
+        SKIPPED=$((SKIPPED + 1)); BLOCKED=$((BLOCKED + 1)); BLOCKS="$BLOCKS $name"
+        return 0
     fi
     local log; log=$(printf '%s/%02d-%s.log' "$LOGDIR" "$N" "$name")
     local t0=$SECONDS
@@ -709,5 +732,8 @@ step doctor s_doctor
 step cleanup s_cleanup
 step launchd s_launchd
 
-echo "verify-release: $PASSED passed, $FAILED failed, $SKIPPED skipped${FAILS:+ (failed:$FAILS)}"
+_blocked=""
+[ "$BLOCKED" -gt 0 ] && _blocked=" ($BLOCKED blocked by update)"
+echo "verify-release: $PASSED passed, $FAILED failed, $SKIPPED skipped$_blocked${FAILS:+ (failed:$FAILS)}"
+[ "$BLOCKED" -gt 0 ] && echo "verify-release: not run because update failed:$BLOCKS"
 [ "$FAILED" -eq 0 ]
