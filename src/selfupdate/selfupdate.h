@@ -4,6 +4,7 @@
 #pragma once
 
 #include "../core/config.h"
+#include "../download/http.h"
 
 #include <filesystem>
 #include <optional>
@@ -16,6 +17,18 @@ struct UpdateInfo {
     std::string download_url;   // tarball URL for this platform
     std::string checksum_url;   // .sha256 URL
     std::string tag;            // release tag, e.g. "v0.5.0" or "v0.5.0-rc.1"
+};
+
+/// Where self-update asks for releases, and how its downloads retry. Every
+/// self-update fetch (release metadata, checksum, tarball) goes through
+/// fetch_url_retrying() with `retry`. The defaults are GitHub's API and the
+/// standard policy; tests point `api_base` at a local server and inject a
+/// sleep.
+struct ReleaseSource {
+    /// The repository's API URL; "/releases/latest" and
+    /// "/releases/tags/<tag>" are appended.
+    std::string api_base = "https://api.github.com/repos/marcelocantos/den";
+    FetchRetryPolicy retry;
 };
 
 /// Normalise a user-supplied release version to its tag: "0.15.0",
@@ -41,7 +54,8 @@ std::optional<UpdateInfo> update_info_from_release_json(const std::string& json,
 /// Fetch a specific release (GA or RC) by version or tag, via
 /// /releases/tags/<tag>. Throws UserError when the version is malformed, the
 /// release cannot be fetched, or it has no binary for this platform.
-UpdateInfo fetch_release_for_version(const Config& cfg, const std::string& version);
+UpdateInfo fetch_release_for_version(const Config& cfg, const std::string& version,
+                                     const ReleaseSource& source = {});
 
 /// The command that upgrades a Homebrew-installed den.
 inline constexpr const char* kBrewUpgradeCommand = "brew upgrade marcelocantos/tap/den";
@@ -68,11 +82,11 @@ std::optional<std::filesystem::path> running_exe_path();
 /// Returns empty string if unable to determine (network error, API oddity, etc.).
 /// Unlike check_for_update, this always returns the version — it does NOT compare
 /// against DEN_VERSION, making it suitable for --check / --dry-run queries.
-std::string resolve_latest_version();
+std::string resolve_latest_version(const ReleaseSource& source = {});
 
 /// Check GitHub Releases for a newer version of den.
 /// Returns nullopt if already up to date or unable to determine.
-std::optional<UpdateInfo> check_for_update(const Config& cfg);
+std::optional<UpdateInfo> check_for_update(const Config& cfg, const ReleaseSource& source = {});
 
 /// True when `info` names a release with the same version as `running` (the
 /// binary's DEN_VERSION). Release candidates report their GA version, so
@@ -86,8 +100,10 @@ bool is_same_version_request(const UpdateInfo& info, const std::string& running)
 /// When the release has the same version as the running den
 /// (is_same_version_request) and its binary is byte-identical to the
 /// installed one, nothing is replaced and false is returned, unless `force`
-/// is set. Returns true when the binary was replaced.
-bool apply_update(const UpdateInfo& info, const Config& cfg, bool force = false);
+/// is set. Returns true when the binary was replaced. The checksum and
+/// tarball downloads retry transient failures with `retry`.
+bool apply_update(const UpdateInfo& info, const Config& cfg, bool force = false,
+                  const FetchRetryPolicy& retry = {});
 
 /// Create a fresh, private (0700) temporary directory under the system temp
 /// dir with mkdtemp(3), named `<stem>.XXXXXX`. Throws UserError on failure.
