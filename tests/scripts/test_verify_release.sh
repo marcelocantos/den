@@ -49,6 +49,17 @@ _tmp=$(mktemp -d "${TMPDIR:-/tmp}/vr-test.XXXXXX")
 _tmp=$(CDPATH= cd -P -- "$_tmp" && pwd)
 trap 'chmod -R u+w "$_tmp" 2>/dev/null; rm -rf "$_tmp"' EXIT
 
+# verify-release picks its previous-GA fallback from the checkout's git tags
+# (`git -C <repo> tag -l`). Point git at an empty repository so the real
+# release tags of a full checkout don't leak into the fake releases below:
+# every run sees no tags, as in a shallow CI checkout.
+git init -q --bare "$_tmp/notags.git" || { echo "FAIL: git init"; exit 1; }
+GIT_DIR="$_tmp/notags.git"; export GIT_DIR
+unset GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
+if [ -n "$(git -C "$ROOT" tag -l 'v*')" ]; then
+    echo "FAIL: git tags still visible to verify-release"; exit 1
+fi
+
 ok() { _pass=$((_pass + 1)); echo "PASS: $1"; }
 bad() { _fail=$((_fail + 1)); echo "FAIL: $1"; [ -f "$_tmp/out" ] && sed 's/^/    /' "$_tmp/out"; }
 
