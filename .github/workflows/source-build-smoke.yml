@@ -10,6 +10,16 @@ name: Source-Build Smoke (🎯T65)
 # Verifies: 🎯T11 (source-build wired), 🎯T17 (tap DSL path),
 #           🎯T45 (shim-free build on macOS).
 
+# Retries dispatched by source-build-smoke-capacity-retry.yml carry the
+# capacity_retry_* inputs, so their runs are titled "... capacity-retry of
+# <sha> ..." and are recognisable in the Actions list. Every other run keeps
+# the plain workflow name.
+run-name: >-
+  ${{ inputs.capacity_retry_sha
+      && format('Source-Build Smoke capacity-retry of {0} (run {1})',
+                inputs.capacity_retry_sha, inputs.capacity_retry_run)
+      || github.workflow }}
+
 on:
   schedule:
     # Daily at 03:17 UTC (staggered to avoid GitHub's top-of-hour load spike).
@@ -24,6 +34,14 @@ on:
         description: "Platform filter (all | macos | linux)"
         required: false
         default: "all"
+      capacity_retry_sha:
+        description: "Set by the capacity-retry workflow: scheduled head SHA being retried"
+        required: false
+        default: ""
+      capacity_retry_run:
+        description: "Set by the capacity-retry workflow: run id of the capacity-cancelled scheduled run"
+        required: false
+        default: ""
 
 env:
   # Representative near-leaf formula with no heavy deps.
