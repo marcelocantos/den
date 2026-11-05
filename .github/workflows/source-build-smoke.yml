@@ -38,6 +38,8 @@ jobs:
   build:
     name: Build & unit tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Hang guard only: does not limit time spent queued waiting for a runner.
+    timeout-minutes: ${{ matrix.os == 'macos-15' && 40 || 35 }}
     # 🎯T11/🎯T65 are live: the build + unit-test job now gates.
     strategy:
       fail-fast: false
@@ -81,6 +83,7 @@ jobs:
   source-build-macos:
     name: Source-build smoke — macOS (${{ github.event.inputs.formula || 'tree' }})
     runs-on: macos-15
+    timeout-minutes: 25
     needs: build
     # 🎯T11/🎯T65 live: the daily macOS source build now gates.
     if: >-
@@ -187,6 +190,7 @@ jobs:
   source-build-linux:
     name: Source-build smoke — Linux (${{ github.event.inputs.formula || 'tree' }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: build
     # 🎯T11/🎯T65 live: 'tree' is parser-Simple, so the native fallback builds
     # it without Portable Ruby. The daily Linux source build now gates.
@@ -267,6 +271,7 @@ jobs:
   tap-source-build:
     name: Tap resolution smoke (🎯T67/🎯T17)
     runs-on: macos-15
+    timeout-minutes: 20
     needs: build
     steps:
       - uses: actions/checkout@v6
