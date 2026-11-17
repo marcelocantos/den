@@ -17,6 +17,7 @@
     "openssl@3--3.5.9--source": "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a",
     "openssl@4--4.1.0--source": "50c17baf54cb008f6ce42d50deb4b28050a1aad711636cabd4b241c7e90cc2fd",
     "pkgconf--3.0.10--source": "9371b2f6372da574d4c6dc96fe9b1463037bcf6afcb6671c1555afde7b17e2de",
+    "pkgconf--3.0.11--source": "d0cd841bc8e55b9da888106c00dc256d05b7d1d8e5a46f4be4eb4c5125bd2dc4",
     "tree--2.3.2--arm64_golden_gate": "b4315cb4d8e57c6128bd214e206bce3cdebe241ef6eeacae49514d5180664752",
     "tree--2.3.2--arm64_linux": "cb6d74ecafcc8b6d736e538b46be79249457e6c417e18b83de65b405b8495557",
     "tree--2.3.2--arm64_sequoia": "ef367d0a5e74970e2f5042479fe4000a8b324ac075520c66f8457f1cb06ca668",
