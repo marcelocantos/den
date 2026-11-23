@@ -904,7 +904,7 @@ void run_daemon(const Config& config, bool once) {
     // Keep pid_fd open (holds the lock) until we exit.
 
     // ---- SIGTERM handler ---------------------------------------------------
-    struct sigaction sa {};
+    struct sigaction sa{};
     sa.sa_handler = sigterm_handler;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;

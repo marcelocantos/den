@@ -31,7 +31,7 @@ namespace {
 
 // True iff the owner-execute bit is set on `p`.
 bool is_executable(const fs::path& p) {
-    struct stat st {};
+    struct stat st{};
     if (::stat(p.c_str(), &st) != 0)
         return false;
     return (st.st_mode & S_IXUSR) != 0;
