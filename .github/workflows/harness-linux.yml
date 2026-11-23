@@ -29,7 +29,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev libarchive-dev
+          sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev zlib1g-dev libbz2-dev patchelf
 
       - name: Configure and build
         run: |
