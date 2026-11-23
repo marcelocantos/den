@@ -102,7 +102,8 @@ jobs:
             echo "No new benchmark snapshot to commit."
           else
             git commit -m "bench: den-vs-brew snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ) [skip ci]"
-            git push origin HEAD:master
+            # master often moves during the ~45 min run: rebase and retry.
+            scripts/push-with-rebase-retry.sh master
           fi
 
       - name: Upload benchmark results

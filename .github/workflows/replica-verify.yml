@@ -100,4 +100,6 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/known_hashes.json
           git commit -m "chore(trust): refresh GHCR-verified replica hashes"
-          git push
+          # The branch may have moved since checkout: rebase and retry; a
+          # conflict on data/known_hashes.json fails rather than overwrite.
+          scripts/push-with-rebase-retry.sh "${GITHUB_REF_NAME}"
