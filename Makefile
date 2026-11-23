@@ -28,13 +28,31 @@ test: build
 FORMAT_FILES := $(shell find src \( -name '*.h' -o -name '*.cpp' \)) \
                 $(shell find tests -maxdepth 1 \( -name '*.h' -o -name '*.cpp' \))
 
+# Formatting is pinned to clang-format 18, the version CI's Format job
+# installs (clang-format-18). Other majors format differently, so with a
+# missing or non-18 binary the format targets warn and skip (exit 0)
+# rather than fail or reformat: CI stays the formatting authority.
+# Point at a v18 binary with: make format CLANG_FORMAT=/path/to/clang-format
+CLANG_FORMAT ?= clang-format-18
+CLANG_FORMAT_MAJOR = $$($(CLANG_FORMAT) --version 2>/dev/null \
+	| sed -n 's/.*clang-format version \([0-9][0-9]*\).*/\1/p' | head -n 1)
+define clang_format_pinned
+major=$(CLANG_FORMAT_MAJOR); \
+if [ "$$major" != 18 ]; then \
+	echo "⚠ $@ skipped — need clang-format 18, '$(CLANG_FORMAT)' is $${major:+version }$${major:-not found}; CI checks formatting (set CLANG_FORMAT=/path/to/clang-format-18)"; \
+	exit 0; \
+fi
+endef
+
 format:
-	@echo $(FORMAT_FILES) | xargs clang-format --dry-run -Werror >/dev/null 2>&1 \
+	@$(clang_format_pinned); \
+	echo $(FORMAT_FILES) | xargs $(CLANG_FORMAT) --dry-run -Werror >/dev/null 2>&1 \
 		&& echo "✓ format" \
 		|| (echo "✗ format — run: make format-fix"; exit 1)
 
 format-fix:
-	@echo $(FORMAT_FILES) | xargs clang-format -i && echo "✓ formatted $(words $(FORMAT_FILES)) files"
+	@$(clang_format_pinned); \
+	echo $(FORMAT_FILES) | xargs $(CLANG_FORMAT) -i && echo "✓ formatted $(words $(FORMAT_FILES)) files"
 
 clean-tree:
 	@test -z "$$(git status --porcelain)" \
