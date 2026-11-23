@@ -22,6 +22,16 @@ den is a package and environment manager that:
 
 delivery: merged to master, CI green
 
+No pull request per fix: commit and push straight to master
+(`git push origin HEAD:master`).
+
+- Run local tests first: `make bullseye` (or cmake + ctest) on macOS.
+- Watch the push CI (Check macos-15, Check ubuntu-latest, Format,
+  Harness Linux) until it finishes; delivery is the green run.
+- If master goes red, fix forward only: push a fixing commit, never
+  force-push, and push nothing unrelated on top until it is green.
+- Fork pull requests are still welcome; CI runs on them too.
+
 ## Gates
 
 profile: cli
