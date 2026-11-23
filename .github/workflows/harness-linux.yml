@@ -10,9 +10,12 @@ on:
 permissions:
   contents: read
 
+# Supersede in-flight runs for the same PR only. Pushes to master get a
+# per-run group (github.run_id), so a master harness run is never
+# cancelled by a later push — every master commit is checked.
 concurrency:
-  group: harness-linux-${{ github.ref }}
-  cancel-in-progress: true
+  group: harness-linux-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   harness-linux:
