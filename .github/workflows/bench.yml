@@ -52,13 +52,12 @@ jobs:
 
       - name: Install dependencies
         run: |
-          brew install cmake ninja libarchive hyperfine jq
+          brew install cmake ninja hyperfine jq
 
       - name: Configure
         run: |
-          cmake -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_PREFIX_PATH="$(brew --prefix libarchive)"
+          # libarchive is vendored and linked statically (#158).
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
       - name: Build den
         run: cmake --build build

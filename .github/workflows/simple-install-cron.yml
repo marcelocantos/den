@@ -109,7 +109,7 @@ jobs:
       - name: Install build dependencies (macOS)
         if: steps.override_check.outputs.skip != 'true' && runner.os == 'macOS'
         run: |
-          brew install cmake ninja libarchive
+          brew install cmake ninja
 
       - name: Install build dependencies (Linux)
         if: steps.override_check.outputs.skip != 'true' && runner.os == 'Linux'
@@ -123,11 +123,8 @@ jobs:
       - name: Configure den
         if: steps.override_check.outputs.skip != 'true'
         run: |
-          cmake_args="-B build -G Ninja -DCMAKE_BUILD_TYPE=Release"
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            cmake_args="$cmake_args -DCMAKE_PREFIX_PATH=$(brew --prefix libarchive)"
-          fi
-          cmake $cmake_args
+          # libarchive is vendored and linked statically (#158).
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
       - name: Build den
         if: steps.override_check.outputs.skip != 'true'
