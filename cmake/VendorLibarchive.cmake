@@ -14,8 +14,13 @@
 #
 # Bumping a version: update the *_VERSION / *_URL / *_SHA256 triple below.
 # Hashes are of the upstream release asset at that URL.
+#
+# Downloads stay build-time ExternalProject steps (parallel, URL_HASH-verified
+# and extracted by CMake); den_vendor_fetch_retry() adds a step before each
+# download that retries transient failures (see cmake/DenFetchRetry.cmake).
 
 include(ExternalProject)
+include(${CMAKE_CURRENT_LIST_DIR}/DenFetchRetry.cmake)
 
 set(DEN_XZ_VERSION 5.8.4)
 set(DEN_XZ_URL
@@ -83,9 +88,11 @@ set(DEN_ZSTD_LIB "${DEN_VENDOR_LIBDIR}/${_den_lib_prefix}zstd${_den_lib_suffix}"
 set(DEN_LZ4_LIB "${DEN_VENDOR_LIBDIR}/${_den_lib_prefix}lz4${_den_lib_suffix}")
 set(DEN_ARCHIVE_LIB "${DEN_VENDOR_LIBDIR}/${_den_lib_prefix}archive${_den_lib_suffix}")
 
+get_filename_component(_den_xz_archive "${DEN_XZ_URL}" NAME)
 ExternalProject_Add(den_vendor_xz
     URL "${DEN_XZ_URL}"
     URL_HASH SHA256=${DEN_XZ_SHA256}
+    DOWNLOAD_NAME "${_den_xz_archive}"
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     PREFIX "${CMAKE_BINARY_DIR}/_vendor/xz"
     CMAKE_ARGS ${_den_vendor_cmake_args}
@@ -98,10 +105,14 @@ ExternalProject_Add(den_vendor_xz
         -DXZ_TOOL_SCRIPTS=OFF
     BUILD_BYPRODUCTS "${DEN_LZMA_LIB}"
 )
+den_vendor_fetch_retry(den_vendor_xz
+    URL "${DEN_XZ_URL}" SHA256 ${DEN_XZ_SHA256} DOWNLOAD_NAME "${_den_xz_archive}")
 
+get_filename_component(_den_zstd_archive "${DEN_ZSTD_URL}" NAME)
 ExternalProject_Add(den_vendor_zstd
     URL "${DEN_ZSTD_URL}"
     URL_HASH SHA256=${DEN_ZSTD_SHA256}
+    DOWNLOAD_NAME "${_den_zstd_archive}"
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     PREFIX "${CMAKE_BINARY_DIR}/_vendor/zstd"
     SOURCE_SUBDIR build/cmake
@@ -114,10 +125,14 @@ ExternalProject_Add(den_vendor_zstd
         -DZSTD_MULTITHREAD_SUPPORT=OFF
     BUILD_BYPRODUCTS "${DEN_ZSTD_LIB}"
 )
+den_vendor_fetch_retry(den_vendor_zstd
+    URL "${DEN_ZSTD_URL}" SHA256 ${DEN_ZSTD_SHA256} DOWNLOAD_NAME "${_den_zstd_archive}")
 
+get_filename_component(_den_lz4_archive "${DEN_LZ4_URL}" NAME)
 ExternalProject_Add(den_vendor_lz4
     URL "${DEN_LZ4_URL}"
     URL_HASH SHA256=${DEN_LZ4_SHA256}
+    DOWNLOAD_NAME "${_den_lz4_archive}"
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     PREFIX "${CMAKE_BINARY_DIR}/_vendor/lz4"
     SOURCE_SUBDIR build/cmake
@@ -126,6 +141,8 @@ ExternalProject_Add(den_vendor_lz4
         -DLZ4_BUILD_CLI=OFF
     BUILD_BYPRODUCTS "${DEN_LZ4_LIB}"
 )
+den_vendor_fetch_retry(den_vendor_lz4
+    URL "${DEN_LZ4_URL}" SHA256 ${DEN_LZ4_SHA256} DOWNLOAD_NAME "${_den_lz4_archive}")
 
 set(_den_libarchive_args
     -DENABLE_TAR=OFF
@@ -184,15 +201,19 @@ list(APPEND _den_libarchive_args
     -DLZ4_LIBRARY=${DEN_LZ4_LIB}
     -DLZ4_INCLUDE_DIR=${DEN_VENDOR_INCDIR})
 
+get_filename_component(_den_libarchive_archive "${DEN_LIBARCHIVE_URL}" NAME)
 ExternalProject_Add(den_vendor_libarchive
     URL "${DEN_LIBARCHIVE_URL}"
     URL_HASH SHA256=${DEN_LIBARCHIVE_SHA256}
+    DOWNLOAD_NAME "${_den_libarchive_archive}"
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     PREFIX "${CMAKE_BINARY_DIR}/_vendor/libarchive"
     DEPENDS den_vendor_xz den_vendor_zstd den_vendor_lz4
     CMAKE_ARGS ${_den_vendor_cmake_args} ${_den_libarchive_args}
     BUILD_BYPRODUCTS "${DEN_ARCHIVE_LIB}"
 )
+den_vendor_fetch_retry(den_vendor_libarchive
+    URL "${DEN_LIBARCHIVE_URL}" SHA256 ${DEN_LIBARCHIVE_SHA256} DOWNLOAD_NAME "${_den_libarchive_archive}")
 
 # System libraries the static libarchive needs at link time.
 if(APPLE)
