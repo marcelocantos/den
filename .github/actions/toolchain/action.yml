@@ -1,0 +1,20 @@
+name: Pinned toolchain
+description: >-
+  Install pinned, SHA-256-verified official release builds of cmake, ninja
+  and (optionally) hyperfine and put them on PATH. Versions and hashes live
+  in versions.env next to this file. No Homebrew, no runner-image tools.
+inputs:
+  tools:
+    description: Space-separated tools to install (cmake, ninja, hyperfine)
+    required: false
+    default: cmake ninja
+runs:
+  using: composite
+  steps:
+    - name: Install pinned toolchain (${{ inputs.tools }})
+      shell: bash
+      env:
+        TOOLS: ${{ inputs.tools }}
+      run: |
+        # shellcheck disable=SC2086
+        "$GITHUB_ACTION_PATH/install.sh" $TOOLS
