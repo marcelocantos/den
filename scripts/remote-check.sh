@@ -36,13 +36,24 @@ printf '=== remote-check %s ===\n' "$TS"
 printf 'Host: %s\n' "$HOST"
 printf 'Out : %s\n\n' "$OUT_DIR"
 
-# Build if needed
+# Build if needed, configured the way CI and release are: vendored, static
+# libarchive and no Homebrew prefix on CMake's search path (#159). A
+# caller-supplied CMAKE_PREFIX_PATH is still honoured, e.g. for a deliberate
+# -DDEN_VENDOR_LIBARCHIVE=OFF build.
 if [[ ! -x build/den ]]; then
     printf 'Building den ...\n'
-    cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH:-/opt/homebrew/opt/libarchive;/opt/homebrew}"
+    cmake_args=(-B build -G Ninja -DCMAKE_BUILD_TYPE=Release)
+    if [[ -n "${CMAKE_PREFIX_PATH:-}" ]]; then
+        cmake_args+=("-DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}")
+    fi
+    cmake "${cmake_args[@]}"
     cmake --build build
 fi
+
+# The binary under test must load nothing from a package-manager prefix, as
+# verify-release's links step requires of a release.
+printf 'Checking build/den links only base-OS libraries ...\n'
+scripts/check-links.sh build/den
 
 OVERALL=0
 
