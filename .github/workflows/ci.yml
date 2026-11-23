@@ -68,17 +68,27 @@ jobs:
           submodules: recursive
 
       - name: Install clang-format
+        # Exact version pinned in .clang-format-version, shared with the
+        # Makefile's format targets. PyPI wheel, isolated in a venv.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y clang-format-18
-          sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-18 100
+          version=$(cat .clang-format-version)
+          python3 -m venv "$RUNNER_TEMP/clang-format"
+          "$RUNNER_TEMP/clang-format/bin/pip" install --quiet "clang-format==$version"
+          echo "$RUNNER_TEMP/clang-format/bin" >> "$GITHUB_PATH"
+
+      - name: Verify clang-format version
+        run: |
+          version=$(cat .clang-format-version)
+          clang-format --version
+          clang-format --version | grep -q "clang-format version $version\b" \
+            || { echo "::error::clang-format is not the pinned $version"; exit 1; }
 
       - name: Format source files
-        run: find src tests -name '*.h' -o -name '*.cpp' | xargs clang-format-18 -i --style=file
+        run: make format-fix CLANG_FORMAT=clang-format
 
       - name: Check formatting
         run: |
           if ! git diff --quiet; then
-            echo "::warning::Code formatting differs from clang-format-18. Run: find src tests -name '*.h' -o -name '*.cpp' | xargs clang-format -i"
+            echo "::warning::Code formatting differs from clang-format $(cat .clang-format-version). Run: make format-fix"
             git diff --stat
           fi

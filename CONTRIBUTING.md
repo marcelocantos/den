@@ -21,10 +21,12 @@ Requirements:
 - **macOS**: Xcode command-line tools, plus `cmake` and `ninja`.
 - **Linux**: a C++23 compiler, `cmake`, `ninja-build`,
   `libcurl4-openssl-dev`, `zlib1g-dev`, `libbz2-dev` and `patchelf`.
-- clang-format 18 for the format check, matching CI (`clang-format-18`
-  on PATH, or `make CLANG_FORMAT=/path/to/clang-format`). With a missing
-  or different version, `make format` warns and skips; CI's Format job
-  stays the formatting authority.
+- clang-format at the version pinned in `.clang-format-version`, the one
+  CI uses (Homebrew's `clang-format`, or
+  `pip install clang-format==$(cat .clang-format-version)`; override the
+  binary with `make CLANG_FORMAT=/path/to/clang-format`). With a missing
+  binary or a different major version, `make format` warns and skips;
+  CI's Format job stays the formatting authority.
 
 libarchive and its xz/zstd/lz4 codecs are built from pinned sources and
 linked statically (`DEN_VENDOR_LIBARCHIVE=ON`, the default). The only

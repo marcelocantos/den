@@ -209,7 +209,7 @@ items:
 
   - id: quality.format
     dim: quality
-    desc: Sources are clang-format clean (make format is the blocking /cv gate)
+    desc: Sources are clean under the clang-format pinned in .clang-format-version (make format is the /cv gate)
     state: present
     cadence: continuous
     enforce: blocking
