@@ -15,12 +15,14 @@ name: Source-Build Smoke capacity-retry
 #     runner assigned, and a "not acquired by Runner" annotation. Any other
 #     failed/cancelled/timed-out job is treated as a real failure and
 #     nothing is retried.
-#   - At most one capacity-retry per scheduled head SHA: the retry run is
+#   - At most one capacity-retry per scheduled run: the retry run is
 #     titled "Source-Build Smoke capacity-retry of <sha> (run <id>)" and an
-#     existing run with that SHA in its title (any status) blocks another.
-#   - Per-SHA concurrency group (no cancel-in-progress) serialises duplicate
-#     triggers (e.g. a manual re-run of the scheduled attempt), so the second
-#     one sees the first one's retry and stops.
+#     existing run with "(run <id>)" in its title (any status) blocks another.
+#     A later scheduled miss on the same SHA (idle master) is a new run id
+#     and can retry; a manual re-run of the same scheduled attempt cannot.
+#   - Per-run concurrency group (no cancel-in-progress) serialises duplicate
+#     triggers (e.g. a manual re-run of the same scheduled attempt), so the
+#     second one sees the first one's retry and stops.
 #
 # platform=macos runs Build (macos-15), Source-build smoke — macOS and the
 # Tap resolution smoke (the tap job has no platform filter), which is the
@@ -37,7 +39,7 @@ permissions:
   checks: read # read job annotations (check-run annotations API)
 
 concurrency:
-  group: source-build-smoke-capacity-retry-${{ github.event.workflow_run.head_sha }}
+  group: source-build-smoke-capacity-retry-${{ github.event.workflow_run.id }}
   cancel-in-progress: false
 
 jobs:
@@ -106,14 +108,14 @@ jobs:
             exit 0
           fi
 
-          # One capacity-retry per scheduled head SHA, whatever its status.
+          # One capacity-retry per scheduled run id, whatever its status.
           existing=$(gh api --paginate \
             "repos/$REPO/actions/workflows/$SMOKE_WORKFLOW/runs?event=workflow_dispatch&per_page=100" \
-            --jq ".workflow_runs[] | select(.display_title | contains(\"capacity-retry of $short_sha\")) | .html_url" \
+            --jq ".workflow_runs[] | select(.display_title | contains(\"(run $RUN_ID)\")) | .html_url" \
             | head -1)
           if [ -n "$existing" ]; then
-            echo "::notice::A capacity-retry for $short_sha already exists: $existing"
-            echo "Already retried $short_sha: $existing" >>"$summary"
+            echo "::notice::A capacity-retry for run $RUN_ID already exists: $existing"
+            echo "Already retried run $RUN_ID: $existing" >>"$summary"
             exit 0
           fi
 
@@ -132,19 +134,19 @@ jobs:
             -f capacity_retry_sha="$short_sha" \
             -f capacity_retry_run="$RUN_ID"
 
-          # Wait for the dispatched run to appear so the per-SHA guard above
+          # Wait for the dispatched run to appear so the per-run guard above
           # sees it before this concurrency slot is released.
           url=""
           for _ in $(seq 1 18); do
             sleep 5
             url=$(gh api \
               "repos/$REPO/actions/workflows/$SMOKE_WORKFLOW/runs?event=workflow_dispatch&per_page=20" \
-              --jq ".workflow_runs[] | select(.display_title | contains(\"capacity-retry of $short_sha\")) | .html_url" \
+              --jq ".workflow_runs[] | select(.display_title | contains(\"(run $RUN_ID)\")) | .html_url" \
               | head -1)
             [ -n "$url" ] && break
           done
           if [ -z "$url" ]; then
-            echo "::warning::Dispatched, but the capacity-retry run for $short_sha did not appear within 90s."
+            echo "::warning::Dispatched, but the capacity-retry for run $RUN_ID did not appear within 90s."
           else
             echo "::notice::capacity-retry of $short_sha (run $RUN_ID): $url"
           fi
