@@ -87,8 +87,10 @@ jobs:
         run: make format-fix CLANG_FORMAT=clang-format
 
       - name: Check formatting
+        # Blocking: with no PRs, a red Format on master is the drift signal.
         run: |
           if ! git diff --quiet; then
-            echo "::warning::Code formatting differs from clang-format $(cat .clang-format-version). Run: make format-fix"
+            echo "::error::Code formatting differs from clang-format $(cat .clang-format-version). Run: make format-fix"
             git diff --stat
+            exit 1
           fi

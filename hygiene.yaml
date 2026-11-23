@@ -219,14 +219,11 @@ items:
   - id: quality.format-ci-blocking
     dim: quality
     desc: CI format job fails the build on clang-format drift (not warn-only)
-    state: planned
+    state: present
     cadence: continuous
-    enforce: warning
+    enforce: blocking
     tier: 3
-    reason: >-
-      ci.yml `format` job reformats then emits ::warning:: on git diff; it does
-      not fail. make format (--dry-run -Werror) is the actual gate. ENT-006.
-    evidence: {absent: {file: {path: .github/workflows/ci.yml, matches: 'clang-format.*-Werror|--dry-run'}}}
+    evidence: {file: {path: .github/workflows/ci.yml, matches: '::error::Code formatting differs'}}
 
   - id: quality.clang-tidy
     dim: quality
