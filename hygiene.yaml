@@ -37,7 +37,7 @@ items:
   # ============================== CORRECTNESS =============================
   - id: correctness.tests
     dim: correctness
-    desc: ctest (den_tests) runs on every push/PR
+    desc: ctest (den_tests) runs on every push to master (and on fork PRs)
     state: enforced
     cadence: continuous
     enforce: blocking
@@ -46,7 +46,7 @@ items:
 
   - id: correctness.platform-matrix
     dim: correctness
-    desc: Unit tests run on macOS 14 (arm64) and Ubuntu (x86_64) in CI
+    desc: Unit tests run on macos-15 (arm64) and Ubuntu (x86_64) in CI
     state: enforced
     cadence: continuous
     enforce: blocking
@@ -55,7 +55,7 @@ items:
 
   - id: correctness.linux-harness
     dim: correctness
-    desc: Owner-visible Linux smoke harness runs in CI on push/PR
+    desc: Owner-visible Linux smoke harness runs in CI on every push to master (and on fork PRs)
     state: enforced
     cadence: continuous
     enforce: blocking
@@ -403,13 +403,12 @@ items:
 
   - id: governance.contributing-current
     dim: governance
-    desc: CONTRIBUTING.md documents the C++/CMake workflow (not the retired Cargo path)
-    state: planned
+    desc: CONTRIBUTING.md documents the C++/CMake workflow and the push-to-master flow
+    state: present
     cadence: once-must-hold
     enforce: informational
     tier: 3
-    reason: CONTRIBUTING.md still says cargo build / cargo test / clippy from the Rust era.
-    evidence: {absent: {file: {path: CONTRIBUTING.md, matches: 'cmake --build'}}}
+    evidence: {file: {path: CONTRIBUTING.md, matches: 'cmake --build'}}
 
   # ================================= BUILD ===============================
   - id: build.cxx-standard
@@ -505,15 +504,20 @@ items:
     tier: 2
     evidence: {ci_step: {workflow: bench.yml, name: Check T68 contract}}
 
-  - id: perf.pr-gate
+  - id: perf.push-gate
     dim: perf
-    desc: Benchmarks run (or a fast subset) on every PR to catch regressions before merge
+    desc: >-
+      Benchmarks (or a fast subset) run on every push to master, so a
+      regression is caught on the pushed commit and fixed forward
     state: planned
     cadence: continuous
     enforce: informational
     tier: 3
-    reason: bench.yml is weekly cron + workflow_dispatch, not push/PR.
-    evidence: {absent: {file: {path: .github/workflows/bench.yml, matches: '(?m)^  pull_request:'}}}
+    reason: >-
+      bench.yml is weekly cron + workflow_dispatch, not push. Retargeted from
+      the old PR gate: maintainers push straight to master, so there is no
+      pre-merge PR to gate.
+    evidence: {absent: {file: {path: .github/workflows/bench.yml, matches: '(?m)^  push:'}}}
 
   # ============================== VCS / HISTORY =========================
   - id: vcs.pre-commit-hook
