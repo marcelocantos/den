@@ -1,5 +1,16 @@
 name: Benchmark (den vs brew)
 
+# Retries dispatched by bench-capacity-retry.yml carry the capacity_retry_*
+# inputs, so their runs are titled
+# "Benchmark capacity-retry of <sha> (run <id>)". The companion keys its
+# once-per-scheduled-run guard on "(run <id>)". Every other run keeps the
+# plain workflow name.
+run-name: >-
+  ${{ inputs.capacity_retry_sha
+      && format('Benchmark capacity-retry of {0} (run {1})',
+                inputs.capacity_retry_sha, inputs.capacity_retry_run)
+      || github.workflow }}
+
 on:
   schedule:
     # Weekly: every Monday at 06:00 UTC
@@ -14,6 +25,14 @@ on:
         description: "hyperfine repetitions per install/upgrade op"
         required: false
         default: "5"
+      capacity_retry_sha:
+        description: "Set by the capacity-retry workflow: scheduled head SHA being retried"
+        required: false
+        default: ""
+      capacity_retry_run:
+        description: "Set by the capacity-retry workflow: run id of the capacity-cancelled scheduled run"
+        required: false
+        default: ""
 
 # Allow the job to push committed benchmark snapshots back to the repo so
 # trends accumulate across releases (acceptance: results recorded over time).
