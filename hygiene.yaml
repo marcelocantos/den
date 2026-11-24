@@ -78,7 +78,7 @@ items:
     cadence: per-release
     enforce: warning
     tier: 2
-    evidence: {ci_job: release.yml#build}
+    evidence: {ci_job: release-candidate.yml#build}
 
   - id: correctness.sanitizers
     dim: correctness
@@ -136,7 +136,7 @@ items:
     cadence: per-release
     enforce: warning
     tier: 2
-    evidence: {ci_job: release.yml#checksums}
+    evidence: {ci_job: release-candidate.yml#publish}
 
   - id: security.fable-regressions
     dim: security
@@ -194,8 +194,8 @@ items:
     cadence: per-release
     enforce: informational
     tier: 3
-    reason: release.yml uploads tarballs + sha256; no signing/attestation step.
-    evidence: {absent: {ci_step: {workflow: release.yml, name: Sign}}}
+    reason: release-candidate.yml publishes tarballs + sha256 and promote-rc.yml copies them to GA; no signing/attestation step.
+    evidence: {absent: {ci_step: {workflow: release-candidate.yml, name: Sign}}}
 
   # ============================== CODE QUALITY ============================
   - id: quality.clang-format
@@ -293,7 +293,7 @@ items:
     cadence: per-release
     enforce: warning
     tier: 2
-    evidence: {ci_job: release.yml#build}
+    evidence: {ci_job: release-candidate.yml#build}
 
   - id: release.install-sh
     dim: release
@@ -321,7 +321,7 @@ items:
     enforce: informational
     tier: 3
     reason: den replaces Homebrew; distributing den via a tap is circular. Binaries ship via GitHub Releases and install.sh.
-    evidence: {absent: {ci_job: release.yml#homebrew}}
+    evidence: {absent: {ci_job: promote-rc.yml#homebrew}}
 
   - id: release.changelog
     dim: release

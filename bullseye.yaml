@@ -641,7 +641,7 @@ targets:
     cost: 3.0
     acceptance:
     - CI workflow (.github/workflows/ci.yml) runs build + test on macOS and Linux for every push to master
-    - Release workflow (.github/workflows/release.yml) builds binaries for darwin-aarch64, linux-x86_64, linux-aarch64 and uploads to GitHub Release
+    - Release workflows build binaries for darwin-aarch64, linux-x86_64, linux-aarch64 and upload them to a GitHub Release (originally release.yml; since v0.14 .github/workflows/release-candidate.yml builds and publishes the RC and promote-rc.yml copies its assets to GA; release.yml was retired 2026-11-24)
     - CI is green on master
     context: 'GitHub Actions workflow for the den project:'
     origin: manual

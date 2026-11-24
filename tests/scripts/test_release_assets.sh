@@ -73,7 +73,6 @@ RCT="v${V}-rc.1"
 
 P=.github/workflows/promote-rc.yml
 RC=.github/workflows/release-candidate.yml
-R=.github/workflows/release.yml
 
 # The real repository is clean.
 if out=$(python3 "$SCRIPT" "$ROOT" 2>&1); then ok "repo is clean"; else bad "repo is clean: $out"; fi
@@ -120,14 +119,18 @@ swap "$RC" '
             dist/den-"${VERSION}"-*.tar.gz.sha256 \' ''
 expect_fail "RC without .sha256 files" "$RC" "den-${V}-linux-x86_64.tar.gz.sha256"
 
-# The old release.yml loop downloaded whatever `gh release view` listed.
+# Downloads must name den assets: an unresolvable pattern, or none at all
+# (which fetches every asset), is caught.
 fresh_tree
-swap "$R" '-p "den-${version}-*.tar.gz.sha256"' '-p "$asset"'
-expect_fail "unresolvable download pattern" "$R" "cannot be resolved"
+swap "$P" '--pattern "den-${VERSION}-checksums.txt"' '--pattern "$asset"'
+expect_fail "unresolvable download pattern" "$P" "cannot be resolved"
 
 fresh_tree
-swap "$R" '-p "den-${version}-*.tar.gz.sha256" ' ''
-expect_fail "download without --pattern" "$R" "without --pattern"
+swap "$P" ' \
+            --pattern "den-${VERSION}-*.tar.gz" \
+            --pattern "den-${VERSION}-*.tar.gz.sha256" \
+            --pattern "den-${VERSION}-checksums.txt"' ''
+expect_fail "download without --pattern" "$P" "without --pattern"
 
 # Any workflow or script that uploads is scanned.
 fresh_tree
