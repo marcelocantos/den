@@ -48,8 +48,10 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install dependencies
-        run: brew install cmake ninja
+      - name: Install pinned toolchain
+        # Official release builds, SHA-256-pinned in
+        # .github/actions/toolchain/versions.env; no Homebrew (#158).
+        uses: ./.github/actions/toolchain
 
       - name: Build den
         run: |

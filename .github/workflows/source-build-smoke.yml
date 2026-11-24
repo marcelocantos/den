@@ -72,9 +72,11 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install dependencies (macOS)
+      - name: Install pinned toolchain (macOS)
+        # Official release builds, SHA-256-pinned in
+        # .github/actions/toolchain/versions.env; no Homebrew (#158).
         if: runner.os == 'macOS'
-        run: brew install cmake ninja
+        uses: ./.github/actions/toolchain
 
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
@@ -111,8 +113,10 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install dependencies
-        run: brew install cmake ninja
+      - name: Install pinned toolchain
+        # Official release builds, SHA-256-pinned in
+        # .github/actions/toolchain/versions.env; no Homebrew (#158).
+        uses: ./.github/actions/toolchain
 
       - name: Configure & build den
         run: |
@@ -293,8 +297,10 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install dependencies
-        run: brew install cmake ninja
+      - name: Install pinned toolchain
+        # Official release builds, SHA-256-pinned in
+        # .github/actions/toolchain/versions.env; no Homebrew (#158).
+        uses: ./.github/actions/toolchain
 
       - name: Configure & build den
         run: |

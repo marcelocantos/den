@@ -50,9 +50,15 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install dependencies
-        run: |
-          brew install cmake ninja hyperfine jq
+      - name: Install pinned toolchain (cmake, ninja, hyperfine)
+        # Official release builds, SHA-256-pinned in
+        # .github/actions/toolchain/versions.env; no Homebrew (#158).
+        uses: ./.github/actions/toolchain
+        with:
+          tools: cmake ninja hyperfine
+
+      - name: Check jq (runner image)
+        run: jq --version
 
       - name: Configure
         run: |
