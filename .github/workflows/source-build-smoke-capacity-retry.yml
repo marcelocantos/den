@@ -5,32 +5,35 @@ name: Source-Build Smoke capacity-retry
 # ("The job was not acquired by Runner of type hosted even after multiple
 # attempts" / "Due to capacity constraints, jobs targeting macOS arm64
 # runners ..."), re-dispatch it with platform=macos. If that retry is lost
-# to capacity as well, wait RETRY_DELAY_SECONDS (30 min) and dispatch one
-# more: at most MAX_RETRIES (2) retries per scheduled run.
+# to capacity as well, wait 30 min and dispatch one more: at most 2
+# retries per scheduled run.
 #
 # Rules:
 #   - Triggers only on completed *schedule* runs of Source-Build Smoke on
 #     master whose conclusion is failure or cancelled. workflow_dispatch
-#     runs never trigger it. In particular the retries it dispatches use
-#     github.token, and GitHub creates no workflow_run event for those, so
-#     this job follows its first retry itself: it polls that run to
-#     completion and, if the same classifier finds only capacity cancels,
-#     sleeps and dispatches the second retry.
+#     runs never trigger it. The retries it dispatches use github.token,
+#     for which GitHub creates no workflow_run event, so this job follows
+#     retry 1 itself: it polls it to completion and, if the same classifier
+#     finds only capacity cancels, sleeps and dispatches retry 2.
 #   - Retries only if every non-successful job is a capacity cancel: a
 #     macOS-labelled job, conclusion "cancelled", no steps ever ran, no
 #     runner assigned, and a "not acquired by Runner" annotation. Any other
 #     failed/cancelled/timed-out job is treated as a real failure and
 #     nothing is retried.
-#   - Retries are keyed on the scheduled run id: each one is titled
-#     "Source-Build Smoke capacity-retry of <sha> (run <id>)", and the runs
-#     with "(run <id>)" in their title (any status) are counted. The first
-#     retry needs a count of 0 and the second a count of 1, rechecked after
-#     the delay, so a scheduled run never gets more than MAX_RETRIES.
-#     A later scheduled miss on the same SHA (idle master) is a new run id
-#     and can retry; a manual re-run of the same scheduled attempt cannot.
+#   - At most 2 capacity-retries per scheduled run, keyed on its id: each
+#     retry is titled "Source-Build Smoke capacity-retry of <sha> (run <id>)", and the
+#     runs with "(run <id>)" in their title (any status) are counted.
+#     Retry 1 needs a count of 0; retry 2 needs exactly 1, rechecked after
+#     the delay. A later scheduled miss on the same SHA (idle master) is a
+#     new run id and can retry; a manual re-run of the same scheduled
+#     attempt cannot.
 #   - Per-run concurrency group (no cancel-in-progress) serialises duplicate
 #     triggers (e.g. a manual re-run of the same scheduled attempt), so the
 #     second one sees the first one's retry and stops.
+#
+# The logic lives in scripts/capacity-retry.sh (shared with the other
+# *-capacity-retry.yml companion; tested by
+# tests/scripts/test_capacity_retry.sh).
 #
 # platform=macos runs Build (macos-15), Source-build smoke — macOS and the
 # Tap resolution smoke (the tap job has no platform filter), which is the
@@ -58,10 +61,15 @@ jobs:
       (github.event.workflow_run.conclusion == 'failure' ||
        github.event.workflow_run.conclusion == 'cancelled')
     runs-on: ubuntu-latest
-    # Covers following the first retry (RETRY_WATCH_MINUTES) plus
-    # RETRY_DELAY_SECONDS before the second one.
+    # Covers following retry 1 (RETRY_WATCH_MINUTES) plus
+    # RETRY_DELAY_SECONDS before retry 2.
     timeout-minutes: 120
     steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: scripts/capacity-retry.sh
+          sparse-checkout-cone-mode: false
+
       - name: Classify failed jobs and re-dispatch on capacity-only
         env:
           GH_TOKEN: ${{ github.token }}
@@ -70,155 +78,8 @@ jobs:
           RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
-          SMOKE_WORKFLOW: source-build-smoke.yml
           MAX_RETRIES: "2"
           RETRY_DELAY_SECONDS: "1800"
           RETRY_WATCH_MINUTES: "75"
-          POLL_SECONDS: "60"
           DRY_RUN: "false"
-        run: |
-          set -euo pipefail
-          short_sha=${HEAD_SHA:0:12}
-          summary=${GITHUB_STEP_SUMMARY:-/dev/stdout}
-
-          # classify RUN ATTEMPT: count the run's non-successful jobs into
-          # $bad_jobs, of which $capacity are capacity cancels and $real
-          # are anything else.
-          classify() {
-            local run=$1 attempt=$2 jobs bad job id name conclusion macos nsteps runner not_acquired
-            jobs=$(gh api --paginate \
-              "repos/$REPO/actions/runs/$run/attempts/$attempt/jobs?per_page=100" \
-              --jq '.jobs[]' | jq -s '.')
-
-            # Jobs that did not succeed (skipped/neutral jobs are fine: they
-            # are dependents of a capacity-cancelled job or filtered out).
-            bad=$(jq -c '[.[] | select(.conclusion != "success"
-                                       and .conclusion != "skipped"
-                                       and .conclusion != "neutral")]' <<<"$jobs")
-            bad_jobs=$(jq length <<<"$bad")
-            capacity=0
-            real=0
-            while read -r job; do
-              [ -n "$job" ] || continue
-              id=$(jq -r .id <<<"$job")
-              name=$(jq -r .name <<<"$job")
-              conclusion=$(jq -r .conclusion <<<"$job")
-              macos=$(jq -r '[.labels[]? | ascii_downcase | startswith("macos")] | any' <<<"$job")
-              nsteps=$(jq -r '.steps | length' <<<"$job")
-              runner=$(jq -r '.runner_name // ""' <<<"$job")
-              not_acquired=$(gh api "repos/$REPO/check-runs/$id/annotations" \
-                --jq '[.[] | select(.message | test("not acquired by Runner"; "i"))] | length')
-              if [ "$conclusion" = "cancelled" ] && [ "$macos" = "true" ] \
-                 && [ "$nsteps" -eq 0 ] && [ -z "$runner" ] && [ "$not_acquired" -gt 0 ]; then
-                echo "capacity: $name (job $id)"
-                capacity=$((capacity + 1))
-              else
-                echo "real:     $name (job $id): conclusion=$conclusion macos=$macos steps=$nsteps runner='$runner' not_acquired=$not_acquired"
-                real=$((real + 1))
-              fi
-            done < <(jq -c '.[]' <<<"$bad")
-          }
-
-          # Capacity-retries of this scheduled run so far (any status),
-          # newest first, one URL per line.
-          retries() {
-            gh api --paginate \
-              "repos/$REPO/actions/workflows/$SMOKE_WORKFLOW/runs?event=workflow_dispatch&per_page=100" \
-              --jq ".workflow_runs[] | select(.display_title | contains(\"(run $RUN_ID)\")) | .html_url"
-          }
-          count_lines() { grep -c . <<<"$1" || true; }
-
-          # dispatch N: dispatch retry N of $MAX_RETRIES if exactly N-1
-          # retries exist, then wait for it to be listed; sets $url ("" if
-          # it was not dispatched or did not appear).
-          dispatch() {
-            local n=$1 existing count
-            url=""
-            existing=$(retries)
-            count=$(count_lines "$existing")
-            if [ "$count" -ne $((n - 1)) ]; then
-              echo "::notice::Run $RUN_ID has $count capacity-retr(y/ies); retry $n of $MAX_RETRIES not dispatched:"
-              echo "$existing"
-              echo "Not retried: run $RUN_ID already has $count capacity-retr(y/ies)." >>"$summary"
-              return 1
-            fi
-            master_sha=$(gh api "repos/$REPO/commits/$HEAD_BRANCH" --jq .sha)
-            if [ "$master_sha" != "$HEAD_SHA" ]; then
-              echo "::warning::$HEAD_BRANCH moved from $short_sha to ${master_sha:0:12}; the capacity-retry runs on the current $HEAD_BRANCH head."
-            fi
-            echo "Dispatching capacity-retry $n of $MAX_RETRIES for run $RUN_ID (platform=macos)."
-            if [ "$DRY_RUN" = "true" ]; then
-              echo "DRY_RUN: would dispatch $SMOKE_WORKFLOW on $HEAD_BRANCH (platform=macos, capacity_retry_sha=$short_sha, capacity_retry_run=$RUN_ID)"
-              return 1
-            fi
-            gh workflow run "$SMOKE_WORKFLOW" --repo "$REPO" --ref "$HEAD_BRANCH" \
-              -f platform=macos \
-              -f capacity_retry_sha="$short_sha" \
-              -f capacity_retry_run="$RUN_ID"
-
-            # Wait for the dispatched run to appear so the count above sees
-            # it before this concurrency slot is released.
-            for _ in $(seq 1 18); do
-              sleep 5
-              existing=$(retries)
-              if [ "$(count_lines "$existing")" -ge "$n" ]; then
-                url=$(head -1 <<<"$existing")
-                break
-              fi
-            done
-            if [ -z "$url" ]; then
-              echo "::warning::Dispatched, but capacity-retry $n for run $RUN_ID did not appear within 90s."
-            else
-              echo "::notice::capacity-retry $n of $short_sha (run $RUN_ID): $url"
-            fi
-            echo "capacity-retry $n of $short_sha (run $RUN_ID): ${url:-dispatched, run not yet listed}" >>"$summary"
-          }
-
-          classify "$RUN_ID" "$RUN_ATTEMPT"
-          if [ "$bad_jobs" -eq 0 ]; then
-            echo "::notice::No failed jobs in run $RUN_ID attempt $RUN_ATTEMPT; nothing to retry."
-            exit 0
-          fi
-          if [ "$real" -gt 0 ]; then
-            echo "::notice::Run $RUN_ID has $real non-capacity failure(s); not retrying."
-            echo "Not retried: $real non-capacity failure(s) in run $RUN_ID." >>"$summary"
-            exit 0
-          fi
-          echo "Run $RUN_ID: $capacity macOS job(s) capacity-cancelled, no real failures."
-
-          dispatch 1 || exit 0
-          [ "$MAX_RETRIES" -ge 2 ] || exit 0
-          if [ -z "$url" ]; then
-            echo "::warning::Cannot follow capacity-retry 1 for run $RUN_ID; no second retry."
-            exit 0
-          fi
-
-          # Follow retry 1 (dispatched with github.token, so it fires no
-          # workflow_run of its own) and retry once more if it is lost to
-          # capacity too.
-          retry_id=${url##*/}
-          status=""
-          for _ in $(seq 1 $((RETRY_WATCH_MINUTES * 60 / POLL_SECONDS))); do
-            sleep "$POLL_SECONDS"
-            status=$(gh api "repos/$REPO/actions/runs/$retry_id" --jq .status)
-            [ "$status" = "completed" ] && break
-          done
-          if [ "$status" != "completed" ]; then
-            echo "::warning::capacity-retry 1 ($url) not finished after ${RETRY_WATCH_MINUTES} min; no second retry."
-            exit 0
-          fi
-          conclusion=$(gh api "repos/$REPO/actions/runs/$retry_id" --jq .conclusion)
-          classify "$retry_id" 1
-          if [ "$bad_jobs" -eq 0 ]; then
-            echo "::notice::capacity-retry 1 ($url) concluded $conclusion with no failed jobs."
-            echo "capacity-retry 1: $conclusion." >>"$summary"
-            exit 0
-          fi
-          if [ "$real" -gt 0 ]; then
-            echo "::notice::capacity-retry 1 ($url) has $real non-capacity failure(s); no second retry."
-            echo "capacity-retry 1: $real non-capacity failure(s); no second retry." >>"$summary"
-            exit 0
-          fi
-          echo "capacity-retry 1 ($url) lost $capacity macOS job(s) to capacity; waiting ${RETRY_DELAY_SECONDS}s."
-          sleep "$RETRY_DELAY_SECONDS"
-          dispatch 2 || exit 0
+        run: scripts/capacity-retry.sh source-build-smoke.yml -f platform=macos
