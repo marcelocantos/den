@@ -13,8 +13,9 @@ name: Source-Build Smoke (🎯T65)
 # Retries dispatched by source-build-smoke-capacity-retry.yml carry the
 # capacity_retry_* inputs, so their runs are titled
 # "Source-Build Smoke capacity-retry of <sha> (run <id>)". The companion
-# keys its once-per-scheduled-run guard on "(run <id>)". Every other run
-# keeps the plain workflow name.
+# keys its per-scheduled-run cap (at most 2 retries, the second 30 min after
+# a capacity-lost first) on "(run <id>)". Every other run keeps the plain
+# workflow name.
 run-name: >-
   ${{ inputs.capacity_retry_sha
       && format('Source-Build Smoke capacity-retry of {0} (run {1})',
